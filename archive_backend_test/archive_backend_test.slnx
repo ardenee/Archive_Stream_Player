@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="archive_backend_test.vcxproj" Id="a7b2f2ea-ed6f-40ad-ba62-ddbf2aa3c456" />
+</Solution>

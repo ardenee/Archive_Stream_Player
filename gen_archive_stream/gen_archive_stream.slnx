@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="gen_archive_stream.vcxproj" Id="b87d7781-01f2-420f-b2ea-412c2386d914" />
+</Solution>

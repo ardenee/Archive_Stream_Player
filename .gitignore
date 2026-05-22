@@ -1,0 +1,44 @@
+# Ignore everything by default
+/*
+
+# Keep only this project set
+!/archive_backend/
+!/archive_backend_test/
+!/gen_archive_stream/
+!/in_archive_stream/
+!/libarchive_static/
+!/shared/
+!/third_party/
+!/unrar_static/
+
+# Keep repo files
+!/.gitignore
+!/README.md
+
+# Visual Studio / build junk
+.vs/
+**/.vs/
+**/Debug/
+**/Release/
+**/x64/
+**/Win32/
+**/bin/
+**/obj/
+**/*.user
+**/*.suo
+**/*.VC.db
+**/*.VC.VC.opendb
+**/*.ipch
+**/*.aps
+**/*.ncb
+**/*.opendb
+**/*.tlog
+**/*.obj
+**/*.pdb
+**/*.ilk
+**/*.exe
+**/*.dll
+**/*.exp
+**/*.log
+**/*.cache
+**/*.tmp

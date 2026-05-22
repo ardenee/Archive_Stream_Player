@@ -1,0 +1,15 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="../archive_backend/archive_backend.vcxproj" Id="dc0bf523-30b5-4444-b720-6dd924a1b282" />
+  <Project Path="../archive_backend_test/archive_backend_test.vcxproj" Id="a7b2f2ea-ed6f-40ad-ba62-ddbf2aa3c456">
+    <BuildDependency Project="../unrar_static/unrar_static.vcxproj" />
+  </Project>
+  <Project Path="../gen_archive_stream/gen_archive_stream.vcxproj" Id="b87d7781-01f2-420f-b2ea-412c2386d914" />
+  <Project Path="../libarchive_static/libarchive_static.vcxproj" Id="58df27a9-7191-4304-bec7-413a6c7b295b" />
+  <Project Path="../unrar_static/unrar_static.vcxproj" Id="492ba839-5e12-41fd-afb0-076f85052fe4" />
+  <Project Path="../zlib_static/zlib_static.vcxproj" Id="254b97af-1068-4230-b626-34285f1035b6" />
+  <Project Path="in_archive_stream.vcxproj" Id="05158a18-b09c-45be-a0eb-1778f735628c" />
+</Solution>
