@@ -234,7 +234,7 @@ static void MfLoadDuration(MfAudioDecoder* decoder)
     PropVariantClear(&var);
 }
 
-bool MfOpenArchiveDecoder(const char* archivePath, mz_uint index, mz_uint64 length, AudioFormat format, HWND hwndParent, MfAudioDecoder** outDecoder)
+bool MfOpenArchiveDecoder(const char* archivePath, mz_uint index, mz_uint64 length, AudioFormat format, MfAudioDecoder** outDecoder)
 {
     if (outDecoder)
         *outDecoder = nullptr;
@@ -251,7 +251,7 @@ bool MfOpenArchiveDecoder(const char* archivePath, mz_uint index, mz_uint64 leng
         return false;
     }
 
-    if (!MfEnsureStarted(hwndParent))
+    if (!MfEnsureStarted())
     {
         DebugLogWrite("ERROR", "MF", "OPEN_ARCHIVE_FAIL", "archive=%s | index=%u | format=%s | reason=mf_startup_failed", archivePath, (unsigned int)index, MfAudioFormatName(format));
         return false;
@@ -358,7 +358,7 @@ static bool MfCharPathToWidePath(const char* path, wchar_t* outWidePath, size_t 
     return needed > 0;
 }
 
-bool MfOpenCacheFileDecoder(const char* cachePath, AudioFormat format, HWND hwndParent, MfAudioDecoder** outDecoder)
+bool MfOpenCacheFileDecoder(const char* cachePath, AudioFormat format, MfAudioDecoder** outDecoder)
 {
     if (outDecoder)
         *outDecoder = nullptr;
@@ -375,7 +375,7 @@ bool MfOpenCacheFileDecoder(const char* cachePath, AudioFormat format, HWND hwnd
         return false;
     }
 
-    if (!MfEnsureStarted(hwndParent))
+    if (!MfEnsureStarted())
     {
         DebugLogWrite("ERROR", "MF", "OPEN_CACHE_FAIL", "cache=%s | format=%s | reason=mf_startup_failed", cachePath, MfAudioFormatName(format));
         return false;

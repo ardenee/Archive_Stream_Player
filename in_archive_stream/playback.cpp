@@ -11,6 +11,7 @@
 #include "playback.h"
 #include "archive_reader.h"
 #include "mf_audio_decoder.h"
+#include "mf_support.h"
 #include "debug_log.h"
 
 #include "dr_mp3.h"
@@ -896,15 +897,26 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
         bool mfOk = false;
 
         if (playbackMode == ARCHIVE_PLAYBACK_CACHE_FILE)
-            mfOk = MfOpenCacheFileDecoder(g_currentCachePath, format, g_mod.hMainWindow, &mf);
+            mfOk = MfOpenCacheFileDecoder(g_currentCachePath, format, &mf);
         else
-            mfOk = MfOpenArchiveDecoder(g_currentArchivePath, g_currentArchiveIndex, (mz_uint64)g_currentAudioSize, format, g_mod.hMainWindow, &mf);
+            mfOk = MfOpenArchiveDecoder(g_currentArchivePath, g_currentArchiveIndex, (mz_uint64)g_currentAudioSize, format, &mf);
 
         if (!mfOk || !mf)
         {
             DebugLogWrite("ERROR", "MF", "OPEN_FAIL", "mode=%ld | archive=%s | index=%u | cache=%s | format=%d", InterlockedCompareExchange(&g_playbackMode, 0, 0), g_currentArchivePath, (unsigned int)g_currentArchiveIndex, g_currentCachePath, (int)format);
 
-            MessageBoxA(g_mod.hMainWindow, "Media Foundation could not open this archived audio file.\n\nIf this is Windows N, install the Microsoft Media Feature Pack.\nOtherwise, this file/codec may not be supported by the installed Windows Media Foundation components.", "Archive Stream - Media Foundation Decode Error", MB_OK | MB_ICONWARNING);
+            const HRESULT startupHr = MfGetStartupResult();
+
+            if (FAILED(startupHr))
+            {
+                char message[640];
+                sprintf_s(message, sizeof(message), "Media Foundation could not be started.\n\nM4A, AAC and WMA playback require Windows Media Foundation.\nOn Windows N, install the Microsoft Media Feature Pack.\n\nHRESULT: 0x%08lX", (unsigned long)startupHr);
+                MessageBoxA(g_mod.hMainWindow, message, "Archive Stream - Media Foundation Required", MB_OK | MB_ICONWARNING);
+            }
+            else
+            {
+                MessageBoxA(g_mod.hMainWindow, "Media Foundation could not open this archived audio file.\n\nThis file or codec may not be supported by the installed Windows Media Foundation components.", "Archive Stream - Media Foundation Decode Error", MB_OK | MB_ICONWARNING);
+            }
 
             if (mf)
                 MfCloseDecoder(mf);

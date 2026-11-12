@@ -567,7 +567,7 @@ static bool GetMediaFoundationDurationMsFromArchive(const char* archivePath, uin
 
     MfAudioDecoder* decoder = nullptr;
 
-    if (!MfOpenArchiveDecoder(archivePath, (mz_uint)index, (mz_uint64)uncompSize, audioFormat, NULL, &decoder))
+    if (!MfOpenArchiveDecoder(archivePath, (mz_uint)index, (mz_uint64)uncompSize, audioFormat, &decoder))
     {
         // should ahve log added here
         return false;
@@ -609,7 +609,7 @@ static bool GetMediaFoundationDurationMsFromCache(const char* cachePath, Metadat
 
     MfAudioDecoder* decoder = nullptr;
 
-    if (!MfOpenCacheFileDecoder(cachePath, audioFormat, NULL, &decoder))
+    if (!MfOpenCacheFileDecoder(cachePath, audioFormat, &decoder))
     {
         // should ahve log added here
         return false;

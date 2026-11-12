@@ -26,7 +26,9 @@ The long-term design is a reusable archive-audio core with independently built p
 
 The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
 
-The `archive_backend` public functions remain the shared listing, extraction, and 7z/RAR stream boundary. The next architectural work is to separate the remaining player-specific paths (legacy Winamp data directory, Media Foundation user-interface handling and ZIP stream routing), then introduce player-neutral errors, cancellation and lifetime management. Preserve the current virtual playlist path format and Winamp cache/config locations during this migration.
+The `archive_backend` public functions remain the shared listing, extraction, and 7z/RAR stream boundary. Host adapters can now call `ArchiveSetDataDirectoryName()` during initialization to select an isolated folder beneath `%LOCALAPPDATA%`. The generic default is `ArchiveStreamPlayer`; **both Winamp plugins explicitly select `WinampArchiveStream` before loading configuration**, preserving existing settings, password lists and cache paths. Only single-component folder names containing letters, digits, underscores or hyphens are accepted. The setter must be called before password/config/cache use, not during playback.
+
+Windows Media Foundation startup is now headless and reports HRESULT failure status to the caller. The Winamp input adapter displays user-facing errors; background metadata scanning never opens a startup dialog. Startup and shutdown are serialized to avoid concurrent first-use initialization. Remaining work includes adding ZIP streaming to the generic backend and improving structured errors, cancellation and stream lifetimes. Preserve the virtual Winamp playlist format throughout.
 
 
 ## Archive and audio support
@@ -87,7 +89,10 @@ Bundled sources include **7-Zip LZMA SDK**, **RARLAB UnRAR**, **libarchive**, **
 - Initial adapter cleanup: moved Winamp IPC into a dedicated input-plugin bridge and removed unused ZIP audio helper code without changing the existing expansion protocol.
 - Added null/empty-path validation to the public archive API and reject reopening an already-live opaque stream rather than leaking its handle. New `archive_backend_test.exe selftest` checks these error paths.
 - The stream smoke test now treats a short or oversized read as a failure instead of reporting success with a warning.
-- After the refactor, the Release/x86 solution rebuilt and ZIP, solid/non-solid 7z and RAR smoke cases passed (listing, memory extraction and eligible streaming/seek). Actual Winamp playback remains unverified after these changes.
+- After the initial adapter refactor, the Release/x86 solution rebuilt and ZIP, solid/non-solid 7z and RAR smoke cases passed (listing, memory extraction and eligible streaming/seek).
+- The shared backend now supports per-host data directory names with adapter-selected legacy Winamp paths. API tests cover folder-name validation and truncated output paths.
+- Media Foundation startup no longer calls Win32 message boxes from the backend; the Winamp playback adapter owns its user-facing error messages, while metadata readers remain headless.
+- Actual Winamp playback remains unverified after these changes.
 
 ### Next validation and development priorities
 

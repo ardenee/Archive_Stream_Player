@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #include "archive_common.h"
@@ -223,6 +225,39 @@ static bool ArchiveEnsureDirectoryExistsA(const char* path)
     return false;
 }
 
+namespace
+{
+    std::mutex g_dataDirectoryMutex;
+    std::string g_dataDirectoryName = "ArchiveStreamPlayer";
+}
+
+bool ArchiveSetDataDirectoryName(const char* directoryName)
+{
+    const char* selectedName = directoryName ? directoryName : "ArchiveStreamPlayer";
+    const size_t length = strlen(selectedName);
+
+    if (length == 0 || length > 64)
+    {
+        DebugLogWrite("ERROR", "PATH", "DATA_DIRECTORY_SET_FAIL", "reason=invalid_length | length=%zu", length);
+        return false;
+    }
+
+    for (size_t i = 0; i < length; ++i)
+    {
+        const char c = selectedName[i];
+
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+        {
+            DebugLogWrite("ERROR", "PATH", "DATA_DIRECTORY_SET_FAIL", "reason=invalid_character | offset=%zu", i);
+            return false;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(g_dataDirectoryMutex);
+    g_dataDirectoryName = selectedName;
+    return true;
+}
+
 bool ArchiveGetPluginDataRoot(char* outPath, size_t outPathSize)
 {
     if (!outPath || outPathSize == 0)
@@ -246,10 +281,32 @@ bool ArchiveGetPluginDataRoot(char* outPath, size_t outPathSize)
             return false;
         }
 
-        sprintf_s(localAppData, sizeof(localAppData), "%s\\AppData\\Local", userProfile);
+        if (sprintf_s(localAppData, sizeof(localAppData), "%s\\AppData\\Local", userProfile) < 0)
+        {
+            DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_ROOT_FAIL", "reason=userprofile_path_too_long");
+            return false;
+        }
     }
 
-    sprintf_s(outPath, outPathSize, "%s\\WinampArchiveStream", localAppData);
+    std::string directoryName;
+    {
+        std::lock_guard<std::mutex> lock(g_dataDirectoryMutex);
+        directoryName = g_dataDirectoryName;
+    }
+
+    const size_t requiredSize = strlen(localAppData) + 1 + directoryName.size() + 1;
+    if (requiredSize > outPathSize)
+    {
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_ROOT_FAIL", "reason=buffer_too_small | required=%zu | available=%zu", requiredSize, outPathSize);
+        return false;
+    }
+
+    if (sprintf_s(outPath, outPathSize, "%s\\%s", localAppData, directoryName.c_str()) < 0)
+    {
+        outPath[0] = '\0';
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_ROOT_FAIL", "reason=format_path_failed");
+        return false;
+    }
 
     if (!ArchiveEnsureDirectoryExistsA(outPath))
     {
@@ -261,10 +318,32 @@ bool ArchiveGetPluginDataRoot(char* outPath, size_t outPathSize)
     return true;
 }
 
+static bool ArchiveIsSafeDataLeafName(const char* name)
+{
+    if (!name || !name[0] || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+        return false;
+
+    const size_t length = strlen(name);
+    if (name[length - 1] == '.' || name[length - 1] == ' ')
+        return false;
+
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(name); *p; ++p)
+    {
+        if (*p < 32 || strchr("\\\\/:*?\"<>|", *p))
+            return false;
+    }
+
+    return true;
+}
+
 bool ArchiveBuildPluginDataFilePath(const char* fileName, char* outPath, size_t outPathSize)
 {
-    if (!fileName || !fileName[0] || !outPath || outPathSize == 0)
+    if (outPath && outPathSize > 0)
+        outPath[0] = '\0';
+
+    if (!outPath || outPathSize == 0 || !ArchiveIsSafeDataLeafName(fileName))
     {
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_FILE_FAIL", "reason=invalid_path_or_filename");
         return false;
     }
 
@@ -276,14 +355,31 @@ bool ArchiveBuildPluginDataFilePath(const char* fileName, char* outPath, size_t 
         return false;
     }
 
-    sprintf_s(outPath, outPathSize, "%s\\%s", root, fileName);
+    const size_t requiredSize = strlen(root) + 1 + strlen(fileName) + 1;
+    if (requiredSize > outPathSize)
+    {
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_FILE_FAIL", "reason=buffer_too_small | required=%zu | available=%zu", requiredSize, outPathSize);
+        outPath[0] = '\0';
+        return false;
+    }
+
+    if (sprintf_s(outPath, outPathSize, "%s\\%s", root, fileName) < 0)
+    {
+        outPath[0] = '\0';
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_FILE_FAIL", "reason=format_path_failed");
+        return false;
+    }
     return true;
 }
 
 bool ArchiveBuildPluginDataSubdirPath(const char* subdirName, char* outPath, size_t outPathSize)
 {
-    if (!subdirName || !subdirName[0] || !outPath || outPathSize == 0)
+    if (outPath && outPathSize > 0)
+        outPath[0] = '\0';
+
+    if (!outPath || outPathSize == 0 || !ArchiveIsSafeDataLeafName(subdirName))
     {
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_SUBDIR_FAIL", "reason=invalid_path_or_directory_name");
         return false;
     }
 
@@ -295,7 +391,20 @@ bool ArchiveBuildPluginDataSubdirPath(const char* subdirName, char* outPath, siz
         return false;
     }
 
-    sprintf_s(outPath, outPathSize, "%s\\%s", root, subdirName);
+    const size_t requiredSize = strlen(root) + 1 + strlen(subdirName) + 1;
+    if (requiredSize > outPathSize)
+    {
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_SUBDIR_FAIL", "reason=buffer_too_small | required=%zu | available=%zu", requiredSize, outPathSize);
+        outPath[0] = '\0';
+        return false;
+    }
+
+    if (sprintf_s(outPath, outPathSize, "%s\\%s", root, subdirName) < 0)
+    {
+        outPath[0] = '\0';
+        DebugLogWrite("ERROR", "PATH", "PLUGIN_DATA_SUBDIR_FAIL", "reason=format_path_failed");
+        return false;
+    }
 
     if (!ArchiveEnsureDirectoryExistsA(outPath))
     {

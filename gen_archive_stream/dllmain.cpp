@@ -342,6 +342,13 @@ static LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
 static int Init()
 {
+    // This DLL links its own backend copy; match the input plugin's data folder.
+    if (!ArchiveSetDataDirectoryName("WinampArchiveStream"))
+    {
+        DebugLogWrite("ERROR", "GEN", "DATA_DIRECTORY_FAIL", "reason=winamp_data_directory_config_failed");
+        return 1;
+    }
+
     ConfigureGeneralPluginLogging();
     WNDCLASSEXA wc;
     memset(&wc, 0, sizeof(wc));

@@ -45,9 +45,8 @@ typedef void (*ArchivePasswordAcceptedCallback)(const char* archivePath);
 //
 // Overrides the password-list path used by the backend.
 //
-// Winamp plugins normally use the default plugin data path:
-//     %LOCALAPPDATA%\WinampArchiveStream\keep.txt
-//
+// By default this is in the selected backend data folder.
+// The Winamp adapters select %LOCALAPPDATA%\WinampArchiveStream\keeps.txt.
 // Tests/tools may set an explicit path.
 // -----------------------------------------------------------------------------
 void ArchivePasswordSetListPath(const char* passwordListPath);

@@ -9,6 +9,7 @@
 
 #include "archive_backend.h"
 #include "archive_format.h"
+#include "archive_common.h"
 
 static bool ParseUInt32Arg(const wchar_t* text, uint32_t& outValue)
 {
@@ -144,6 +145,32 @@ static int RunApiValidationTests()
     stream.impl = &stream; // Simulate a live opaque handle without opening an archive.
     check(!ArchiveOpenEntryStream(L"unused.7z", 0, stream, error) && !error.empty() && stream.impl == &stream, "reject reopening live stream");
     stream.impl = nullptr;
+
+    // Folder name is controlled by the adapter, never constructed from archive data.
+    check(ArchiveSetDataDirectoryName(nullptr), "generic directory default");
+    check(!ArchiveSetDataDirectoryName(""), "reject empty directory name");
+    check(!ArchiveSetDataDirectoryName("../bad"), "reject directory traversal");
+    check(!ArchiveSetDataDirectoryName("bad\\path"), "reject nested directory");
+    check(!ArchiveSetDataDirectoryName("folder:name"), "reject invalid directory character");
+    check(!ArchiveSetDataDirectoryName("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"), "reject overlong directory name");
+
+    char path[MAX_PATH * 4] = {};
+    check(ArchiveGetPluginDataRoot(path, sizeof(path)) && std::string(path).find("\\ArchiveStreamPlayer") != std::string::npos, "generic data root");
+    check(ArchiveSetDataDirectoryName("WinampArchiveStream"), "select legacy Winamp data folder");
+    check(ArchiveGetPluginDataRoot(path, sizeof(path)) && std::string(path).find("\\WinampArchiveStream") != std::string::npos, "preserve Winamp data root");
+    check(ArchiveBuildPluginDataFilePath("in_archive_stream.ini", path, sizeof(path)) && std::string(path).find("\\WinampArchiveStream\\in_archive_stream.ini") != std::string::npos, "preserve Winamp config path");
+
+    char shortPath[8] = {};
+    check(!ArchiveGetPluginDataRoot(shortPath, sizeof(shortPath)) && shortPath[0] == '\0', "reject truncated data root");
+    check(!ArchiveBuildPluginDataFilePath("in_archive_stream.ini", shortPath, sizeof(shortPath)) && shortPath[0] == '\0', "reject truncated data file path");
+    check(!ArchiveBuildPluginDataSubdirPath("Cache", shortPath, sizeof(shortPath)) && shortPath[0] == '\0', "reject truncated data subdirectory path");
+    strcpy_s(shortPath, sizeof(shortPath), "stale");
+    check(!ArchiveBuildPluginDataFilePath("../escape", shortPath, sizeof(shortPath)) && shortPath[0] == '\0', "reject escaping data filename and clear output");
+    strcpy_s(shortPath, sizeof(shortPath), "stale");
+    check(!ArchiveBuildPluginDataSubdirPath("..", shortPath, sizeof(shortPath)) && shortPath[0] == '\0', "reject parent data directory and clear output");
+    strcpy_s(shortPath, sizeof(shortPath), "stale");
+    check(!ArchiveBuildPluginDataFilePath(nullptr, shortPath, sizeof(shortPath)) && shortPath[0] == '\0', "reject null data filename and clear output");
+    check(ArchiveSetDataDirectoryName(nullptr), "reset directory to generic default");
 
     std::printf("\nAPI validation: %d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

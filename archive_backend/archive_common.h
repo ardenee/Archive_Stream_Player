@@ -101,6 +101,12 @@ struct ArchiveStreamContext
     mz_uint64 position = 0;
 };
 
+// Select a single folder name beneath %LOCALAPPDATA% for this host adapter.
+// Default: ArchiveStreamPlayer. Call once during adapter initialization, before
+// cache/password/config access. nullptr resets to the generic default.
+// Valid names: 1-64 ASCII letters, numbers, underscores or hyphens.
+// The Winamp adapter explicitly selects WinampArchiveStream for compatibility.
+bool ArchiveSetDataDirectoryName(const char* directoryName);
 bool ArchiveGetPluginDataRoot(char* outPath, size_t outPathSize);
 bool ArchiveBuildPluginDataFilePath(const char* fileName, char* outPath, size_t outPathSize);
 bool ArchiveBuildPluginDataSubdirPath(const char* subdirName, char* outPath, size_t outPathSize);

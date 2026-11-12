@@ -20,7 +20,7 @@
 // The path is process-local and shared by all archive backends. If no explicit
 // path is set, ArchivePasswordGetListPath() builds:
 //
-//     %LOCALAPPDATA%\WinampArchiveStream\keep.txt
+//     %LOCALAPPDATA%\<selected data folder>\keeps.txt
 // -----------------------------------------------------------------------------
 static char g_archivePasswordListPath[MAX_PATH * 4] = "";
 static ArchivePasswordPromptCallback g_archivePasswordPromptCallback = nullptr;

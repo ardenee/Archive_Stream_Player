@@ -329,6 +329,13 @@ void Stop();
 
 static void Init()
 {
+    // Keep existing settings, password lists and cache in their original folder.
+    if (!ArchiveSetDataDirectoryName("WinampArchiveStream"))
+    {
+        DebugLogWrite("ERROR", "INIT", "DATA_DIRECTORY_FAIL", "reason=winamp_data_directory_config_failed");
+        return;
+    }
+
     LoadConfig();
 
     DebugLogConfigure(g_debugLoggingEnabled, g_debugLogPath, true);

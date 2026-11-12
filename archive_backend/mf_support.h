@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
-bool MfEnsureStarted(HWND hwndParent);
+// Decoder startup never shows UI; hosts decide how to report failures.
+bool MfEnsureStarted();
+HRESULT MfGetStartupResult();
 void MfShutdownIfStarted();
-void MfShowUnavailableMessage(HWND hwndParent);
