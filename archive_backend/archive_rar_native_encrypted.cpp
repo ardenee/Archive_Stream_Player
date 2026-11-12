@@ -267,12 +267,12 @@ bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t i
 }
 
 
-static bool NativeRarTryListEncryptedHeaders(const wchar_t* archivePath, const std::string& password, std::vector<ArchiveEntry>& entries, std::string& error)
+static bool NativeRarTryListEntryHeaders(const wchar_t* archivePath, const std::string& password, bool requireEncryptedHeaders, std::vector<ArchiveEntry>& entries, std::string& error)
 {
     entries.clear();
     error.clear();
 
-    NativeRarPasswordContext callbackContext{ &password };
+    NativeRarPasswordContext callbackContext{ password.empty() ? nullptr : &password };
     RAROpenArchiveDataEx open{};
     open.ArcNameW = const_cast<wchar_t*>(archivePath);
     open.OpenMode = RAR_OM_LIST;
@@ -283,17 +283,24 @@ static bool NativeRarTryListEncryptedHeaders(const wchar_t* archivePath, const s
     archive.handle = RAROpenArchiveEx(&open);
     if (!archive.handle)
     {
-        error = "Native UnRAR encrypted-header open failed (code " + std::to_string(open.OpenResult) + ")";
+        error = "Native UnRAR header open failed (code " + std::to_string(open.OpenResult) + ")";
         return false;
     }
 
-    if (!(open.Flags & ROADF_ENCHEADERS))
+    if (requireEncryptedHeaders && !(open.Flags & ROADF_ENCHEADERS))
     {
         error = "RAR does not use encrypted headers";
         return false;
     }
 
-    RARSetPassword(archive.handle, const_cast<char*>(password.c_str()));
+    if ((open.Flags & ROADF_ENCHEADERS) && password.empty())
+    {
+        error = "RAR encrypted headers require a saved password";
+        return false;
+    }
+
+    if (!password.empty())
+        RARSetPassword(archive.handle, const_cast<char*>(password.c_str()));
 
     uint32_t index = 0;
     for (;;)
@@ -306,7 +313,7 @@ static bool NativeRarTryListEncryptedHeaders(const wchar_t* archivePath, const s
         if (readResult != ERAR_SUCCESS)
         {
             entries.clear();
-            error = "Native UnRAR encrypted-header read failed (code " + std::to_string(readResult) + ")";
+            error = "Native UnRAR header read failed (code " + std::to_string(readResult) + ")";
             return false;
         }
 
@@ -314,7 +321,7 @@ static bool NativeRarTryListEncryptedHeaders(const wchar_t* archivePath, const s
         if (count <= 1)
         {
             entries.clear();
-            error = "Native UnRAR cannot convert an encrypted entry name to UTF-8";
+            error = "Native UnRAR cannot convert an entry name to UTF-8";
             return false;
         }
 
@@ -351,7 +358,7 @@ static bool NativeRarTryListEncryptedHeaders(const wchar_t* archivePath, const s
         if (skipResult != ERAR_SUCCESS)
         {
             entries.clear();
-            error = "Native UnRAR encrypted-header skip failed (code " + std::to_string(skipResult) + ")";
+            error = "Native UnRAR header skip failed (code " + std::to_string(skipResult) + ")";
             return false;
         }
 
@@ -383,7 +390,7 @@ bool RarNativeListHeaderEncryptedEntries(const wchar_t* archivePath, std::vector
     std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
     for (const std::string& password : passwords.passwords)
     {
-        if (!NativeRarTryListEncryptedHeaders(archivePath, password, entries, error))
+        if (!NativeRarTryListEntryHeaders(archivePath, password, true, entries, error))
             continue;
 
         DebugLogWrite("INFO", "RAR", "NATIVE_ENCRYPTED_HEADER_LIST_OK", "entries=%zu", entries.size());
@@ -510,5 +517,40 @@ bool RarNativeEnrichMultipartEntryEncryption(const wchar_t* archivePath, std::ve
     }
 
     DebugLogWrite("INFO", "RAR", "NATIVE_MULTIPART_HEADER_ENCRYPTION", "entries=%zu | encrypted=%zu", entries.size(), encryptedCount);
+    return true;
+}
+
+
+bool RarNativeLookupEntryMetadata(const wchar_t* archivePath, uint32_t index, ArchiveEntry& entry, std::string& error)
+{
+    entry = ArchiveEntry{};
+    error.clear();
+    if (!archivePath || !*archivePath)
+    {
+        error = "Archive path is empty";
+        return false;
+    }
+
+    std::vector<ArchiveEntry> entries;
+
+    if (RarNativeHasEncryptedHeaders(archivePath))
+    {
+        if (!RarNativeListHeaderEncryptedEntries(archivePath, entries, error))
+            return false;
+    }
+    else
+    {
+        std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+        if (!NativeRarTryListEntryHeaders(archivePath, std::string{}, false, entries, error))
+            return false;
+    }
+
+    if (static_cast<size_t>(index) >= entries.size() || entries[index].index != index)
+    {
+        error = "Requested native RAR entry index is missing";
+        return false;
+    }
+
+    entry = std::move(entries[index]);
     return true;
 }

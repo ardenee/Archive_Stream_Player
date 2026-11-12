@@ -6,6 +6,7 @@
 #include "archive_backend.h"
 #include "archive_common.h"
 #include "archive_format.h"
+#include "archive_rar_native_encrypted.h"
 #include "archive_stream_owner.h"
 #include "foobar_archive_reader.h"
 #include "debug_log.h"
@@ -86,6 +87,28 @@ namespace
         std::string expectedName;
         if (!ParseVirtualEntryPath(virtualPath, index, expectedName))
             throw exception_io_not_found();
+
+        // Native UnRAR header lookup avoids repeatedly opening the bundled
+        // libarchive RAR decoder after a prior encrypted entry was decoded.
+        // Require the exact index/virtual filename to prevent incorrect routing.
+        if (DetectArchiveFormatFromPath(path) == ArchiveFormat::Rar)
+        {
+            ArchiveEntry nativeEntry;
+            std::string nativeError;
+            const bool nativeLookupSucceeded = RarNativeLookupEntryMetadata(path, index, nativeEntry, nativeError);
+            if (nativeLookupSucceeded && nativeEntry.isEncrypted)
+            {
+                abort.check();
+                if (nativeEntry.isFolder || !nativeEntry.isSupportedAudio || VirtualEntryPath(nativeEntry) != virtualPath)
+                    throw exception_io_not_found();
+
+                DebugLogWrite("INFO", "FOOBAR", "FIND_NATIVE_RAR_MATCH", "index=%u | encrypted=%d | bytes=%llu", (unsigned)index, nativeEntry.isEncrypted ? 1 : 0, (unsigned long long)nativeEntry.size);
+                return nativeEntry;
+            }
+
+            if (!nativeLookupSucceeded)
+                DebugLogWrite("WARN", "FOOBAR", "FIND_NATIVE_RAR_FALLBACK", "index=%u | error=%s", (unsigned)index, nativeError.c_str());
+        }
 
         abort.check();
         std::vector<ArchiveEntry> entries;
@@ -281,7 +304,14 @@ namespace
             try
             {
                 std::string error;
-                if (!ArchiveExtractEntryToFile(path_.c_str(), entry_.index, tempPath_.c_str(), error))
+                // Native UnRAR can decrypt RAR5 directly. Calling libarchive
+                // first for an entry known encrypted is unnecessary, and can
+                // destabilize repeated Unicode RAR entry opens in foobar.
+                const bool nativeEncryptedRar = entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar;
+                const bool extracted = nativeEncryptedRar
+                    ? RarNativeExtractEncryptedEntryToFile(path_.c_str(), entry_.index, tempPath_.c_str(), error)
+                    : ArchiveExtractEntryToFile(path_.c_str(), entry_.index, tempPath_.c_str(), error);
+                if (!extracted)
                 {
                     abort.check();
                     error = "Cannot stream: " + streamError + "; extraction fallback failed: " + error;
