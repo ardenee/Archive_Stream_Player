@@ -85,9 +85,9 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\zlib_static;C:\Users\arden\source\repos\third_party\libarchive;C:\Users\arden\source\repos\libarchive_static</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\zlib_static;$(ProjectDir)..\third_party\libarchive;$(ProjectDir)..\libarchive_static</AdditionalIncludeDirectories>
       <UndefinePreprocessorDefinitions>%(UndefinePreprocessorDefinitions)</UndefinePreprocessorDefinitions>
-      <ForcedIncludeFiles>C:\Users\arden\source\repos\third_party\libarchive\config.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>$(ProjectDir)..\third_party\libarchive\config.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <Link>
       <SubSystem>
@@ -106,9 +106,9 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\third_party\zlib;C:\Users\arden\source\repos\third_party\libarchive;C:\Users\arden\source\repos\libarchive_static</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\zlib;$(ProjectDir)..\third_party\libarchive;$(ProjectDir)..\libarchive_static</AdditionalIncludeDirectories>
       <UndefinePreprocessorDefinitions>%(UndefinePreprocessorDefinitions)</UndefinePreprocessorDefinitions>
-      <ForcedIncludeFiles>C:\Users\arden\source\repos\third_party\libarchive\config.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>$(ProjectDir)..\third_party\libarchive\config.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <Link>
       <SubSystem>

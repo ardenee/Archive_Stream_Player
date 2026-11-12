@@ -85,14 +85,14 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\zlib_static;C:\Users\arden\source\repos\libarchive_static;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\third_party\winamp;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\zlib_static;$(ProjectDir)..\libarchive_static;$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\winamp;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>zlib_static.lib;bcrypt.lib;libarchive_static.lib;unrar_static.lib;archive_backend.lib;Advapi32.lib;Shell32.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\libarchive_static\Release\$(Configuration);C:\Users\arden\source\repos\unrar_static\Release\$(Configuration);C:\Users\arden\source\repos\archive_backend\Release\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\libarchive_static\Release\$(Configuration);$(ProjectDir)..\unrar_static\Release\$(Configuration);$(ProjectDir)..\archive_backend\Release\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(TargetDir)$(TargetName).dll" "C:\Program Files (x86)\Winamp\Plugins\$(TargetName).dll"</Command>
@@ -109,14 +109,14 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\third_party\winamp;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\winamp;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>archive_backend.lib;unrar_static.lib;libarchive_static.lib;zlib_static.lib;bcrypt.lib;Advapi32.lib;Shell32.lib;Gdi32.lib;Comdlg32.lib;Mfplat.lib;Mfreadwrite.lib;Mfuuid.lib;Ole32.lib;User32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\archive_backend\Release;C:\Users\arden\source\repos\unrar_static\Release;C:\Users\arden\source\repos\libarchive_static\Release;C:\Users\arden\source\repos\zlib_static\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\Release;$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\libarchive_static\Release;$(ProjectDir)..\zlib_static\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
     <PostBuildEvent>
@@ -132,7 +132,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\third_party\winamp;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\winamp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -140,7 +140,7 @@
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>archive_backend.lib;
 unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\archive_backend\$(Configuration);C:\Users\arden\source\repos\unrar_static\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\$(Configuration);$(ProjectDir)..\unrar_static\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(TargetDir)$(TargetName).dll" "C:\Program Files (x86)\Winamp\Plugins\$(TargetName).dll"</Command>
@@ -157,7 +157,7 @@ unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\third_party\winamp;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\winamp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -165,7 +165,7 @@ unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>archive_backend.lib;
 unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\archive_backend\$(Configuration);C:\Users\arden\source\repos\unrar_static\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\$(Configuration);$(ProjectDir)..\unrar_static\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(TargetDir)$(TargetName).dll" "C:\Program Files (x86)\Winamp\Plugins\$(TargetName).dll"</Command>

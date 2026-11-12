@@ -82,7 +82,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\zlib_static;C:\Users\arden\source\repos\third_party\libarchive;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\third_party\lzma-sdk;C:\Users\arden\source\repos\shared;C:\Users\arden\source\repos\third_party\dr_libs;C:\Users\arden\source\repos\third_party\stb;C:\Users\arden\source\repos\third_party\unrar</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\zlib_static;$(ProjectDir)..\third_party\libarchive;$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\lzma-sdk;$(ProjectDir)..\shared;$(ProjectDir)..\third_party\dr_libs;$(ProjectDir)..\third_party\stb;$(ProjectDir)..\third_party\unrar</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>
@@ -101,7 +101,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\zlib_static;C:\Users\arden\source\repos\third_party\libarchive;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\third_party\lzma-sdk;C:\Users\arden\source\repos\shared;C:\Users\arden\source\repos\third_party\dr_libs;C:\Users\arden\source\repos\third_party\stb;C:\Users\arden\source\repos\third_party\unrar</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\zlib_static;$(ProjectDir)..\third_party\libarchive;$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\lzma-sdk;$(ProjectDir)..\shared;$(ProjectDir)..\third_party\dr_libs;$(ProjectDir)..\third_party\stb;$(ProjectDir)..\third_party\unrar</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>
@@ -118,7 +118,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\third_party\dr_libs;C:\Users\arden\source\repos\third_party\stb;C:\Users\arden\source\repos\third_party\unrar;C:\Users\arden\source\repos\third_party\lzma-sdk;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\dr_libs;$(ProjectDir)..\third_party\stb;$(ProjectDir)..\third_party\unrar;$(ProjectDir)..\third_party\lzma-sdk;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>
@@ -137,7 +137,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\third_party\dr_libs;C:\Users\arden\source\repos\third_party\stb;C:\Users\arden\source\repos\third_party\unrar;C:\Users\arden\source\repos\third_party\lzma-sdk;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\dr_libs;$(ProjectDir)..\third_party\stb;$(ProjectDir)..\third_party\unrar;$(ProjectDir)..\third_party\lzma-sdk;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>

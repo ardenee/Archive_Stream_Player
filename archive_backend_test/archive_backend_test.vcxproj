@@ -92,13 +92,13 @@
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;LIBARCHIVE_STATIC</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\zlib_static;C:\Users\arden\source\repos\libarchive_static;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\zlib_static;$(ProjectDir)..\libarchive_static;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>zlib_static.lib;bcrypt.lib;libarchive_static.lib;unrar_static.lib;archive_backend.lib;Advapi32.lib;Shell32.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\libarchive_static\Release\$(Configuration);C:\Users\arden\source\repos\unrar_static\Release\$(Configuration);C:\Users\arden\source\repos\archive_backend\Release\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\libarchive_static\Release\$(Configuration);$(ProjectDir)..\unrar_static\Release\$(Configuration);$(ProjectDir)..\archive_backend\Release\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -110,12 +110,12 @@
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;LIBARCHIVE_STATIC</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\zlib_static;C:\Users\arden\source\repos\libarchive_static;C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\zlib_static;$(ProjectDir)..\libarchive_static;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\libarchive_static\$(Configuration);C:\Users\arden\source\repos\unrar_static\$(Configuration);C:\Users\arden\source\repos\zlib_static\$(Configuration);C:\Users\arden\source\repos\archive_backend\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\libarchive_static\$(Configuration);$(ProjectDir)..\unrar_static\$(Configuration);$(ProjectDir)..\zlib_static\$(Configuration);$(ProjectDir)..\archive_backend\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>zlib_static.lib;bcrypt.lib;libarchive_static.lib;unrar_static.lib;archive_backend.lib;Advapi32.lib;Shell32.lib</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
@@ -127,7 +127,7 @@
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;LIBARCHIVE_STATIC</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -135,7 +135,7 @@
       <AdditionalDependencies>archive_backend.lib;
 unrar_static.lib;
 %(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\unrar_static\Release;C:\Users\arden\source\repos\archive_backend\Release</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\archive_backend\Release</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -147,7 +147,7 @@ unrar_static.lib;
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;LIBARCHIVE_STATIC</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\arden\source\repos\archive_backend;C:\Users\arden\source\repos\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -155,7 +155,7 @@ unrar_static.lib;
       <AdditionalDependencies>archive_backend.lib;
 unrar_static.lib;
 %(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\arden\source\repos\unrar_static\Release;C:\Users\arden\source\repos\archive_backend\Release</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\archive_backend\Release</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
