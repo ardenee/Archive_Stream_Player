@@ -4,6 +4,8 @@
 #include <foobar2000/SDK/foobar2000.h>
 #include "archive_backend.h"
 #include "archive_common.h"
+#include "foobar_settings.h"
+#include "debug_log.h"
 #include <commdlg.h>
 #include <string>
 #include <vector>
@@ -40,9 +42,15 @@ namespace
             if (!ArchiveSetDataDirectoryName("FoobarArchiveStream"))
                 console::print("Archive Stream: could not configure data folder");
             else
+            {
+                FoobarArchiveSettingsApplyBackend(FoobarArchiveSettingsLoad());
                 console::print("Archive Stream: foobar2000 inspection component initialized");
+            }
         }
-        void on_quit() override {}
+        void on_quit() override
+        {
+            DebugLogShutdown();
+        }
     };
     FB2K_SERVICE_FACTORY(ArchiveStreamInit);
 
