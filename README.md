@@ -26,14 +26,14 @@ The long-term design is a reusable archive-audio core with independently built p
 
 The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
 
-The `archive_backend` public functions remain the shared listing, extraction, and 7z/RAR stream boundary. Host adapters can now call `ArchiveSetDataDirectoryName()` during initialization to select an isolated folder beneath `%LOCALAPPDATA%`. The generic default is `ArchiveStreamPlayer`; **both Winamp plugins explicitly select `WinampArchiveStream` before loading configuration**, preserving existing settings, password lists and cache paths. Only single-component folder names containing letters, digits, underscores or hyphens are accepted. The setter must be called before password/config/cache use, not during playback.
+The `archive_backend` public functions remain the shared listing, extraction, and ZIP/7z/RAR stream boundary. Host adapters can now call `ArchiveSetDataDirectoryName()` during initialization to select an isolated folder beneath `%LOCALAPPDATA%`. The generic default is `ArchiveStreamPlayer`; **both Winamp plugins explicitly select `WinampArchiveStream` before loading configuration**, preserving existing settings, password lists and cache paths. Only single-component folder names containing letters, digits, underscores or hyphens are accepted. The setter must be called before password/config/cache use, not during playback.
 
-Windows Media Foundation startup is now headless and reports HRESULT failure status to the caller. The Winamp input adapter displays user-facing errors; background metadata scanning never opens a startup dialog. Startup and shutdown are serialized to avoid concurrent first-use initialization. Remaining work includes adding ZIP streaming to the generic backend and improving structured errors, cancellation and stream lifetimes. Preserve the virtual Winamp playlist format throughout.
+Windows Media Foundation startup is now headless and reports HRESULT failure status to the caller. The Winamp input adapter displays user-facing errors; background metadata scanning never opens a startup dialog. Startup and shutdown are serialized to avoid concurrent first-use initialization. Generic ZIP streaming now reuses the libarchive implementation already used by Winamp, without switching Winamp's playback route. The shared stream state now distinguishes `Ready`, normal `EndOfEntry`, `Error`, and `NotOpen`; premature EOF is reported as a read failure. Detailed backend-specific error codes, cancellation and stream lifetime cleanup remain future work. Preserve the virtual Winamp playlist format throughout.
 
 
 ## Archive and audio support
 
-- **ZIP:** ordinary and first-volume `.zip.001` split archives, with libarchive-backed access. Streaming and cache choices vary by entry.
+- **ZIP:** ordinary and first-volume `.zip.001` split archives, with libarchive-backed access. The generic backend exposes ZIP decoded-byte streaming, backward/forward seeking and extract-to-file. ZIP archive and split-volume paths are opened through Windows UTF-16 APIs, including when the archive filename contains Unicode characters. The Winamp ZIP playback route remains unchanged during the adapter migration.
 - **7z:** normal and first-volume `.7z.001` split archives using the 7-Zip/LZMA SDK. Non-solid Copy/LZMA2 entries have a streaming route; solid entries can require managed cache.
 - **RAR:** RARLAB UnRAR and libarchive-based routines. Non-solid streaming and fallback paths exist; solid entries may need earlier decompression history. Multipart/header-metadata and password-list code exists, but compatibility depends on the archive and needs regression coverage.
 
@@ -66,7 +66,7 @@ The backend test utility can be used independently of Winamp:
 .\archive_backend_test\Release\archive_backend_test.exe "D:\Audio\Album.rar" 0 file "D:\Temp\extracted-track.flac"
 ```
 
-The console tests enumerate entries, test memory extraction, exercise eligible archive streams and can extract RAR/7z entries to files. They **do not** replace a Winamp playback regression test; support depends on the specific entry, compression method and archive layout.
+The console tests enumerate entries, test memory extraction, exercise eligible archive streams and can extract ZIP/RAR/7z entries to files. Run `archive_backend_test.exe ziptest "D:\Audio\Album.zip"` to check the generic ZIP reader against byte-for-byte memory extraction and verify seeking, EOF, reopening, and invalid-index handling. The `ziptest` parity command is intended for small test fixtures (maximum 1 MiB per file); this is a test-only limit, not a streaming limit. They **do not** replace a Winamp playback regression test; support depends on the specific entry, compression method and archive layout.
 
 ## Cache, metadata and logging
 
@@ -92,6 +92,8 @@ Bundled sources include **7-Zip LZMA SDK**, **RARLAB UnRAR**, **libarchive**, **
 - After the initial adapter refactor, the Release/x86 solution rebuilt and ZIP, solid/non-solid 7z and RAR smoke cases passed (listing, memory extraction and eligible streaming/seek).
 - The shared backend now supports per-host data directory names with adapter-selected legacy Winamp paths. API tests cover folder-name validation and truncated output paths.
 - Media Foundation startup no longer calls Win32 message boxes from the backend; the Winamp playback adapter owns its user-facing error messages, while metadata readers remain headless.
+- Generic ZIP streaming and ZIP extract-to-file now dispatch through the existing libarchive-backed ZIP reader. A new `ziptest` command checks decoded-byte parity and stream lifecycle. ZIP source paths were corrected to use UTF-16 Win32 file APIs, including multipart archives with Unicode paths. Stream reads expose `ArchiveStreamReadStatus` to distinguish EOF from premature termination and errors. To avoid changing Winamp's route-selection decisions, ZIP entries' existing `streamCandidate` listing flag was deliberately left unchanged.
+- This refactor passed 26 API self-tests; 14 ZIP entry-stream checks across normal, three-part, Unicode-path and empty-entry fixtures; 12 byte-parity ZIP extract-to-file checks; and ZIP/7z/RAR stream smoke tests. A deliberately corrupted ZIP entry failed streaming and extraction, and the file-extraction path removed its partial output. Tests use byte comparisons, not CRC recalculation.
 - Actual Winamp playback remains unverified after these changes.
 
 ### Next validation and development priorities

@@ -2,6 +2,7 @@
 #include "archive_format.h"
 #include "archive_7z_reader.h"
 #include "archive_zip_reader.h"
+#include "archive_zip_libarchive.h"
 #include "archive_rar_reader.h"
 #include "debug_log.h"
 
@@ -100,14 +101,7 @@ bool ArchiveExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const
         return RarExtractEntryToFile(archivePath, index, outputPath, error);
 
     case ArchiveFormat::Zip:
-        /*
-            ZIP large-entry playback already uses the existing streaming path.
-            This generic file extraction path is currently only needed for
-            non-streaming cache fallback archive types.
-        */
-        error = "ZIP extract-to-file is not used by this backend path";
-        DebugLogWrite("WARN", "EXTRACT", "FILE_FAIL", "index=%u | format=ZIP | reason=zip_extract_to_file_not_used_by_backend_path", (unsigned int)index);
-        return false;
+        return LibarchiveZipExtractEntryToFile(archivePath, index, outputPath, error);
 
     case ArchiveFormat::Unknown:
     default:
@@ -132,6 +126,7 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
     stream.size = 0;
     stream.position = 0;
     stream.format = ArchiveFormat::Unknown;
+    stream.readStatus = ArchiveStreamReadStatus::NotOpen;
 
     if (!archivePath || !*archivePath)
     {
@@ -146,15 +141,36 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
     switch (format)
     {
     case ArchiveFormat::SevenZip:
-        return SevenZipOpenEntryStream(archivePath, index, stream, error);
+        if (!SevenZipOpenEntryStream(archivePath, index, stream, error))
+            return false;
+
+        stream.readStatus = ArchiveStreamReadStatus::Ready;
+        return true;
 
     case ArchiveFormat::Rar:
-        return RarOpenEntryStream(archivePath, index, stream, error);
+        if (!RarOpenEntryStream(archivePath, index, stream, error))
+            return false;
+
+        stream.readStatus = ArchiveStreamReadStatus::Ready;
+        return true;
 
     case ArchiveFormat::Zip:
-        error = "ZIP streaming is not implemented by the generic backend stream interface";
-        DebugLogWrite("WARN", "STREAM", "OPEN_FAIL", "index=%u | format=ZIP | reason=zip_stream_not_implemented", (unsigned int)index);
-        return false;
+    {
+        void* zipStream = nullptr;
+        uint64_t entrySize = 0;
+
+        if (!LibarchiveZipOpenEntryStream(archivePath, index, &zipStream, &entrySize, error))
+        {
+            DebugLogWrite("ERROR", "STREAM", "OPEN_FAIL", "index=%u | format=ZIP | reason=libarchive_zip_open_failed | error=%s", (unsigned int)index, error.c_str());
+            return false;
+        }
+
+        stream.impl = zipStream;
+        stream.size = entrySize;
+        stream.position = 0;
+        stream.readStatus = ArchiveStreamReadStatus::Ready;
+        return true;
+    }
 
     case ArchiveFormat::Unknown:
     default:
@@ -166,26 +182,60 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
 
 size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
 {
-    if (!stream.impl || !buffer || bytesToRead == 0)
-    {
-        if (bytesToRead > 0)
-            DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=invalid_input", ArchiveFormatToString(stream.format), bytesToRead);
+    if (bytesToRead == 0)
+        return 0;
 
+    if (!stream.impl || !buffer)
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Error;
+        DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=invalid_input", ArchiveFormatToString(stream.format), bytesToRead);
         return 0;
     }
+
+    size_t bytesRead = 0;
+    std::string error;
 
     switch (stream.format)
     {
+    case ArchiveFormat::Zip:
+        bytesRead = LibarchiveZipReadEntryStream(stream.impl, buffer, bytesToRead, error);
+        stream.position += static_cast<uint64_t>(bytesRead);
+        break;
+
     case ArchiveFormat::SevenZip:
-        return SevenZipReadEntryStream(stream, buffer, bytesToRead);
+        bytesRead = SevenZipReadEntryStream(stream, buffer, bytesToRead);
+        break;
 
     case ArchiveFormat::Rar:
-        return RarReadEntryStream(stream, buffer, bytesToRead);
+        bytesRead = RarReadEntryStream(stream, buffer, bytesToRead);
+        break;
 
     default:
+        stream.readStatus = ArchiveStreamReadStatus::Error;
         DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=unsupported_stream_format", ArchiveFormatToString(stream.format), bytesToRead);
         return 0;
     }
+
+    if (!error.empty())
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Error;
+        DebugLogWrite("ERROR", "STREAM", "READ_FAIL", "format=%s | position=%llu | requested=%zu | error=%s", ArchiveFormatToString(stream.format), (unsigned long long)stream.position, bytesToRead, error.c_str());
+    }
+    else if (bytesRead > 0)
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Ready;
+    }
+    else if (stream.position >= stream.size)
+    {
+        stream.readStatus = ArchiveStreamReadStatus::EndOfEntry;
+    }
+    else
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Error;
+        DebugLogWrite("ERROR", "STREAM", "READ_FAIL", "format=%s | position=%llu | expected=%llu | reason=premature_end_of_entry", ArchiveFormatToString(stream.format), (unsigned long long)stream.position, (unsigned long long)stream.size);
+    }
+
+    return bytesRead;
 }
 
 bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosition)
@@ -198,12 +248,34 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
 
     switch (stream.format)
     {
+    case ArchiveFormat::Zip:
+    {
+        if (absolutePosition > stream.size)
+        {
+            DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=ZIP | target=%llu | entry_size=%llu | reason=beyond_entry", (unsigned long long)absolutePosition, (unsigned long long)stream.size);
+            return false;
+        }
+
+        std::string error;
+        if (!LibarchiveZipSeekEntryStream(stream.impl, absolutePosition, error))
+        {
+            DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=ZIP | target=%llu | error=%s", (unsigned long long)absolutePosition, error.c_str());
+            return false;
+        }
+
+        stream.position = absolutePosition;
+        stream.readStatus = ArchiveStreamReadStatus::Ready;
+        return true;
+    }
+
     case ArchiveFormat::SevenZip:
     {
         bool ok = SevenZipSeekEntryStream(stream, absolutePosition);
 
         if (!ok)
             DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=7Z | target=%llu", (unsigned long long)absolutePosition);
+        else
+            stream.readStatus = ArchiveStreamReadStatus::Ready;
 
         return ok;
     }
@@ -214,6 +286,8 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
 
         if (!ok)
             DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=RAR | target=%llu", (unsigned long long)absolutePosition);
+        else
+            stream.readStatus = ArchiveStreamReadStatus::Ready;
 
         return ok;
     }
@@ -227,10 +301,20 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
 void ArchiveCloseEntryStream(ArchiveBackendStream& stream)
 {
     if (!stream.impl)
+    {
+        stream.size = 0;
+        stream.position = 0;
+        stream.format = ArchiveFormat::Unknown;
+        stream.readStatus = ArchiveStreamReadStatus::NotOpen;
         return;
+    }
 
     switch (stream.format)
     {
+    case ArchiveFormat::Zip:
+        LibarchiveZipCloseEntryStream(stream.impl);
+        break;
+
     case ArchiveFormat::SevenZip:
         SevenZipCloseEntryStream(stream);
         break;
@@ -247,4 +331,5 @@ void ArchiveCloseEntryStream(ArchiveBackendStream& stream)
     stream.size = 0;
     stream.position = 0;
     stream.format = ArchiveFormat::Unknown;
+    stream.readStatus = ArchiveStreamReadStatus::NotOpen;
 }

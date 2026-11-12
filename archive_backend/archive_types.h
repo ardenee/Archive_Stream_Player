@@ -32,11 +32,23 @@ struct ArchiveEntry
     bool streamCandidate = false;
 };
 
+enum class ArchiveStreamReadStatus : uint8_t
+{
+    NotOpen = 0,
+    Ready,
+    EndOfEntry,
+    Error
+};
+
 struct ArchiveBackendStream
 {
     void* impl = nullptr;
     uint64_t size = 0;
     uint64_t position = 0;
     ArchiveFormat format = ArchiveFormat::Unknown;
+
+    // Read result state: a zero-byte read is EOF only when status is EndOfEntry.
+    // Other reader backends cannot always report a detailed error string yet.
+    ArchiveStreamReadStatus readStatus = ArchiveStreamReadStatus::NotOpen;
 };
 

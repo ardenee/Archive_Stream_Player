@@ -108,6 +108,31 @@ static void LaZipCloseSource(LibarchiveZipSource* source)
     source->position = 0;
 }
 
+// ZIP source paths are UTF-8 internally. Windows file APIs must use UTF-16;
+// CreateFileA/GetFileAttributesA interpret the path in the active ANSI codepage.
+static bool LaZipUtf8PathToWide(const std::string& utf8Path, std::wstring& widePath)
+{
+    widePath.clear();
+
+    if (utf8Path.empty())
+        return false;
+
+    int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8Path.c_str(), -1, nullptr, 0);
+    if (needed <= 1)
+        return false;
+
+    widePath.resize(static_cast<size_t>(needed));
+    int written = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8Path.c_str(), -1, &widePath[0], needed);
+    if (written != needed)
+    {
+        widePath.clear();
+        return false;
+    }
+
+    widePath.resize(static_cast<size_t>(needed - 1));
+    return true;
+}
+
 static bool LaZipAddPart(LibarchiveZipSource* source, const std::string& path)
 {
     if (!source || path.empty())
@@ -116,7 +141,14 @@ static bool LaZipAddPart(LibarchiveZipSource* source, const std::string& path)
         return false;
     }
 
-    DWORD attrs = GetFileAttributesA(path.c_str());
+    std::wstring widePath;
+    if (!LaZipUtf8PathToWide(path, widePath))
+    {
+        DebugLogWrite("ERROR", "LAZIP", "OPEN_PART_FAIL", "path=%s | reason=utf8_path_conversion_failed", path.c_str());
+        return false;
+    }
+
+    DWORD attrs = GetFileAttributesW(widePath.c_str());
 
     if (attrs == INVALID_FILE_ATTRIBUTES)
     {
@@ -130,7 +162,7 @@ static bool LaZipAddPart(LibarchiveZipSource* source, const std::string& path)
         return false;
     }
 
-    HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE handle = CreateFileW(widePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if (handle == INVALID_HANDLE_VALUE)
     {
@@ -193,7 +225,15 @@ static bool LaZipOpenSource(const std::string& archivePathUtf8, LibarchiveZipSou
                 return false;
             }
 
-            DWORD attrs = GetFileAttributesA(partPath.c_str());
+            std::wstring widePartPath;
+            if (!LaZipUtf8PathToWide(partPath, widePartPath))
+            {
+                error = "Failed to convert split ZIP part path to UTF-16";
+                LaZipCloseSource(source);
+                return false;
+            }
+
+            DWORD attrs = GetFileAttributesW(widePartPath.c_str());
 
             if (attrs == INVALID_FILE_ATTRIBUTES)
             {
@@ -598,11 +638,18 @@ static bool LaZipWcharToUtf8(const wchar_t* input, std::string& output)
         return false;
     }
 
-    output.resize(static_cast<size_t>(needed - 1));
-
+    // Allocate space for the terminating NUL before the Windows conversion.
+    output.resize(static_cast<size_t>(needed));
     int written = WideCharToMultiByte(CP_UTF8, 0, input, -1, &output[0], needed, NULL, NULL);
 
-    return written > 0;
+    if (written != needed)
+    {
+        output.clear();
+        return false;
+    }
+
+    output.resize(static_cast<size_t>(needed - 1));
+    return true;
 }
 
 static bool LaZipIsSupportedAudioPath(const char* path)
@@ -1360,3 +1407,101 @@ void LibarchiveZipCloseEntryStream(void* streamHandle)
 }
 
 
+
+bool LibarchiveZipExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
+{
+    error.clear();
+
+    if (!archivePath || !archivePath[0] || !outputPath || !outputPath[0])
+    {
+        error = "Invalid ZIP extract-to-file paths";
+        DebugLogWrite("ERROR", "LAZIP", "EXTRACT_FILE_FAIL", "index=%u | reason=invalid_path", (unsigned int)index);
+        return false;
+    }
+
+    if (_wcsicmp(archivePath, outputPath) == 0)
+    {
+        error = "ZIP output path must not overwrite the source archive";
+        DebugLogWrite("ERROR", "LAZIP", "EXTRACT_FILE_FAIL", "index=%u | reason=output_is_source", (unsigned int)index);
+        return false;
+    }
+
+    void* zipStream = nullptr;
+    uint64_t entrySize = 0;
+
+    if (!LibarchiveZipOpenEntryStream(archivePath, index, &zipStream, &entrySize, error))
+        return false;
+
+    HANDLE output = CreateFileW(outputPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+    if (output == INVALID_HANDLE_VALUE)
+    {
+        DWORD winerr = GetLastError();
+        error = "Unable to create ZIP extraction output";
+        DebugLogWrite("ERROR", "LAZIP", "EXTRACT_FILE_FAIL", "index=%u | winerr=%lu | reason=create_output_failed", (unsigned int)index, winerr);
+        LibarchiveZipCloseEntryStream(zipStream);
+        return false;
+    }
+
+    bool ok = true;
+    uint64_t totalWritten = 0;
+    unsigned char buffer[64 * 1024];
+
+    for (;;)
+    {
+        std::string readError;
+        size_t bytesRead = LibarchiveZipReadEntryStream(zipStream, buffer, sizeof(buffer), readError);
+
+        if (!readError.empty())
+        {
+            error = readError;
+            ok = false;
+            break;
+        }
+
+        if (bytesRead == 0)
+            break;
+
+        if (totalWritten > entrySize || bytesRead > entrySize - totalWritten)
+        {
+            error = "ZIP extraction exceeded the expected entry size";
+            ok = false;
+            break;
+        }
+
+        DWORD bytesWritten = 0;
+        if (!WriteFile(output, buffer, static_cast<DWORD>(bytesRead), &bytesWritten, nullptr) || bytesWritten != bytesRead)
+        {
+            DWORD winerr = GetLastError();
+            error = "Unable to write ZIP extraction output";
+            DebugLogWrite("ERROR", "LAZIP", "EXTRACT_FILE_FAIL", "index=%u | winerr=%lu | position=%llu | reason=write_failed", (unsigned int)index, winerr, (unsigned long long)totalWritten);
+            ok = false;
+            break;
+        }
+
+        totalWritten += bytesWritten;
+    }
+
+    if (ok && totalWritten != entrySize)
+    {
+        error = "ZIP extraction ended before the expected entry size";
+        ok = false;
+    }
+
+    LibarchiveZipCloseEntryStream(zipStream);
+
+    if (!CloseHandle(output))
+    {
+        error = "Unable to close ZIP extraction output";
+        ok = false;
+    }
+
+    if (!ok)
+    {
+        DebugLogWrite("ERROR", "LAZIP", "EXTRACT_FILE_FAIL", "index=%u | written=%llu | expected=%llu | error=%s", (unsigned int)index, (unsigned long long)totalWritten, (unsigned long long)entrySize, error.c_str());
+        DeleteFileW(outputPath);
+        return false;
+    }
+
+    return true;
+}
