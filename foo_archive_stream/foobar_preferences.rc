@@ -28,20 +28,22 @@ BEGIN
 
     PUSHBUTTON    "Open cache folder", IDC_CACHE_VIEW, 12, 250, 122, 18
     PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 144, 250, 104, 18
+    PUSHBUTTON    "Open log folder", IDC_LOG_FOLDER, 258, 250, 125, 18
     LTEXT         "Playback buffer/title options take effect when the foobar decoder is implemented.", -1, 12, 271, 424, 9
 END
 
-IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 450, 185
+IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 450, 200
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
 FONT 9, "Segoe UI"
 BEGIN
-    GROUPBOX      "Playlist title formatting", -1, 8, 6, 434, 121
+    GROUPBOX      "Playlist title formatting", -1, 8, 6, 434, 141
     LTEXT         "Prefix (maximum 20 UTF-8 bytes):", -1, 19, 28, 200, 12
     EDITTEXT      IDC_DISPLAY_PREFIX, 224, 26, 204, 14, ES_AUTOHSCROLL
     LTEXT         "Postfix (maximum 20 UTF-8 bytes):", -1, 19, 54, 200, 12
     EDITTEXT      IDC_DISPLAY_POSTFIX, 224, 52, 204, 14, ES_AUTOHSCROLL
     LTEXT         "Template (maximum 159 UTF-8 bytes):", -1, 19, 80, 200, 12
     EDITTEXT      IDC_DISPLAY_TEMPLATE, 224, 78, 204, 14, ES_AUTOHSCROLL
-    LTEXT         "Default template: <filename>", -1, 19, 105, 340, 12
-    LTEXT         "Stored for future foobar playlist integration; does not alter the current inspector.", -1, 12, 141, 423, 25
+    LTEXT         "Preset:", -1, 19, 105, 92, 12
+    COMBOBOX      IDC_DISPLAY_PRESET, 224, 104, 204, 90, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT         "Stored for future foobar playlist integration; does not alter the current inspector.", -1, 12, 159, 423, 25
 END
