@@ -20,7 +20,7 @@ bool LibarchiveRarExtractEntryToMemory(const wchar_t* archivePath, uint32_t inde
 bool LibarchiveRarExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error);
 bool LibarchiveRarExtractEntriesToFiles(const wchar_t* archivePath, const std::vector<LibarchiveRarExtractFileRequest>& requests, std::vector<uint32_t>& succeededIndexes, std::string& error);
 bool LibarchiveRarExtractEntriesToFilesWithProgress( const wchar_t* archivePath, const std::vector<LibarchiveRarExtractFileRequest>& requests, std::vector<uint32_t>& succeededIndexes, LibarchiveRarExtractProgressCallback progressCallback, void* progressUserData, std::string& error);
-bool LibarchiveRarOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error);
+bool LibarchiveRarOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error, const ArchiveStreamCancellationToken* cancellation = nullptr);
 size_t LibarchiveRarReadEntryStream(void* streamHandle, void* buffer, size_t bytesToRead, std::string& error);
 bool LibarchiveRarSeekEntryStream(void* streamHandle, uint64_t absolutePosition, std::string& error);
 void LibarchiveRarCloseEntryStream(void* streamHandle);

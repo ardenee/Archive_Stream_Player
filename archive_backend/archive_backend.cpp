@@ -111,7 +111,7 @@ bool ArchiveExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const
     }
 }
 
-bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error)
+bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation)
 {
     error.clear();
 
@@ -127,6 +127,15 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
     stream.position = 0;
     stream.format = ArchiveFormat::Unknown;
     stream.readStatus = ArchiveStreamReadStatus::NotOpen;
+    stream.cancellation = nullptr;
+
+    if (cancellation && cancellation->IsCancellationRequested())
+    {
+        error = "Archive stream open cancelled";
+        stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+        DebugLogWrite("INFO", "STREAM", "OPEN_CANCELLED", "index=%u | reason=cancellation_requested", (unsigned int)index);
+        return false;
+    }
 
     if (!archivePath || !*archivePath)
     {
@@ -144,12 +153,30 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
         if (!SevenZipOpenEntryStream(archivePath, index, stream, error))
             return false;
 
+        stream.cancellation = cancellation;
+        if (cancellation && cancellation->IsCancellationRequested())
+        {
+            ArchiveCloseEntryStream(stream);
+            stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+            error = "Archive stream open cancelled";
+            return false;
+        }
+
         stream.readStatus = ArchiveStreamReadStatus::Ready;
         return true;
 
     case ArchiveFormat::Rar:
-        if (!RarOpenEntryStream(archivePath, index, stream, error))
+        if (!RarOpenEntryStream(archivePath, index, stream, error, cancellation))
             return false;
+
+        stream.cancellation = cancellation;
+        if (cancellation && cancellation->IsCancellationRequested())
+        {
+            ArchiveCloseEntryStream(stream);
+            stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+            error = "Archive stream open cancelled";
+            return false;
+        }
 
         stream.readStatus = ArchiveStreamReadStatus::Ready;
         return true;
@@ -159,7 +186,7 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
         void* zipStream = nullptr;
         uint64_t entrySize = 0;
 
-        if (!LibarchiveZipOpenEntryStream(archivePath, index, &zipStream, &entrySize, error))
+        if (!LibarchiveZipOpenEntryStream(archivePath, index, &zipStream, &entrySize, error, cancellation))
         {
             DebugLogWrite("ERROR", "STREAM", "OPEN_FAIL", "index=%u | format=ZIP | reason=libarchive_zip_open_failed | error=%s", (unsigned int)index, error.c_str());
             return false;
@@ -168,6 +195,16 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
         stream.impl = zipStream;
         stream.size = entrySize;
         stream.position = 0;
+        stream.cancellation = cancellation;
+
+        if (cancellation && cancellation->IsCancellationRequested())
+        {
+            ArchiveCloseEntryStream(stream);
+            stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+            error = "Archive stream open cancelled";
+            return false;
+        }
+
         stream.readStatus = ArchiveStreamReadStatus::Ready;
         return true;
     }
@@ -182,6 +219,12 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
 
 size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
 {
+    if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+        return 0;
+    }
+
     if (bytesToRead == 0)
         return 0;
 
@@ -216,6 +259,12 @@ size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t
         return 0;
     }
 
+    if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+        return 0;
+    }
+
     if (!error.empty())
     {
         stream.readStatus = ArchiveStreamReadStatus::Error;
@@ -240,6 +289,12 @@ size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t
 
 bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosition)
 {
+    if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+        return false;
+    }
+
     if (!stream.impl)
     {
         DebugLogWrite("ERROR", "STREAM", "SEEK_FAIL", "target=%llu | reason=no_backend_impl", (unsigned long long)absolutePosition);
@@ -259,7 +314,16 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
         std::string error;
         if (!LibarchiveZipSeekEntryStream(stream.impl, absolutePosition, error))
         {
+            if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+                stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+
             DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=ZIP | target=%llu | error=%s", (unsigned long long)absolutePosition, error.c_str());
+            return false;
+        }
+
+        if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+        {
+            stream.readStatus = ArchiveStreamReadStatus::Cancelled;
             return false;
         }
 
@@ -273,9 +337,21 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
         bool ok = SevenZipSeekEntryStream(stream, absolutePosition);
 
         if (!ok)
+        {
+            if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+                stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+
             DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=7Z | target=%llu", (unsigned long long)absolutePosition);
+        }
+        else if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+        {
+            stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+            return false;
+        }
         else
+        {
             stream.readStatus = ArchiveStreamReadStatus::Ready;
+        }
 
         return ok;
     }
@@ -285,9 +361,21 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
         bool ok = RarSeekEntryStream(stream, absolutePosition);
 
         if (!ok)
+        {
+            if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+                stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+
             DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=RAR | target=%llu", (unsigned long long)absolutePosition);
+        }
+        else if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+        {
+            stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+            return false;
+        }
         else
+        {
             stream.readStatus = ArchiveStreamReadStatus::Ready;
+        }
 
         return ok;
     }
@@ -306,6 +394,7 @@ void ArchiveCloseEntryStream(ArchiveBackendStream& stream)
         stream.position = 0;
         stream.format = ArchiveFormat::Unknown;
         stream.readStatus = ArchiveStreamReadStatus::NotOpen;
+        stream.cancellation = nullptr;
         return;
     }
 
@@ -332,4 +421,5 @@ void ArchiveCloseEntryStream(ArchiveBackendStream& stream)
     stream.position = 0;
     stream.format = ArchiveFormat::Unknown;
     stream.readStatus = ArchiveStreamReadStatus::NotOpen;
+    stream.cancellation = nullptr;
 }

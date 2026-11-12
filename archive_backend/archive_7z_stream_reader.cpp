@@ -1308,6 +1308,9 @@ size_t SevenZipReadNonSolidEntryStreamImpl(ArchiveBackendStream& stream, void* b
     if (!stream.impl || !buffer || bytesToRead == 0)
         return 0;
 
+    if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+        return 0;
+
     SevenZipNonSolidStreamState* state = static_cast<SevenZipNonSolidStreamState*>(stream.impl);
 
     size_t bytesRead = 0;
@@ -1332,6 +1335,9 @@ bool SevenZipSeekNonSolidEntryStreamImpl(ArchiveBackendStream& stream, uint64_t 
         DebugLogWrite("ERROR", "7Z", "STREAM_SEEK_FAIL", "target=%llu | reason=no_stream_impl", (unsigned long long)absolutePosition);
         return false;
     }
+
+    if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+        return false;
 
     SevenZipNonSolidStreamState* state = static_cast<SevenZipNonSolidStreamState*>(stream.impl);
 
@@ -1375,6 +1381,9 @@ bool SevenZipSeekNonSolidEntryStreamImpl(ArchiveBackendStream& stream, uint64_t 
 
         while (remaining > 0)
         {
+            if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+                return false;
+
             size_t want = remaining > sizeof(temp) ? sizeof(temp) : static_cast<size_t>(remaining);
             size_t got = ReadLzma2Bytes(state, temp, want);
 

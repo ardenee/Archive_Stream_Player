@@ -946,6 +946,7 @@ struct LibarchiveZipEntryStream
     uint32_t index = 0;
     uint64_t position = 0;
     uint64_t entrySize = 0;
+    const ArchiveStreamCancellationToken* cancellation = nullptr;
     bool encrypted = false;
     bool promptAttempted = false;
     bool passwordFailureFinal = false;
@@ -1104,7 +1105,7 @@ static bool LaZipOpenEntryStreamInternal(LibarchiveZipEntryStream* stream, std::
 // This is the ZIP streaming path. Normal ZIP and split ZIP both use the same
 // callback source underneath LaZipOpenArchive().
 // -----------------------------------------------------------------------------
-bool LibarchiveZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error)
+bool LibarchiveZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error, const ArchiveStreamCancellationToken* cancellation)
 {
     if (outStream)
     {
@@ -1136,6 +1137,7 @@ bool LibarchiveZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, vo
 
     stream->archivePath = archivePath;
     stream->index = index;
+    stream->cancellation = cancellation;
 
     if (!LaZipOpenEntryStreamInternal(stream, error))
     {
@@ -1241,6 +1243,12 @@ size_t LibarchiveZipReadEntryStream(void* streamHandle, void* buffer, size_t byt
         return 0;
     }
 
+    if (stream->cancellation && stream->cancellation->IsCancellationRequested())
+    {
+        error = "ZIP stream cancelled";
+        return 0;
+    }
+
     if (stream->passwordFailureFinal)
     {
         return 0;
@@ -1343,6 +1351,12 @@ bool LibarchiveZipSeekEntryStream(void* streamHandle, uint64_t absolutePosition,
         return false;
     }
 
+    if (stream->cancellation && stream->cancellation->IsCancellationRequested())
+    {
+        error = "ZIP seek cancelled";
+        return false;
+    }
+
     if (absolutePosition == stream->position)
     {
         return true;
@@ -1362,6 +1376,12 @@ bool LibarchiveZipSeekEntryStream(void* streamHandle, uint64_t absolutePosition,
 
     while (remaining > 0)
     {
+        if (stream->cancellation && stream->cancellation->IsCancellationRequested())
+        {
+            error = "ZIP seek cancelled";
+            return false;
+        }
+
         size_t want = sizeof(temp);
 
         if (remaining < static_cast<uint64_t>(want))

@@ -36,7 +36,7 @@ bool LibarchiveZipExtractEntryToMemory(const wchar_t* archivePath, uint32_t inde
 // returned opaque stream handle owns the libarchive reader and source handles,
 // and must be closed with LibarchiveZipCloseEntryStream().
 // -----------------------------------------------------------------------------
-bool LibarchiveZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error);
+bool LibarchiveZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error, const ArchiveStreamCancellationToken* cancellation = nullptr);
 
 // -----------------------------------------------------------------------------
 // LibarchiveZipReadEntryStream

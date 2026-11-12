@@ -7,10 +7,12 @@
 #include <string>
 #include <algorithm>
 #include <cstring>
+#include <thread>
 
 #include "archive_backend.h"
 #include "archive_format.h"
 #include "archive_common.h"
+#include "archive_reader.h"
 
 static bool ParseUInt32Arg(const wchar_t* text, uint32_t& outValue)
 {
@@ -290,6 +292,218 @@ static int RunGenericZipStreamRegression(const wchar_t* archivePath)
     return 0;
 }
 
+// Cancellation is signalled from a different thread, but close and I/O stay on
+// the owning thread. A token must outlive the open stream.
+static int RunCancellationRegression(const wchar_t* archivePath)
+{
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    if (!ArchiveListEntries(archivePath, entries, error))
+    {
+        std::printf("FAIL: cancellation fixture listing: %s\n", error.c_str());
+        return 1;
+    }
+
+    const ArchiveEntry* entry = nullptr;
+    for (const ArchiveEntry& candidate : entries)
+    {
+        if (!candidate.isFolder && candidate.size > 64)
+        {
+            entry = &candidate;
+            break;
+        }
+    }
+
+    if (!entry)
+    {
+        std::printf("FAIL: cancellation test requires a nonempty entry over 64 bytes\n");
+        return 1;
+    }
+
+    auto check = [](bool passed, const char* label) -> bool
+    {
+        std::printf("%s: %s\n", passed ? "PASS" : "FAIL", label);
+        return passed;
+    };
+
+    ArchiveBackendStream stream;
+    ArchiveStreamCancellationToken alreadyCancelled;
+    alreadyCancelled.RequestCancellation();
+    bool opened = ArchiveOpenEntryStream(archivePath, entry->index, stream, error, &alreadyCancelled);
+    if (!check(!opened && !stream.impl && stream.readStatus == ArchiveStreamReadStatus::Cancelled && !error.empty(), "reject pre-cancelled stream open"))
+    {
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+
+    ArchiveStreamCancellationToken token;
+    if (!ArchiveOpenEntryStream(archivePath, entry->index, stream, error, &token))
+    {
+        std::printf("FAIL: cancellation stream open: %s\n", error.c_str());
+        return 1;
+    }
+
+    if (!check(stream.readStatus == ArchiveStreamReadStatus::Ready && stream.cancellation == &token, "open retains caller-owned token"))
+    {
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+
+    // Request cancellation across threads; the reader observes it via atomics.
+    std::thread canceller([&token]() { token.RequestCancellation(); });
+    canceller.join();
+
+    unsigned char bytes[64] = {};
+    size_t got = ArchiveReadEntryStream(stream, bytes, sizeof(bytes));
+    if (!check(got == 0 && stream.readStatus == ArchiveStreamReadStatus::Cancelled && stream.position == 0, "cross-thread cancellation stops read without consuming data"))
+    {
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+
+    if (!check(!ArchiveSeekEntryStream(stream, 16) && stream.readStatus == ArchiveStreamReadStatus::Cancelled && stream.position == 0, "cancelled stream rejects seek"))
+    {
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+
+    ArchiveCloseEntryStream(stream);
+    ArchiveCloseEntryStream(stream);
+    if (!check(!stream.impl && !stream.cancellation && stream.readStatus == ArchiveStreamReadStatus::NotOpen, "cancelled stream close resets ownership and status"))
+        return 1;
+
+    // A new stream may use a new token without changing the old one's state.
+    ArchiveStreamCancellationToken fresh;
+    if (!ArchiveOpenEntryStream(archivePath, entry->index, stream, error, &fresh))
+    {
+        std::printf("FAIL: reopen after cancellation: %s\n", error.c_str());
+        return 1;
+    }
+
+    got = ArchiveReadEntryStream(stream, bytes, sizeof(bytes));
+    if (!check(got > 0 && stream.readStatus == ArchiveStreamReadStatus::Ready, "fresh token permits decoding after cancellation"))
+    {
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+
+    ArchiveCloseEntryStream(stream);
+    return 0;
+}
+
+static int RunLegacyStreamOwnershipRegression(const wchar_t* archivePath)
+{
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    if (!ArchiveListEntries(archivePath, entries, error))
+    {
+        std::printf("FAIL: legacy fixture listing: %s\n", error.c_str());
+        return 1;
+    }
+
+    const ArchiveEntry* entry = nullptr;
+    for (const ArchiveEntry& candidate : entries)
+    {
+        if (!candidate.isFolder && candidate.size > 64)
+        {
+            entry = &candidate;
+            break;
+        }
+    }
+
+    if (!entry)
+    {
+        std::printf("FAIL: legacy test requires a nonempty entry over 64 bytes\n");
+        return 1;
+    }
+
+    int required = WideCharToMultiByte(CP_UTF8, 0, archivePath, -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 1)
+        return 1;
+
+    std::string utf8Path(static_cast<size_t>(required), '\0');
+    if (WideCharToMultiByte(CP_UTF8, 0, archivePath, -1, &utf8Path[0], required, nullptr, nullptr) != required)
+        return 1;
+    utf8Path.resize(static_cast<size_t>(required - 1));
+
+    ArchiveStreamContext legacy{};
+    if (!ArchiveOpenEntryStream(&legacy, utf8Path.c_str(), entry->index))
+    {
+        std::printf("FAIL: legacy stream initial open\n");
+        return 1;
+    }
+
+    void* originalHandle = legacy.libarchiveZipStream ? legacy.libarchiveZipStream : legacy.backendStream.impl;
+    const bool zipOpen = legacy.libarchiveZipOpen;
+    const bool backendOpen = legacy.backendOpen;
+    if (!originalHandle || ArchiveOpenEntryStream(&legacy, utf8Path.c_str(), entry->index))
+    {
+        std::printf("FAIL: legacy double-open was accepted\n");
+        ArchiveCloseEntryStream(&legacy);
+        return 1;
+    }
+
+    std::string preflightError;
+    if (ArchiveOpenValidatedEntryStream(&legacy, utf8Path.c_str(), entry->index, 16, &preflightError) || preflightError != "stream_already_open")
+    {
+        std::printf("FAIL: legacy validated-open erased a live stream\n");
+        ArchiveCloseEntryStream(&legacy);
+        return 1;
+    }
+
+    void* afterHandle = legacy.libarchiveZipStream ? legacy.libarchiveZipStream : legacy.backendStream.impl;
+    if (originalHandle != afterHandle || legacy.libarchiveZipOpen != zipOpen || legacy.backendOpen != backendOpen)
+    {
+        std::printf("FAIL: legacy ownership state changed after rejected opens\n");
+        ArchiveCloseEntryStream(&legacy);
+        return 1;
+    }
+
+    unsigned char buffer[32] = {};
+    if (ArchiveReadEntryStream(&legacy, buffer, sizeof(buffer)) == 0)
+    {
+        std::printf("FAIL: legacy stream unusable after rejected reopen\n");
+        ArchiveCloseEntryStream(&legacy);
+        return 1;
+    }
+
+    ArchiveCloseEntryStream(&legacy);
+    ArchiveCloseEntryStream(&legacy);
+    if (legacy.libarchiveZipStream || legacy.backendStream.impl || legacy.libarchiveZipOpen || legacy.backendOpen)
+    {
+        std::printf("FAIL: legacy close did not release handles\n");
+        return 1;
+    }
+
+    if (!ArchiveOpenEntryStream(&legacy, utf8Path.c_str(), entry->index))
+    {
+        std::printf("FAIL: legacy reopen after close\n");
+        return 1;
+    }
+    ArchiveCloseEntryStream(&legacy);
+
+    preflightError.clear();
+    if (!ArchiveOpenValidatedEntryStream(&legacy, utf8Path.c_str(), entry->index, 16, &preflightError))
+    {
+        std::printf("FAIL: legacy validated-open failed on a closed stream: %s\n", preflightError.c_str());
+        return 1;
+    }
+    ArchiveCloseEntryStream(&legacy);
+
+    // Overlong paths should return false rather than invoke the CRT's
+    // invalid-parameter handler through strcpy_s.
+    std::string oversizedPath(MAX_PATH * 4 + 4, 'x');
+    if (ArchiveOpenEntryStream(&legacy, oversizedPath.c_str(), entry->index))
+    {
+        std::printf("FAIL: legacy accepted overlong archive path\n");
+        ArchiveCloseEntryStream(&legacy);
+        return 1;
+    }
+
+    std::printf("PASS: legacy stream rejected double-open, retained handle, closed and reopened\n");
+    return 0;
+}
+
 static int RunApiValidationTests()
 {
     int failures = 0;
@@ -305,9 +519,9 @@ static int RunApiValidationTests()
     std::vector<unsigned char> data;
     std::string error;
 
-    check(!ArchiveListEntries(nullptr, entries, error) && !error.empty(), "list null path");
+    check(!ArchiveListEntries(static_cast<const wchar_t*>(nullptr), entries, error) && !error.empty(), "list null path");
     check(!ArchiveListEntries(L"", entries, error) && !error.empty(), "list empty path");
-    check(!ArchiveExtractEntryToMemory(nullptr, 0, data, error) && !error.empty(), "extract memory null path");
+    check(!ArchiveExtractEntryToMemory(static_cast<const wchar_t*>(nullptr), 0, data, error) && !error.empty(), "extract memory null path");
     check(!ArchiveExtractEntryToFile(nullptr, 0, L"unused.bin", error) && !error.empty(), "extract file null path");
     check(!ArchiveExtractEntryToFile(L"unused.7z", 0, nullptr, error) && !error.empty(), "extract file null output");
 
@@ -363,11 +577,19 @@ int wmain(int argc, wchar_t* argv[])
     if (argc >= 3 && _wcsicmp(argv[1], L"ziptest") == 0)
         return RunGenericZipStreamRegression(argv[2]);
 
+    if (argc >= 3 && _wcsicmp(argv[1], L"canceltest") == 0)
+        return RunCancellationRegression(argv[2]);
+
+    if (argc >= 3 && _wcsicmp(argv[1], L"legacytest") == 0)
+        return RunLegacyStreamOwnershipRegression(argv[2]);
+
     if (argc < 2)
     {
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");
+        std::printf("  archive_backend_test.exe canceltest archive.zip\n");
+        std::printf("  archive_backend_test.exe legacytest archive.zip\n");
         std::printf("  archive_backend_test.exe archive.7z\n");
         std::printf("  archive_backend_test.exe archive.7z index\n");
         std::printf("  archive_backend_test.exe archive.7z index stream\n");

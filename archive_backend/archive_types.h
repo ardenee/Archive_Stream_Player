@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -37,7 +38,21 @@ enum class ArchiveStreamReadStatus : uint8_t
     NotOpen = 0,
     Ready,
     EndOfEntry,
-    Error
+    Error,
+    Cancelled
+};
+
+// Caller-owned, thread-safe signal. A token must outlive every stream that
+// observes it. Request cancellation from any thread; join in-flight reads
+// before closing or reopening the stream (those operations are not reentrant).
+struct ArchiveStreamCancellationToken
+{
+    void RequestCancellation() noexcept { requested.store(true, std::memory_order_release); }
+    bool IsCancellationRequested() const noexcept { return requested.load(std::memory_order_acquire); }
+    void Reset() noexcept { requested.store(false, std::memory_order_release); }
+
+private:
+    std::atomic<bool> requested{ false };
 };
 
 struct ArchiveBackendStream
@@ -50,5 +65,6 @@ struct ArchiveBackendStream
     // Read result state: a zero-byte read is EOF only when status is EndOfEntry.
     // Other reader backends cannot always report a detailed error string yet.
     ArchiveStreamReadStatus readStatus = ArchiveStreamReadStatus::NotOpen;
+    const ArchiveStreamCancellationToken* cancellation = nullptr;
 };
 

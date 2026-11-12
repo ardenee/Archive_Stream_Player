@@ -1970,6 +1970,7 @@ struct LibarchiveRarEntryStream
     uint32_t index = 0;
     uint64_t position = 0;
     uint64_t entrySize = 0;
+    const ArchiveStreamCancellationToken* cancellation = nullptr;
     bool encrypted = false;
     bool promptAttempted = false;
     bool passwordFailureFinal = false;
@@ -2084,7 +2085,7 @@ static bool LaRarOpenEntryStreamInternal(LibarchiveRarEntryStream* stream, std::
     }
 }
 
-bool LibarchiveRarOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error)
+bool LibarchiveRarOpenEntryStream(const wchar_t* archivePath, uint32_t index, void** outStream, uint64_t* outEntrySize, std::string& error, const ArchiveStreamCancellationToken* cancellation)
 {
     if (outStream)
     {
@@ -2115,6 +2116,7 @@ bool LibarchiveRarOpenEntryStream(const wchar_t* archivePath, uint32_t index, vo
 
     stream->archivePath = archivePath;
     stream->index = index;
+    stream->cancellation = cancellation;
 
     if (!LaRarOpenEntryStreamInternal(stream, error))
     {
@@ -2195,6 +2197,12 @@ size_t LibarchiveRarReadEntryStream(void* streamHandle, void* buffer, size_t byt
 
     if (!stream || !stream->archiveHandle || !buffer || bytesToRead == 0)
     {
+        return 0;
+    }
+
+    if (stream->cancellation && stream->cancellation->IsCancellationRequested())
+    {
+        error = "RAR stream cancelled";
         return 0;
     }
 
@@ -2291,6 +2299,12 @@ bool LibarchiveRarSeekEntryStream(void* streamHandle, uint64_t absolutePosition,
         return false;
     }
 
+    if (stream->cancellation && stream->cancellation->IsCancellationRequested())
+    {
+        error = "RAR seek cancelled";
+        return false;
+    }
+
     if (absolutePosition == stream->position)
     {
         return true;
@@ -2308,6 +2322,12 @@ bool LibarchiveRarSeekEntryStream(void* streamHandle, uint64_t absolutePosition,
 
     while (stream->position < absolutePosition)
     {
+        if (stream->cancellation && stream->cancellation->IsCancellationRequested())
+        {
+            error = "RAR seek cancelled";
+            return false;
+        }
+
         uint64_t remaining = absolutePosition - stream->position;
         size_t request = (size_t)std::min<uint64_t>(remaining, sizeof(discard));
         size_t got = LibarchiveRarReadEntryStream(stream, discard, request, error);

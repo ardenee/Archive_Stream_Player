@@ -13,7 +13,12 @@ bool ArchiveExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const
 // idempotent. Consult stream.readStatus after zero-byte reads: EndOfEntry
 // means normal EOF; Error means an invalid request, a backend-reported read
 // failure, or premature termination before the expected entry size.
-bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error);
+// Cancelled means a caller-owned cancellation token requested termination.
+// Cancellation is cooperative; open/read/seek are not safe concurrently with
+// close, and cancellation cannot interrupt a single blocking library call.
+// Keep the optional token alive until the stream is closed and in-flight I/O
+// returns. Passing nullptr preserves existing behavior.
+bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation = nullptr);
 size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead);
 bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosition);
 void ArchiveCloseEntryStream(ArchiveBackendStream& stream);

@@ -1775,12 +1775,12 @@ bool RarExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wch
     return LibarchiveRarExtractEntryToFile(archivePath, index, outputPath, error);
 }
 
-bool RarOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error)
+bool RarOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation)
 {
     void* impl = nullptr;
     uint64_t entrySize = 0;
 
-    if (!LibarchiveRarOpenEntryStream(archivePath, index, &impl, &entrySize, error))
+    if (!LibarchiveRarOpenEntryStream(archivePath, index, &impl, &entrySize, error, cancellation))
     {
         return false;
     }

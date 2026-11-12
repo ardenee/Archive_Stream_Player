@@ -1134,7 +1134,22 @@ bool ArchiveOpenEntryStream(ArchiveStreamContext* ctx, const char* archivePath, 
         return false;
     }
 
-    memset(ctx, 0, sizeof(*ctx));
+    // Do not discard an already-owned handle by zeroing the context. The
+    // original Winamp path and generic backend have the same close-before-open
+    // lifecycle requirement.
+    if (ctx->libarchiveZipStream || ctx->libarchiveZipOpen || ctx->backendStream.impl || ctx->backendOpen)
+    {
+        DebugLogWrite("ERROR", "STREAM", "OPEN_FAIL", "index=%u | reason=legacy_stream_already_open", (unsigned int)index);
+        return false;
+    }
+
+    if (strnlen_s(archivePath, sizeof(ctx->archivePath)) >= sizeof(ctx->archivePath))
+    {
+        DebugLogWrite("ERROR", "STREAM", "OPEN_FAIL", "index=%u | reason=archive_path_too_long", (unsigned int)index);
+        return false;
+    }
+
+    *ctx = ArchiveStreamContext{};
     strcpy_s(ctx->archivePath, sizeof(ctx->archivePath), archivePath);
     ctx->index = index;
 
@@ -1265,7 +1280,18 @@ bool ArchiveOpenValidatedEntryStream(ArchiveStreamContext* ctx, const char* arch
         return false;
     }
 
-    memset(ctx, 0, sizeof(*ctx));
+    // The open routine rejects active contexts; never erase an existing
+    // stream before it has been closed.
+    if (ctx->libarchiveZipStream || ctx->libarchiveZipOpen || ctx->backendStream.impl || ctx->backendOpen)
+    {
+        if (outError)
+            *outError = "stream_already_open";
+
+        DebugLogWrite("WARN", "STREAM", "OPEN_VALIDATED_FAIL", "index=%u | reason=stream_already_open", (unsigned int)index);
+        return false;
+    }
+
+    *ctx = ArchiveStreamContext{};
 
     if (!archivePath || !archivePath[0])
     {
@@ -1307,7 +1333,7 @@ bool ArchiveOpenValidatedEntryStream(ArchiveStreamContext* ctx, const char* arch
     if (got == 0)
     {
         ArchiveCloseEntryStream(ctx);
-        memset(ctx, 0, sizeof(*ctx));
+        *ctx = ArchiveStreamContext{};
 
         if (outError)
         {
@@ -1321,7 +1347,7 @@ bool ArchiveOpenValidatedEntryStream(ArchiveStreamContext* ctx, const char* arch
     if (!ArchiveSeekEntryStream(ctx, 0))
     {
         ArchiveCloseEntryStream(ctx);
-        memset(ctx, 0, sizeof(*ctx));
+        *ctx = ArchiveStreamContext{};
 
         if (outError)
         {
@@ -1359,8 +1385,7 @@ bool ArchiveValidateEntryStreamRead(const char* archivePath, mz_uint index, size
         probeBytes = 4096;
     }
 
-    ArchiveStreamContext ctx;
-    memset(&ctx, 0, sizeof(ctx));
+    ArchiveStreamContext ctx{};
 
     if (!ArchiveOpenEntryStream(&ctx, archivePath, index))
     {
