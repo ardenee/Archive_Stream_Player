@@ -1,5 +1,4 @@
 #include <foobar2000/SDK/foobar2000.h>
-#include "foobar_preferences.h"
 #include "foobar_resource.h"
 #include "foobar_settings.h"
 
@@ -7,6 +6,7 @@
 #include "archive_common.h"
 
 #include <commdlg.h>
+#include <climits>
 #include <shellapi.h>
 #include <string>
 
