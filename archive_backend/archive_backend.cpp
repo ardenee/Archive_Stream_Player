@@ -217,6 +217,66 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
     }
 }
 
+ArchiveStreamOperationResult ArchiveOpenEntryStreamDetailed(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, const ArchiveStreamCancellationToken* cancellation)
+{
+    ArchiveStreamOperationResult result;
+    result.format = archivePath ? DetectArchiveFormatFromPath(archivePath) : ArchiveFormat::Unknown;
+
+    // Classify before calling the original API; a rejected double-open leaves
+    // the caller's live stream intact and must not alter its ownership state.
+    if (stream.impl)
+    {
+        result.errorKind = ArchiveStreamErrorKind::AlreadyOpen;
+        result.message = "Archive stream is already open";
+    }
+    else if (cancellation && cancellation->IsCancellationRequested())
+    {
+        result.errorKind = ArchiveStreamErrorKind::Cancelled;
+        result.message = "Archive stream open cancelled";
+    }
+    else if (!archivePath || !*archivePath)
+    {
+        result.errorKind = ArchiveStreamErrorKind::InvalidArgument;
+        result.message = "Archive path is empty";
+    }
+    else if (result.format == ArchiveFormat::Unknown)
+    {
+        result.errorKind = ArchiveStreamErrorKind::UnsupportedFormat;
+        result.message = "Unsupported or unknown archive format";
+    }
+    else
+    {
+        std::string backendError;
+        result.success = ArchiveOpenEntryStream(archivePath, index, stream, backendError, cancellation);
+        if (!result.success)
+        {
+            result.errorKind = cancellation && cancellation->IsCancellationRequested()
+                ? ArchiveStreamErrorKind::Cancelled : ArchiveStreamErrorKind::BackendFailure;
+            result.message = backendError.empty() ? "Archive backend could not open the entry" : std::move(backendError);
+        }
+    }
+
+    result.status = stream.readStatus;
+    result.position = stream.position;
+    if (result.success)
+    {
+        result.status = ArchiveStreamReadStatus::Ready;
+        result.format = stream.format;
+    }
+    else if (!stream.impl && result.errorKind == ArchiveStreamErrorKind::Cancelled)
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+        result.status = stream.readStatus;
+    }
+    else if (!stream.impl && result.errorKind != ArchiveStreamErrorKind::AlreadyOpen)
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Error;
+        result.status = stream.readStatus;
+    }
+
+    return result;
+}
+
 ArchiveStreamReadResult ArchiveReadEntryStreamDetailed(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
 {
     ArchiveStreamReadResult result;
@@ -285,6 +345,11 @@ ArchiveStreamReadResult ArchiveReadEntryStreamDetailed(ArchiveBackendStream& str
         return finish();
     }
 
+    // A decoder may have produced bytes before another thread requests
+    // cancellation. Report that byte count even though the call is cancelled;
+    // silently returning zero loses data and desynchronizes position.
+    result.bytesRead = bytesRead;
+
     if (stream.cancellation && stream.cancellation->IsCancellationRequested())
     {
         stream.readStatus = ArchiveStreamReadStatus::Cancelled;
@@ -292,8 +357,6 @@ ArchiveStreamReadResult ArchiveReadEntryStreamDetailed(ArchiveBackendStream& str
         result.message = "Archive stream cancelled";
         return finish();
     }
-
-    result.bytesRead = bytesRead;
 
     if (!backendError.empty())
     {
@@ -423,6 +486,57 @@ bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosit
         DebugLogWrite("WARN", "STREAM", "SEEK_FAIL", "format=UNKNOWN | target=%llu", (unsigned long long)absolutePosition);
         return false;
     }
+}
+
+ArchiveStreamOperationResult ArchiveSeekEntryStreamDetailed(ArchiveBackendStream& stream, uint64_t absolutePosition)
+{
+    ArchiveStreamOperationResult result;
+    result.format = stream.format;
+    result.position = stream.position;
+
+    if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+    {
+        result.errorKind = ArchiveStreamErrorKind::Cancelled;
+        result.message = "Archive stream seek cancelled";
+    }
+    else if (!stream.impl)
+    {
+        result.errorKind = ArchiveStreamErrorKind::NotOpen;
+        result.message = "Archive stream is not open";
+    }
+    else if (absolutePosition > stream.size)
+    {
+        result.errorKind = ArchiveStreamErrorKind::OutOfRange;
+        result.message = "Seek position is beyond the decoded entry";
+    }
+    else if (stream.format != ArchiveFormat::Zip && stream.format != ArchiveFormat::SevenZip && stream.format != ArchiveFormat::Rar)
+    {
+        result.errorKind = ArchiveStreamErrorKind::UnsupportedFormat;
+        result.message = "Unsupported archive stream format";
+    }
+    else
+    {
+        result.success = ArchiveSeekEntryStream(stream, absolutePosition);
+        if (!result.success)
+        {
+            result.errorKind = stream.cancellation && stream.cancellation->IsCancellationRequested()
+                ? ArchiveStreamErrorKind::Cancelled : ArchiveStreamErrorKind::BackendFailure;
+            result.message = result.errorKind == ArchiveStreamErrorKind::Cancelled
+                ? "Archive stream seek cancelled" : "Decoder seek failed; see backend diagnostics for details";
+        }
+    }
+
+    if (!result.success)
+    {
+        // Never fabricate a successful seek position. Some decoders can move
+        // partially before a seek fails; preserve their reported position.
+        stream.readStatus = result.errorKind == ArchiveStreamErrorKind::Cancelled
+            ? ArchiveStreamReadStatus::Cancelled : ArchiveStreamReadStatus::Error;
+    }
+
+    result.status = stream.readStatus;
+    result.position = stream.position;
+    return result;
 }
 
 void ArchiveCloseEntryStream(ArchiveBackendStream& stream)

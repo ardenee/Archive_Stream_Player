@@ -651,6 +651,101 @@ static int RunOwnedStreamRegression(const wchar_t* archivePath, bool expectCorru
     return 0;
 }
 
+static int RunStructuredOperationsRegression(const wchar_t* archivePath)
+{
+    int failures = 0;
+    auto check = [&](bool valid, const char* description)
+    {
+        std::printf("%s: %s\n", valid ? "PASS" : "FAIL", description);
+        if (!valid)
+            ++failures;
+    };
+
+    ArchiveBackendStream raw;
+    auto seekClosed = ArchiveSeekEntryStreamDetailed(raw, 0);
+    check(!seekClosed.success && seekClosed.errorKind == ArchiveStreamErrorKind::NotOpen &&
+        seekClosed.status == ArchiveStreamReadStatus::Error, "typed seek refuses closed stream");
+
+    auto noPath = ArchiveOpenEntryStreamDetailed(nullptr, 0, raw);
+    check(!noPath.success && noPath.errorKind == ArchiveStreamErrorKind::InvalidArgument &&
+        noPath.status == ArchiveStreamReadStatus::Error, "typed open reports invalid path");
+
+    auto unsupported = ArchiveOpenEntryStreamDetailed(L"test.unsupported", 0, raw);
+    check(!unsupported.success && unsupported.errorKind == ArchiveStreamErrorKind::UnsupportedFormat,
+        "typed open reports unknown archive format");
+
+    ArchiveStreamCancellationToken cancelled;
+    cancelled.RequestCancellation();
+    auto preCancelled = ArchiveOpenEntryStreamDetailed(archivePath, 0, raw, &cancelled);
+    check(!preCancelled.success && preCancelled.errorKind == ArchiveStreamErrorKind::Cancelled &&
+        preCancelled.status == ArchiveStreamReadStatus::Cancelled, "typed open reports cancellation");
+    ArchiveCloseEntryStream(raw);
+
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    if (!ArchiveListEntries(archivePath, entries, error))
+    {
+        std::printf("FAIL: typed-operation fixture list: %s\n", error.c_str());
+        return 1;
+    }
+
+    const ArchiveEntry* entry = nullptr;
+    for (const auto& candidate : entries)
+    {
+        if (!candidate.isFolder && candidate.size > 64)
+        {
+            entry = &candidate;
+            break;
+        }
+    }
+
+    if (!entry)
+    {
+        std::printf("FAIL: typed-operation fixture requires an entry over 64 bytes\n");
+        return 1;
+    }
+
+    ArchiveStreamOwner owner;
+    auto opened = owner.OpenDetailed(archivePath, entry->index);
+    check(opened.success && opened.errorKind == ArchiveStreamErrorKind::None &&
+        opened.status == ArchiveStreamReadStatus::Ready && owner.IsOpen(),
+        "owner typed open succeeds with ready status");
+
+    void* before = owner.RawStream().impl;
+    auto duplicate = owner.OpenDetailed(archivePath, entry->index);
+    check(!duplicate.success && duplicate.errorKind == ArchiveStreamErrorKind::AlreadyOpen &&
+        owner.RawStream().impl == before && owner.IsOpen(),
+        "typed double-open preserves the original handle");
+
+    auto outOfBounds = owner.SeekDetailed(owner.Size() + 1);
+    check(!outOfBounds.success && outOfBounds.errorKind == ArchiveStreamErrorKind::OutOfRange &&
+        outOfBounds.status == ArchiveStreamReadStatus::Error && owner.Tell() == 0,
+        "typed out-of-range seek preserves position");
+
+    auto rewind = owner.SeekDetailed(0);
+    check(rewind.success && rewind.status == ArchiveStreamReadStatus::Ready && owner.Tell() == 0,
+        "valid seek recovers from previous error");
+
+    unsigned char bytes[64] = {};
+    auto read = owner.ReadDetailed(bytes, sizeof(bytes));
+    check(read.bytesRead == sizeof(bytes) && read.status == ArchiveStreamReadStatus::Ready &&
+        read.errorKind == ArchiveStreamErrorKind::None, "owner typed read reports bytes");
+
+    owner.Cancel();
+    auto cancelledSeek = owner.SeekDetailed(0);
+    check(!cancelledSeek.success && cancelledSeek.errorKind == ArchiveStreamErrorKind::Cancelled &&
+        cancelledSeek.status == ArchiveStreamReadStatus::Cancelled, "typed seek reports cancellation");
+    owner.Close();
+
+    auto invalidIndex = ArchiveOpenEntryStreamDetailed(archivePath, UINT32_MAX, raw);
+    check(!invalidIndex.success && invalidIndex.errorKind == ArchiveStreamErrorKind::BackendFailure &&
+        !invalidIndex.message.empty() && !raw.impl, "typed open propagates invalid-index failure");
+    ArchiveCloseEntryStream(raw);
+
+    std::printf("Structured stream operation validation: %d failure(s)\n", failures);
+    return failures ? 1 : 0;
+}
+
 static int RunApiValidationTests()
 {
     int failures = 0;
@@ -733,6 +828,9 @@ int wmain(int argc, wchar_t* argv[])
     if (argc >= 3 && _wcsicmp(argv[1], L"ownertest") == 0)
         return RunOwnedStreamRegression(argv[2], argc >= 4 && _wcsicmp(argv[3], L"corrupt") == 0);
 
+    if (argc >= 3 && _wcsicmp(argv[1], L"diagtest") == 0)
+        return RunStructuredOperationsRegression(argv[2]);
+
     if (argc < 2)
     {
         std::printf("Usage:\n");
@@ -741,6 +839,7 @@ int wmain(int argc, wchar_t* argv[])
         std::printf("  archive_backend_test.exe canceltest archive.zip\n");
         std::printf("  archive_backend_test.exe legacytest archive.zip\n");
         std::printf("  archive_backend_test.exe ownertest archive.zip [corrupt]\n");
+        std::printf("  archive_backend_test.exe diagtest archive.zip\n");
         std::printf("  archive_backend_test.exe archive.7z\n");
         std::printf("  archive_backend_test.exe archive.7z index\n");
         std::printf("  archive_backend_test.exe archive.7z index stream\n");
