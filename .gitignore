@@ -4,6 +4,7 @@
 # Keep only this project set
 !/archive_backend/
 !/archive_backend_test/
+!/foo_archive_stream/
 !/gen_archive_stream/
 !/in_archive_stream/
 !/libarchive_static/

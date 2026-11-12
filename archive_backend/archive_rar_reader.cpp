@@ -1793,18 +1793,27 @@ bool RarOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBacke
     return true;
 }
 
-size_t RarReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
+size_t RarReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead, std::string* outError)
 {
+    if (outError)
+        outError->clear();
+
     if (!stream.impl || !buffer || bytesToRead == 0)
     {
+        if (outError && bytesToRead > 0)
+            *outError = "Invalid RAR read request";
+
         return 0;
     }
 
     std::string error;
     size_t got = LibarchiveRarReadEntryStream(stream.impl, buffer, bytesToRead, error);
 
-    if (got == 0 && !error.empty())
+    if (!error.empty())
     {
+        if (outError)
+            *outError = error;
+
         DebugLogWrite("ERROR", "RAR", "STREAM_READ_FAIL", "requested=%zu | position=%llu | error=%s", bytesToRead, (unsigned long long)stream.position, error.c_str());
     }
 

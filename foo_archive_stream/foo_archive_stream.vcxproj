@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{b66ed0ed-c81a-4b5c-b091-ef3071441736}</ProjectGuid>
+    <RootNamespace>foo_archive_stream</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <FoobarSdkRoot Condition="'$(FoobarSdkRoot)'==''">$(FOOBAR_SDK_ROOT)</FoobarSdkRoot>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>$(ProjectDir)$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)obj\$(Configuration)\</IntDir>
+    <TargetName>foo_archive_stream</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(FoobarSdkRoot);$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;$(FoobarSdkRoot)\foobar2000\shared\shared-Win32.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\Release;$(ProjectDir)..\libarchive_static\Release;$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\zlib_static\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="foobar_adapter.cpp" />
+    <ClCompile Include="..\shared\debug_log.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\archive_backend\archive_backend.vcxproj" />
+    <ProjectReference Include="..\libarchive_static\libarchive_static.vcxproj" />
+    <ProjectReference Include="..\unrar_static\unrar_static.vcxproj" />
+    <ProjectReference Include="..\zlib_static\zlib_static.vcxproj" />
+    <!-- SDK projects are outside this solution; pin their runtime to Release|Win32. -->
+    <ProjectReference Include="$(FoobarSdkRoot)\pfc\pfc.vcxproj">
+      <SetConfiguration>Configuration=Release</SetConfiguration>
+      <SetPlatform>Platform=Win32</SetPlatform>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\foobar2000\SDK\foobar2000_SDK.vcxproj">
+      <SetConfiguration>Configuration=Release</SetConfiguration>
+      <SetPlatform>Platform=Win32</SetPlatform>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\foobar2000\foobar2000_component_client\foobar2000_component_client.vcxproj">
+      <SetConfiguration>Configuration=Release</SetConfiguration>
+      <SetPlatform>Platform=Win32</SetPlatform>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\foobar2000\shared\shared.vcxproj">
+      <SetConfiguration>Configuration=Release</SetConfiguration>
+      <SetPlatform>Platform=Win32</SetPlatform>
+    </ProjectReference>
+  </ItemGroup>
+  <Target Name="RequireFoobarSdk" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(FoobarSdkRoot)\foobar2000\SDK\foobar2000_SDK.vcxproj')" Text="Foobar2000 SDK is missing. Set FOOBAR_SDK_ROOT or /p:FoobarSdkRoot=... to the extracted official SDK directory." />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

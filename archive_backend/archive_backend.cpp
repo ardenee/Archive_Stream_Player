@@ -217,31 +217,55 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
     }
 }
 
-size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
+ArchiveStreamReadResult ArchiveReadEntryStreamDetailed(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
 {
+    ArchiveStreamReadResult result;
+    result.format = stream.format;
+    result.position = stream.position;
+
+    auto finish = [&]() -> ArchiveStreamReadResult
+    {
+        result.status = stream.readStatus;
+        result.position = stream.position;
+        return result;
+    };
+
     if (stream.cancellation && stream.cancellation->IsCancellationRequested())
     {
         stream.readStatus = ArchiveStreamReadStatus::Cancelled;
-        return 0;
+        result.errorKind = ArchiveStreamErrorKind::Cancelled;
+        result.message = "Archive stream cancelled";
+        return finish();
     }
 
     if (bytesToRead == 0)
-        return 0;
+        return finish();
 
-    if (!stream.impl || !buffer)
+    if (!stream.impl)
     {
         stream.readStatus = ArchiveStreamReadStatus::Error;
-        DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=invalid_input", ArchiveFormatToString(stream.format), bytesToRead);
-        return 0;
+        result.errorKind = ArchiveStreamErrorKind::NotOpen;
+        result.message = "Archive stream is not open";
+        DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=not_open", ArchiveFormatToString(stream.format), bytesToRead);
+        return finish();
+    }
+
+    if (!buffer)
+    {
+        stream.readStatus = ArchiveStreamReadStatus::Error;
+        result.errorKind = ArchiveStreamErrorKind::InvalidArgument;
+        result.message = "Archive read destination is null";
+        DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=null_buffer", ArchiveFormatToString(stream.format), bytesToRead);
+        return finish();
     }
 
     size_t bytesRead = 0;
-    std::string error;
+    std::string backendError;
 
     switch (stream.format)
     {
     case ArchiveFormat::Zip:
-        bytesRead = LibarchiveZipReadEntryStream(stream.impl, buffer, bytesToRead, error);
+        bytesRead = LibarchiveZipReadEntryStream(stream.impl, buffer, bytesToRead, backendError);
         stream.position += static_cast<uint64_t>(bytesRead);
         break;
 
@@ -250,25 +274,33 @@ size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t
         break;
 
     case ArchiveFormat::Rar:
-        bytesRead = RarReadEntryStream(stream, buffer, bytesToRead);
+        bytesRead = RarReadEntryStream(stream, buffer, bytesToRead, &backendError);
         break;
 
     default:
         stream.readStatus = ArchiveStreamReadStatus::Error;
+        result.errorKind = ArchiveStreamErrorKind::UnsupportedFormat;
+        result.message = "Unsupported archive stream format";
         DebugLogWrite("WARN", "STREAM", "READ_FAIL", "format=%s | requested=%zu | reason=unsupported_stream_format", ArchiveFormatToString(stream.format), bytesToRead);
-        return 0;
+        return finish();
     }
 
     if (stream.cancellation && stream.cancellation->IsCancellationRequested())
     {
         stream.readStatus = ArchiveStreamReadStatus::Cancelled;
-        return 0;
+        result.errorKind = ArchiveStreamErrorKind::Cancelled;
+        result.message = "Archive stream cancelled";
+        return finish();
     }
 
-    if (!error.empty())
+    result.bytesRead = bytesRead;
+
+    if (!backendError.empty())
     {
         stream.readStatus = ArchiveStreamReadStatus::Error;
-        DebugLogWrite("ERROR", "STREAM", "READ_FAIL", "format=%s | position=%llu | requested=%zu | error=%s", ArchiveFormatToString(stream.format), (unsigned long long)stream.position, bytesToRead, error.c_str());
+        result.errorKind = ArchiveStreamErrorKind::BackendFailure;
+        result.message = std::move(backendError);
+        DebugLogWrite("ERROR", "STREAM", "READ_FAIL", "format=%s | position=%llu | requested=%zu | error=%s", ArchiveFormatToString(stream.format), (unsigned long long)stream.position, bytesToRead, result.message.c_str());
     }
     else if (bytesRead > 0)
     {
@@ -281,10 +313,17 @@ size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t
     else
     {
         stream.readStatus = ArchiveStreamReadStatus::Error;
+        result.errorKind = ArchiveStreamErrorKind::TruncatedEntry;
+        result.message = "Unexpected end of archive entry before the advertised size";
         DebugLogWrite("ERROR", "STREAM", "READ_FAIL", "format=%s | position=%llu | expected=%llu | reason=premature_end_of_entry", ArchiveFormatToString(stream.format), (unsigned long long)stream.position, (unsigned long long)stream.size);
     }
 
-    return bytesRead;
+    return finish();
+}
+
+size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
+{
+    return ArchiveReadEntryStreamDetailed(stream, buffer, bytesToRead).bytesRead;
 }
 
 bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosition)

@@ -1,6 +1,6 @@
 # Archive Stream Player
 
-**Archive Stream Player** is a Windows/Winamp plugin system for browsing and playing audio stored inside ZIP, 7z and RAR archives without requiring the user to extract an entire archive manually. An archive can be expanded into individual virtual Winamp playlist entries; playback selects a streaming, memory or managed-cache path depending on the container and entry.
+**Archive Stream Player** is a shared Windows archive-audio backend with Winamp plugins for browsing and playing audio stored inside ZIP, 7z and RAR archives without requiring the user to extract an entire archive manually. An archive can be expanded into individual virtual Winamp playlist entries; playback selects a streaming, memory or managed-cache path depending on the container and entry.
 
 This repository contains the native C/C++ Winamp plugins, archive backends, Visual Studio projects and bundled third-party source.
 
@@ -10,6 +10,7 @@ This repository contains the native C/C++ Winamp plugins, archive backends, Visu
 | --- | --- | --- |
 | `in_archive_stream` | `in_archive_stream.dll` | Winamp input plugin: virtual archive entry playback, metadata and configuration UI |
 | `gen_archive_stream` | `gen_archive_stream.dll` | Winamp general-purpose plugin: archive expansion and playlist integration |
+| `foo_archive_stream` | `foo_archive_stream.dll` | Experimental foobar2000 File-menu archive inspector (no decoder/playback yet) |
 | `archive_backend` | `archive_backend.lib` | Shared archive listing, metadata, memory/file extraction, streaming and cache logic |
 | `archive_backend_test` | `archive_backend_test.exe` | Command-line listing, extraction and stream diagnostics |
 | `libarchive_static` | `libarchive_static.lib` | Static libarchive build used by archive backends |
@@ -22,13 +23,13 @@ The full multi-project solution is `in_archive_stream/in_archive_stream.slnx`. T
 
 ## Player-independent core and adapters (refactor in progress)
 
-The long-term design is a reusable archive-audio core with independently built player adapters for Winamp and potentially foobar2000, MediaMonkey and other players. **Only the Winamp adapter is implemented today.** Do not assume a Winamp binary will load in another player without compatibility testing.
+The long-term design is a reusable archive-audio core with independently built player adapters for Winamp and potentially foobar2000, MediaMonkey and other players. **Only Winamp has a working playback adapter.** An experimental foobar2000 component now provides archive inspection without playback. Winamp binaries cannot be loaded by foobar2000.
 
 The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
 
 The `archive_backend` public functions remain the shared listing, extraction, and ZIP/7z/RAR stream boundary. Host adapters can now call `ArchiveSetDataDirectoryName()` during initialization to select an isolated folder beneath `%LOCALAPPDATA%`. The generic default is `ArchiveStreamPlayer`; **both Winamp plugins explicitly select `WinampArchiveStream` before loading configuration**, preserving existing settings, password lists and cache paths. Only single-component folder names containing letters, digits, underscores or hyphens are accepted. The setter must be called before password/config/cache use, not during playback.
 
-Windows Media Foundation startup is now headless and reports HRESULT failure status to the caller. The Winamp input adapter displays user-facing errors; background metadata scanning never opens a startup dialog. Startup and shutdown are serialized to avoid concurrent first-use initialization. Generic ZIP streaming now reuses the libarchive implementation already used by Winamp, without switching Winamp's playback route. The shared stream state distinguishes `Ready`, normal `EndOfEntry`, `Error`, `Cancelled` and `NotOpen`. Premature EOF is reported as a read failure. Optional caller-owned `ArchiveStreamCancellationToken` supports cooperative cancellation of generic ZIP/7z/RAR reads and seeks. The legacy Winamp wrapper now rejects attempts to reopen an active context instead of resetting and leaking its handle. Detailed backend-specific errors, active playback cancellation wiring and further stream lifetime work remain future tasks. Preserve the virtual Winamp playlist format throughout.
+Windows Media Foundation startup is now headless and reports HRESULT failure status to the caller. The Winamp input adapter displays user-facing errors; background metadata scanning never opens a startup dialog. Startup and shutdown are serialized to avoid concurrent first-use initialization. Generic ZIP streaming now reuses the libarchive implementation already used by Winamp, without switching Winamp's playback route. The shared stream state distinguishes `Ready`, normal `EndOfEntry`, `Error`, `Cancelled` and `NotOpen`. Premature EOF is reported as a read failure. Optional caller-owned `ArchiveStreamCancellationToken` supports cooperative cancellation of generic ZIP/7z/RAR reads and seeks. The legacy Winamp wrapper now rejects attempts to reopen an active context instead of resetting and leaking its handle. `ArchiveReadEntryStreamDetailed()` now returns a typed read result and ZIP/RAR backend error text. The move-only `ArchiveStreamOwner` safely closes streams for new adapters. Active Winamp playback cancellation wiring and further stream lifetime work remain future tasks. Preserve the virtual Winamp playlist format throughout.
 
 
 ## Archive and audio support
@@ -57,6 +58,25 @@ The `in_archive_stream` plugin recognizes the virtual entry; the `gen_archive_st
 
 The existing DLL projects have post-build commands that copy the DLLs to `C:\Program Files (x86)\Winamp\Plugins`. Ensure Winamp is installed at that location, or adjust those post-build paths before building. The project include/library paths are relative to each `.vcxproj` rather than to the original developer's Windows profile.
 
+### foobar2000 inspection component (separate build)
+
+Download the official foobar2000 SDK **2026-10-01** from https://www.foobar2000.org/SDK and extract it outside this repository. The SDK root contains `foobar2000/`, `pfc/`, `libPPUI/` and its license. On DEV it is stored at `D:\Temp\ArchiveStreamFoobarSDK`, not committed to GitHub.
+
+Build **Release|Win32** (32-bit, v145) directly from `foo_archive_stream/foo_archive_stream.vcxproj`, independently of the Winamp solution:
+
+```powershell
+$env:FOOBAR_SDK_ROOT = 'D:\Temp\ArchiveStreamFoobarSDK'
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' `
+  'foo_archive_stream\foo_archive_stream.vcxproj' /t:Build `
+  /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v145 `
+  /p:FoobarSdkRoot=$env:FOOBAR_SDK_ROOT /m:2 /v:minimal
+```
+
+Output: `foo_archive_stream/Release/foo_archive_stream.dll`. This is an independently built **foobar2000 SDK component**, not a Winamp DLL. It registers a File-menu command named **Archive Stream: Inspect archive...** that lists supported ZIP/7z/RAR entries in foobar2000's Console. It sets its own `%LOCALAPPDATA%\FoobarArchiveStream` data directory. It does **not** register a decoder, play tracks or add virtual playlist entries. It has not been runtime-tested in foobar2000; do not install it as a completed playback component.
+
+The first component configuration is **32-bit only**. A native x64 foobar2000 adapter requires validated 64-bit backend and third-party library builds. Archive inspection currently runs on the UI thread; production support must move long scans into cancellable background work. The foobar2000 SDK itself remains outside version control.
+
+
 The backend test utility can be used independently of Winamp:
 
 ```powershell
@@ -75,6 +95,8 @@ The console tests enumerate entries, test memory extraction, exercise eligible a
 **Lifetime contract:** The token must outlive the stream, including any in-flight I/O. Do not `Reset()` a token while its stream is open. A cancellation request is not a concurrent close: the owner must wait until I/O returns and then call `ArchiveCloseEntryStream()`. Stream read/seek/close methods are **not reentrant** or safe to use simultaneously on the same stream. Cancellation may not interrupt an individual blocking decoder call, password dialog or archive-open operation immediately. The generic stream handle remains caller-owned; avoid copying its raw handle into another owning instance.
 
 The legacy `ArchiveStreamContext` now also refuses a second open or validated-open while its ZIP or backend handle remains active, protecting Winamp's existing stream ownership. Its existing ZIP path is still in use until live playback regression tests justify retiring it.
+
+New player adapters should use `archive_backend/archive_stream_owner.h`. Its `ArchiveStreamOwner` is noncopyable, move-only, and closes its handle on destruction. `ArchiveReadEntryStreamDetailed()` reports `ArchiveStreamErrorKind`, bytes read, status, format, position, and explanatory text; ZIP/RAR native errors are preserved where available. The existing byte-count read API remains compatible.
 
 ## Cache, metadata and logging
 
@@ -103,6 +125,8 @@ Bundled sources include **7-Zip LZMA SDK**, **RARLAB UnRAR**, **libarchive**, **
 - Generic ZIP streaming and ZIP extract-to-file now dispatch through the existing libarchive-backed ZIP reader. A new `ziptest` command checks decoded-byte parity and stream lifecycle. ZIP source paths were corrected to use UTF-16 Win32 file APIs, including multipart archives with Unicode paths. Stream reads expose `ArchiveStreamReadStatus` to distinguish EOF from premature termination and errors. To avoid changing Winamp's route-selection decisions, ZIP entries' existing `streamCandidate` listing flag was deliberately left unchanged.
 - This refactor passed 26 API self-tests; 14 ZIP entry-stream checks across normal, three-part, Unicode-path and empty-entry fixtures; 12 byte-parity ZIP extract-to-file checks; and ZIP/7z/RAR stream smoke tests. A deliberately corrupted ZIP entry failed streaming and extraction, and the file-extraction path removed its partial output. Tests use byte comparisons, not CRC recalculation.
 - Added optional cross-thread cancellation tokens to the generic stream API. Tests verified pre-cancelled open rejection, cancelled reads/seeks, cleanup and reopening with a fresh token for ZIP, 7z and RAR. The old Winamp context now refuses double-open and validated double-open, preserves the original stream, supports close/reopen, and safely rejects overlong archive paths.
+- Added a move-only RAII `ArchiveStreamOwner` and a detailed read result (`ArchiveReadEntryStreamDetailed`) without changing the Winamp API. The `ownertest` regression covers valid ZIP, 7z, RAR and corrupt ZIP, including decoder error propagation, invalid reads, moves, cancellation and close/reopen.
+- Created the independent foobar2000 native inspection component `foo_archive_stream` using the official SDK (2026-10-01). Release|Win32 `.vcxproj` builds on DEV; foobar2000 runtime loading and audio playback are not yet validated, and no audio decoder is registered.
 - Actual Winamp playback remains unverified after these changes.
 
 ### Next validation and development priorities

@@ -8,8 +8,11 @@
 #include <algorithm>
 #include <cstring>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 #include "archive_backend.h"
+#include "archive_stream_owner.h"
 #include "archive_format.h"
 #include "archive_common.h"
 #include "archive_reader.h"
@@ -504,6 +507,150 @@ static int RunLegacyStreamOwnershipRegression(const wchar_t* archivePath)
     return 0;
 }
 
+static int RunOwnedStreamRegression(const wchar_t* archivePath, bool expectCorrupt)
+{
+    static_assert(!std::is_copy_constructible_v<ArchiveStreamOwner>);
+    static_assert(!std::is_copy_assignable_v<ArchiveStreamOwner>);
+    static_assert(std::is_nothrow_move_constructible_v<ArchiveStreamOwner>);
+    static_assert(std::is_nothrow_move_assignable_v<ArchiveStreamOwner>);
+
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    if (!ArchiveListEntries(archivePath, entries, error))
+    {
+        std::printf("FAIL: stream owner fixture listing: %s\n", error.c_str());
+        return 1;
+    }
+
+    const ArchiveEntry* entry = nullptr;
+    for (const auto& candidate : entries)
+    {
+        if (!candidate.isFolder && candidate.size > 64)
+        {
+            entry = &candidate;
+            break;
+        }
+    }
+
+    if (!entry)
+        return 1;
+
+    ArchiveStreamOwner owner;
+    unsigned char bytes[4096] = {};
+    auto closedRead = ArchiveReadEntryStreamDetailed(owner.RawStream(), bytes, 64);
+    if (closedRead.errorKind != ArchiveStreamErrorKind::NotOpen || closedRead.status != ArchiveStreamReadStatus::Error)
+    {
+        std::printf("FAIL: detailed read did not flag unopened stream\n");
+        return 1;
+    }
+
+    if (!owner.Open(archivePath, entry->index, error))
+    {
+        std::printf("FAIL: owned stream open: %s\n", error.c_str());
+        return 1;
+    }
+
+    const auto original = owner.RawStream().impl;
+    ArchiveStreamOwner moved(std::move(owner));
+    if (owner.IsOpen() || !moved.IsOpen() || moved.RawStream().impl != original)
+    {
+        std::printf("FAIL: move construction did not transfer opaque ownership\n");
+        return 1;
+    }
+
+    ArchiveStreamOwner target;
+    target = std::move(moved);
+    if (moved.IsOpen() || !target.IsOpen() || target.RawStream().impl != original)
+    {
+        std::printf("FAIL: move assignment did not transfer opaque ownership\n");
+        return 1;
+    }
+
+    uint64_t total = 0;
+    ArchiveStreamReadResult end{};
+    for (;;)
+    {
+        end = ArchiveReadEntryStreamDetailed(target.RawStream(), bytes, sizeof(bytes));
+        total += end.bytesRead;
+        if (end.bytesRead == 0)
+            break;
+
+        if (total > entry->size)
+        {
+            std::printf("FAIL: detailed reader exceeded entry size\n");
+            return 1;
+        }
+    }
+
+    if (expectCorrupt)
+    {
+        if (end.status != ArchiveStreamReadStatus::Error || end.errorKind != ArchiveStreamErrorKind::BackendFailure || end.message.empty())
+        {
+            std::printf("FAIL: corrupted ZIP error was not propagated; status=%u kind=%u\n", (unsigned)end.status, (unsigned)end.errorKind);
+            return 1;
+        }
+
+        std::printf("PASS: backend-specific ZIP decompression error: %s\n", end.message.c_str());
+    }
+    else if (total != entry->size || end.status != ArchiveStreamReadStatus::EndOfEntry || end.errorKind != ArchiveStreamErrorKind::None)
+    {
+        std::printf("FAIL: detailed read status or byte total incorrect\n");
+        return 1;
+    }
+
+    if (!target.Seek(0))
+    {
+        std::printf("FAIL: owned stream rewind after read\n");
+        return 1;
+    }
+
+    auto invalidBuffer = ArchiveReadEntryStreamDetailed(target.RawStream(), nullptr, 20);
+    if (invalidBuffer.errorKind != ArchiveStreamErrorKind::InvalidArgument || invalidBuffer.status != ArchiveStreamReadStatus::Error)
+    {
+        std::printf("FAIL: null output buffer error not classified\n");
+        return 1;
+    }
+
+    if (!target.Seek(0))
+    {
+        std::printf("FAIL: owned stream seek after invalid buffer\n");
+        return 1;
+    }
+
+    auto noOp = ArchiveReadEntryStreamDetailed(target.RawStream(), bytes, 0);
+    if (noOp.bytesRead != 0 || noOp.errorKind != ArchiveStreamErrorKind::None)
+    {
+        std::printf("FAIL: zero-byte read was incorrectly classified\n");
+        return 1;
+    }
+
+    target.Cancel();
+    auto cancelled = ArchiveReadEntryStreamDetailed(target.RawStream(), bytes, 20);
+    if (cancelled.status != ArchiveStreamReadStatus::Cancelled || cancelled.errorKind != ArchiveStreamErrorKind::Cancelled)
+    {
+        std::printf("FAIL: detailed cancellation status not reported\n");
+        return 1;
+    }
+
+    target.Close();
+    target.Close();
+    if (target.IsOpen() || target.Status() != ArchiveStreamReadStatus::NotOpen)
+    {
+        std::printf("FAIL: owner did not release underlying handle\n");
+        return 1;
+    }
+
+    if (!target.Open(archivePath, entry->index, error))
+    {
+        std::printf("FAIL: owner cannot reopen after cancellation: %s\n", error.c_str());
+        return 1;
+    }
+
+    target.Close();
+    std::printf("PASS: move-only ownership, structured status, reset and close\n");
+    return 0;
+}
+
 static int RunApiValidationTests()
 {
     int failures = 0;
@@ -583,6 +730,9 @@ int wmain(int argc, wchar_t* argv[])
     if (argc >= 3 && _wcsicmp(argv[1], L"legacytest") == 0)
         return RunLegacyStreamOwnershipRegression(argv[2]);
 
+    if (argc >= 3 && _wcsicmp(argv[1], L"ownertest") == 0)
+        return RunOwnedStreamRegression(argv[2], argc >= 4 && _wcsicmp(argv[3], L"corrupt") == 0);
+
     if (argc < 2)
     {
         std::printf("Usage:\n");
@@ -590,6 +740,7 @@ int wmain(int argc, wchar_t* argv[])
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");
         std::printf("  archive_backend_test.exe canceltest archive.zip\n");
         std::printf("  archive_backend_test.exe legacytest archive.zip\n");
+        std::printf("  archive_backend_test.exe ownertest archive.zip [corrupt]\n");
         std::printf("  archive_backend_test.exe archive.7z\n");
         std::printf("  archive_backend_test.exe archive.7z index\n");
         std::printf("  archive_backend_test.exe archive.7z index stream\n");
