@@ -15,10 +15,19 @@ This repository contains the native C/C++ Winamp plugins, archive backends, Visu
 | `libarchive_static` | `libarchive_static.lib` | Static libarchive build used by archive backends |
 | `unrar_static` | `unrar_static.lib` | Static RARLAB UnRAR integration |
 | `zlib_static` | `zlib_static.lib` | Static zlib dependency |
-| `shared` | Source files | Shared logging and audio/playlist helpers |
+| `shared` | Source files | Shared logging and Winamp adapter protocol definitions |
 | `third_party` | Source files | Bundled upstream libraries, Winamp headers and codec components |
 
 The full multi-project solution is `in_archive_stream/in_archive_stream.slnx`. The project references express the library dependencies.
+
+## Player-independent core and adapters (refactor in progress)
+
+The long-term design is a reusable archive-audio core with independently built player adapters for Winamp and potentially foobar2000, MediaMonkey and other players. **Only the Winamp adapter is implemented today.** Do not assume a Winamp binary will load in another player without compatibility testing.
+
+The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
+
+The `archive_backend` public functions remain the shared listing, extraction, and 7z/RAR stream boundary. The next architectural work is to separate the remaining player-specific paths (legacy Winamp data directory, Media Foundation user-interface handling and ZIP stream routing), then introduce player-neutral errors, cancellation and lifetime management. Preserve the current virtual playlist path format and Winamp cache/config locations during this migration.
+
 
 ## Archive and audio support
 
@@ -75,6 +84,10 @@ Bundled sources include **7-Zip LZMA SDK**, **RARLAB UnRAR**, **libarchive**, **
 - The backend passed local smoke tests using newly generated ZIP, non-solid 7z, solid 7z and RAR archives containing Unicode filenames. Tests covered listing, memory extraction, eligible streaming/seek, and RAR extract-to-file with a byte-for-byte match.
 - ZIP entries currently display `HasCRC=NO` in the console listing despite being valid ZIP entries. This is a header-metadata reporting gap to investigate, **not** a reason to calculate CRC by decompressing content.
 - Third-party compiler warnings remain; they are not currently treated as evidence of a failed build.
+- Initial adapter cleanup: moved Winamp IPC into a dedicated input-plugin bridge and removed unused ZIP audio helper code without changing the existing expansion protocol.
+- Added null/empty-path validation to the public archive API and reject reopening an already-live opaque stream rather than leaking its handle. New `archive_backend_test.exe selftest` checks these error paths.
+- The stream smoke test now treats a short or oversized read as a failure instead of reporting success with a warning.
+- After the refactor, the Release/x86 solution rebuilt and ZIP, solid/non-solid 7z and RAR smoke cases passed (listing, memory extraction and eligible streaming/seek). Actual Winamp playback remains unverified after these changes.
 
 ### Next validation and development priorities
 

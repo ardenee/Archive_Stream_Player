@@ -169,13 +169,14 @@ unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\shared\debug_log.h" />
-    <ClInclude Include="..\shared\zip_audio.h" />
+    <ClInclude Include="..\shared\winamp_bridge_protocol.h" />
+    <ClInclude Include="winamp_playlist_bridge.h" />
     <ClInclude Include="playback.h" />
     <ClInclude Include="plugin_state.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\shared\debug_log.cpp" />
-    <ClCompile Include="..\shared\zip_audio.cpp" />
+    <ClCompile Include="winamp_playlist_bridge.cpp" />
     <ClCompile Include="config_ui.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="playback.cpp" />

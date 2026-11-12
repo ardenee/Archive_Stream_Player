@@ -8,6 +8,7 @@
 #include "playlist_expand.h"
 #include "debug_log.h"
 #include "archive_common.h"
+#include "winamp_bridge_protocol.h"
 
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Shell32.lib")

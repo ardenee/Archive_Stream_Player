@@ -12,7 +12,8 @@
 #include "archive_metadata.h"
 #include "plugin_state.h"
 #include "config_ui.h"
-#include "zip_audio.h"
+#include "winamp_playlist_bridge.h"
+#include "winamp_bridge_protocol.h"
 #include "playback.h"
 #include "archive_reader.h"
 #include "mf_support.h"
@@ -43,10 +44,6 @@
 
 #ifndef IPC_REFRESHPLCACHE
 #define IPC_REFRESHPLCACHE 247
-#endif
-
-#ifndef WM_WA_MPEG_EOF
-#define WM_WA_MPEG_EOF (WM_USER + 2)
 #endif
 
 #define IDC_ABOUT_TEXT 9101
@@ -2213,7 +2210,7 @@ static int Play(const char* fn)
 
             DebugLogWrite("INFO", "ROUTE", "PLAIN_ARCHIVE_EXPAND", "archive=%s | archive_type=%s | route=expand_playlist | multipart_guess=%d | password_list_configured=%d", actualZipPath, ArchiveTypeToLogName(actualZipPath), IsLikelyMultipartArchivePath(actualZipPath) ? 1 : 0, g_rarPasswordListPath[0] ? 1 : 0);
 
-            bool requestedExpand = RequestZipExpandFromGeneralPlugin(g_mod.hMainWindow, actualZipPath) ? true : false;
+            bool requestedExpand = WinampRequestArchiveExpansion(g_mod.hMainWindow, actualZipPath) ? true : false;
 
             if (!requestedExpand)
             {
@@ -2314,7 +2311,7 @@ static int Play(const char* fn)
     }
     else
     {
-        if (!FindFirstAudioInZip(actualZipPath, &mp3Index, firstAudio, sizeof(firstAudio), &uncompSize))
+        if (!ArchiveFindFirstAudioEntry(actualZipPath, &mp3Index, firstAudio, sizeof(firstAudio), &uncompSize))
         {
             DebugLogWrite("ERROR", "PLAY", "NO_AUDIO_FOUND", "archive=%s | reason=find_first_audio_failed", actualZipPath);
             MessageBoxA(g_mod.hMainWindow, "Archive opened, but no supported audio file was found, or the archive could not be read.", "Archive Stream - Archive Scan", MB_OK | MB_ICONWARNING);

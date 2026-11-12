@@ -22,10 +22,6 @@ using mz_uint = uint32_t;
 using mz_uint32 = uint32_t;
 using mz_uint64 = uint64_t;
 
-#ifndef WM_WA_MPEG_EOF
-#define WM_WA_MPEG_EOF (WM_USER + 2)
-#endif
-
 ////--------------------
 // Dup file contents
 //--------------------
@@ -37,8 +33,6 @@ std::string ArchiveZipNameToUtf8BestEffort(const char* zipName);
 ////--------------------
 
 static const char* VIRTUAL_PREFIX = "archive_stream:";
-static const char* ARCHIVE_STREAM_HIDDEN_CLASS = "ArchiveStreamExpanderHiddenWindow";
-static const ULONG_PTR ARCHIVE_STREAM_COPYDATA_EXPAND_ZIP = 0x41535A50; // "ASZP"
 static const size_t MIN_BUFFER_SIZE_MB = 10;
 static const size_t DEFAULT_BUFFER_SIZE_MB = 50;
 static const size_t MAX_BUFFER_SIZE_MB = 200;

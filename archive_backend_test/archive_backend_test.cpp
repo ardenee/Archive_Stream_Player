@@ -77,12 +77,15 @@ static bool StreamEntryTest(const wchar_t* archivePath, uint32_t selectedIndex, 
     if (totalRead != selectedEntry.size)
     {
         std::printf(
-            "WARNING: streamed byte count does not match listed entry size.\n"
+            "ERROR: streamed byte count does not match listed entry size.\n"
             "Listed:   %llu\n"
             "Streamed: %llu\n",
             static_cast<unsigned long long>(selectedEntry.size),
             totalRead
         );
+        error = "Streamed byte count differs from the expected entry size";
+        ArchiveCloseEntryStream(stream);
+        return false;
     }
 
     if (!firstBytes.empty())
@@ -114,14 +117,50 @@ static bool StreamEntryTest(const wchar_t* archivePath, uint32_t selectedIndex, 
     return true;
 }
 
+static int RunApiValidationTests()
+{
+    int failures = 0;
+
+    auto check = [&failures](bool passed, const char* testName)
+    {
+        std::printf("%s: %s\n", passed ? "PASS" : "FAIL", testName);
+        if (!passed)
+            ++failures;
+    };
+
+    std::vector<ArchiveEntry> entries;
+    std::vector<unsigned char> data;
+    std::string error;
+
+    check(!ArchiveListEntries(nullptr, entries, error) && !error.empty(), "list null path");
+    check(!ArchiveListEntries(L"", entries, error) && !error.empty(), "list empty path");
+    check(!ArchiveExtractEntryToMemory(nullptr, 0, data, error) && !error.empty(), "extract memory null path");
+    check(!ArchiveExtractEntryToFile(nullptr, 0, L"unused.bin", error) && !error.empty(), "extract file null path");
+    check(!ArchiveExtractEntryToFile(L"unused.7z", 0, nullptr, error) && !error.empty(), "extract file null output");
+
+    ArchiveBackendStream stream;
+    check(!ArchiveOpenEntryStream(nullptr, 0, stream, error) && !error.empty() && !stream.impl, "stream null path");
+
+    stream.impl = &stream; // Simulate a live opaque handle without opening an archive.
+    check(!ArchiveOpenEntryStream(L"unused.7z", 0, stream, error) && !error.empty() && stream.impl == &stream, "reject reopening live stream");
+    stream.impl = nullptr;
+
+    std::printf("\nAPI validation: %d failure(s)\n", failures);
+    return failures == 0 ? 0 : 1;
+}
+
 int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 
+    if (argc >= 2 && _wcsicmp(argv[1], L"selftest") == 0)
+        return RunApiValidationTests();
+
     if (argc < 2)
     {
         std::printf("Usage:\n");
+        std::printf("  archive_backend_test.exe selftest\n");
         std::printf("  archive_backend_test.exe archive.7z\n");
         std::printf("  archive_backend_test.exe archive.7z index\n");
         std::printf("  archive_backend_test.exe archive.7z index stream\n");

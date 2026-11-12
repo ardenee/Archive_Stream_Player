@@ -10,6 +10,13 @@ bool ArchiveListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& e
     entries.clear();
     error.clear();
 
+    if (!archivePath || !*archivePath)
+    {
+        error = "Archive path is empty";
+        DebugLogWrite("ERROR", "SCAN", "LIST_FAIL", "reason=empty_archive_path");
+        return false;
+    }
+
     ArchiveFormat format = DetectArchiveFormatFromPath(archivePath);
 
     switch (format)
@@ -36,6 +43,13 @@ bool ArchiveExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std
     data.clear();
     error.clear();
 
+    if (!archivePath || !*archivePath)
+    {
+        error = "Archive path is empty";
+        DebugLogWrite("ERROR", "EXTRACT", "MEMORY_FAIL", "index=%u | reason=empty_archive_path", (unsigned int)index);
+        return false;
+    }
+
     ArchiveFormat format = DetectArchiveFormatFromPath(archivePath);
 
     switch (format)
@@ -60,6 +74,13 @@ bool ArchiveExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std
 bool ArchiveExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
 {
     error.clear();
+
+    if (!archivePath || !*archivePath)
+    {
+        error = "Archive path is empty";
+        DebugLogWrite("ERROR", "EXTRACT", "FILE_FAIL", "index=%u | reason=empty_archive_path", (unsigned int)index);
+        return false;
+    }
 
     if (!outputPath || !*outputPath)
     {
@@ -98,11 +119,26 @@ bool ArchiveExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const
 
 bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error)
 {
-    stream.impl = nullptr;
+    error.clear();
+
+    // Do not overwrite a live opaque handle: doing so leaks the backend stream.
+    if (stream.impl)
+    {
+        error = "Archive stream is already open; close it before reopening";
+        DebugLogWrite("ERROR", "STREAM", "OPEN_FAIL", "index=%u | reason=stream_already_open", (unsigned int)index);
+        return false;
+    }
+
     stream.size = 0;
     stream.position = 0;
     stream.format = ArchiveFormat::Unknown;
-    error.clear();
+
+    if (!archivePath || !*archivePath)
+    {
+        error = "Archive path is empty";
+        DebugLogWrite("ERROR", "STREAM", "OPEN_FAIL", "index=%u | reason=empty_archive_path", (unsigned int)index);
+        return false;
+    }
 
     ArchiveFormat format = DetectArchiveFormatFromPath(archivePath);
     stream.format = format;
@@ -116,8 +152,8 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
         return RarOpenEntryStream(archivePath, index, stream, error);
 
     case ArchiveFormat::Zip:
-        error = "ZIP streaming is handled by the Winamp input plugin ZIP path";
-        DebugLogWrite("WARN", "STREAM", "OPEN_FAIL", "index=%u | format=ZIP | reason=zip_streaming_handled_by_input_plugin", (unsigned int)index);
+        error = "ZIP streaming is not implemented by the generic backend stream interface";
+        DebugLogWrite("WARN", "STREAM", "OPEN_FAIL", "index=%u | format=ZIP | reason=zip_stream_not_implemented", (unsigned int)index);
         return false;
 
     case ArchiveFormat::Unknown:

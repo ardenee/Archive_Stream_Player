@@ -7,6 +7,7 @@
 
 #include "archive_common.h"
 #include "plugin_state.h"
+#include "winamp_bridge_protocol.h"
 #include "playback.h"
 #include "archive_reader.h"
 #include "mf_audio_decoder.h"

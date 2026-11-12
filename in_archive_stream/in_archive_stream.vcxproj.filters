@@ -21,7 +21,10 @@
     <ClInclude Include="..\shared\debug_log.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\shared\zip_audio.h">
+    <ClInclude Include="..\shared\winamp_bridge_protocol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="winamp_playlist_bridge.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="plugin_state.h">
@@ -41,7 +44,7 @@
     <ClCompile Include="..\shared\debug_log.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\shared\zip_audio.cpp">
+    <ClCompile Include="winamp_playlist_bridge.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
