@@ -54,6 +54,36 @@ public:
         return ArchiveOpenEntryStream(path, index, stream_, error, token_.get());
     }
 
+    ArchiveStreamOperationResult OpenDetailed(const wchar_t* path, uint32_t index)
+    {
+        if (stream_.impl)
+        {
+            ArchiveStreamOperationResult result;
+            result.format = stream_.format;
+            result.position = stream_.position;
+            result.status = stream_.readStatus;
+            result.errorKind = ArchiveStreamErrorKind::AlreadyOpen;
+            result.message = "ArchiveStreamOwner already owns an open stream";
+            return result;
+        }
+
+        if (!token_)
+            token_ = std::make_unique<ArchiveStreamCancellationToken>();
+
+        token_->Reset();
+        return ArchiveOpenEntryStreamDetailed(path, index, stream_, token_.get());
+    }
+
+    ArchiveStreamReadResult ReadDetailed(void* output, size_t length)
+    {
+        return ArchiveReadEntryStreamDetailed(stream_, output, length);
+    }
+
+    ArchiveStreamOperationResult SeekDetailed(uint64_t position)
+    {
+        return ArchiveSeekEntryStreamDetailed(stream_, position);
+    }
+
     void Cancel() noexcept
     {
         if (token_)
