@@ -1,6 +1,7 @@
 // Player-neutral decoded archive streams presented as foobar2000 virtual files.
 // The player's existing audio input decoders handle MP3/FLAC/OGG/WAV/etc.
-// No audio payloads are extracted to temporary files or CRCs recalculated.
+// Unsupported direct stream layouts can use an entry-scoped temporary file.
+// Archive content CRCs are never calculated; metadata comes from headers.
 #include <foobar2000/SDK/foobar2000.h>
 #include "archive_backend.h"
 #include "archive_common.h"
@@ -110,17 +111,19 @@ namespace
     class ArchiveEntryFile : public file_readonly
     {
     public:
-        ArchiveEntryFile(const std::wstring& path, const ArchiveEntry& entry, t_filetimestamp timestamp)
+        ArchiveEntryFile(const std::wstring& path, const ArchiveEntry& entry, t_filetimestamp timestamp, abort_callback& abort)
             : path_(path), entry_(entry), timestamp_(timestamp)
         {
+            abort.check();
             const auto result = stream_.OpenDetailed(path_.c_str(), entry_.index);
+            abort.check();
             if (!result.success)
             {
                 // Some valid 7z/solid coder layouts cannot be opened by the
                 // incremental decoder. A uniquely named foobar-owned temp
                 // file is a deliberate fallback; no content CRC is computed.
                 DebugLogWrite("INFO", "FOOBAR", "STREAM_FALLBACK", "index=%u | reason=%s", (unsigned)entry_.index, result.message.c_str());
-                OpenExtractedFallback(result.message);
+                OpenExtractedFallback(result.message, abort);
             }
         }
 
@@ -143,7 +146,12 @@ namespace
                 return done;
             }
 
+            // Foobar can signal abort from another thread while a backend read
+            // is active. The owner cancellation token is thread-safe; its
+            // lifetime is bounded by this synchronous notification scope.
+            fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
             const auto result = stream_.ReadDetailed(destination, amount);
+            abort.check();
             if (result.errorKind != ArchiveStreamErrorKind::None)
                 pfc::throw_exception_with_message<exception_io_data>(result.message.c_str());
 
@@ -189,7 +197,9 @@ namespace
                 return;
             }
 
+            fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
             const auto result = stream_.SeekDetailed(position);
+            abort.check();
             if (!result.success)
                 pfc::throw_exception_with_message<exception_io_data>(result.message.c_str());
 
@@ -227,8 +237,9 @@ namespace
             }
         }
 
-        void OpenExtractedFallback(const std::string& streamError)
+        void OpenExtractedFallback(const std::string& streamError, abort_callback& abort)
         {
+            abort.check();
             char temporaryFolder[MAX_PATH * 4] = {};
             if (!ArchiveBuildPluginDataSubdirPath("Temp", temporaryFolder, sizeof(temporaryFolder)))
                 throw exception_io_denied();
@@ -247,10 +258,12 @@ namespace
                 std::string error;
                 if (!ArchiveExtractEntryToFile(path_.c_str(), entry_.index, tempPath_.c_str(), error))
                 {
+                    abort.check();
                     error = "Cannot stream: " + streamError + "; extraction fallback failed: " + error;
                     pfc::throw_exception_with_message<exception_io_data>(error.c_str());
                 }
 
+                abort.check();
                 tempFile_ = CreateFileW(tempPath_.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (tempFile_ == INVALID_HANDLE_VALUE)
                     exception_io_from_win32(GetLastError());
@@ -262,6 +275,7 @@ namespace
                 if (actualSize.QuadPart < 0 || static_cast<uint64_t>(actualSize.QuadPart) != entry_.size)
                     throw exception_io_data_truncation();
 
+                abort.check();
                 DebugLogWrite("INFO", "FOOBAR", "FALLBACK_READY", "index=%u | size=%llu", (unsigned)entry_.index, (unsigned long long)entry_.size);
             }
             catch (...)
@@ -334,7 +348,7 @@ namespace
                 t_filestats2 stats = stats2_in_archive(t_filestats{ entry.size, wholeStats.m_timestamp }, t_filestats2::from_legacy(wholeStats));
                 file::ptr reader;
                 if (flags & archive_v5::flagReaders)
-                    reader = fb2k::service_new<ArchiveEntryFile>(native, entry, wholeStats.m_timestamp);
+                    reader = fb2k::service_new<ArchiveEntryFile>(native, entry, wholeStats.m_timestamp, abort);
 
                 if (!output.on_entry(virtualUrl.c_str(), stats, reader))
                     return;
@@ -370,7 +384,7 @@ namespace
             bool archiveWritable = false;
             filesystem::g_get_stats(archivePath, base, archiveWritable, abort);
             abort.check();
-            output = fb2k::service_new<ArchiveEntryFile>(native, entry, base.m_timestamp);
+            output = fb2k::service_new<ArchiveEntryFile>(native, entry, base.m_timestamp, abort);
         }
     };
 

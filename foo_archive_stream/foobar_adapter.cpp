@@ -11,6 +11,7 @@
 #include <commdlg.h>
 #include <string>
 #include <vector>
+#include <utility>
 
 DECLARE_COMPONENT_VERSION("Archive Stream Player - foobar2000", "0.2.0", "Native ZIP, 7z and RAR virtual entry streams for foobar2000 audio decoders.");
 VALIDATE_COMPONENT_FILENAME("foo_archive_stream.dll");
@@ -58,7 +59,129 @@ namespace
     };
     FB2K_SERVICE_FACTORY(ArchiveStreamInit);
 
-    void InspectArchive()
+    enum class ArchiveListAction
+    {
+        Inspect,
+        AddToPlaylist
+    };
+
+    class FoobarArchiveListProcess : public threaded_process_callback
+    {
+    public:
+        FoobarArchiveListProcess(std::wstring path, ArchiveListAction action)
+            : path_(std::move(path)), action_(action)
+        {
+        }
+
+        void run(threaded_process_status& status, abort_callback& abort) override
+        {
+            try
+            {
+                abort.check();
+                status.set_item("Reading archive headers");
+                status.set_progress(0, 1);
+
+                if (action_ == ArchiveListAction::Inspect)
+                {
+                    if (!ArchiveListEntries(path_.c_str(), entries_, error_))
+                        return;
+                }
+                else
+                {
+                    const std::string pathUtf8 = WideToUtf8(path_.c_str());
+                    if (pathUtf8.empty() || !FoobarBuildArchivePlaylistUrls(pathUtf8.c_str(), urls_, error_))
+                    {
+                        if (error_.empty())
+                            error_ = "Archive path cannot be converted to UTF-8";
+                        return;
+                    }
+                }
+
+                abort.check();
+                status.set_progress(1, 1);
+            }
+            catch (const exception_aborted&)
+            {
+                throw;
+            }
+            catch (const std::exception& ex)
+            {
+                error_ = ex.what();
+            }
+        }
+
+        void on_done(ctx_t, bool aborted) override
+        {
+            if (aborted)
+            {
+                console::print("Archive Stream: archive enumeration cancelled");
+                return;
+            }
+
+            if (!error_.empty())
+            {
+                const std::string message = "Archive Stream: archive enumeration failed: " + error_;
+                console::print(message.c_str());
+                popup_message::g_show(message.c_str(), "Archive Stream");
+                return;
+            }
+
+            if (action_ == ArchiveListAction::Inspect)
+            {
+                size_t supported = 0;
+                console::print(("Archive Stream: " + WideToUtf8(path_.c_str())).c_str());
+                for (const ArchiveEntry& entry : entries_)
+                {
+                    if (entry.isFolder || !entry.isSupportedAudio)
+                        continue;
+
+                    ++supported;
+                    console::print(("  [" + std::to_string(entry.index) + "] " + entry.path + " (" + std::to_string(entry.size) + " bytes)").c_str());
+                }
+
+                const std::string message = "Archive Stream: " + std::to_string(entries_.size()) + " entries, " + std::to_string(supported) + " supported audio files logged in the foobar2000 Console. Use File > Archive Stream: Add archive audio... to add playable tracks.";
+                console::print(message.c_str());
+                popup_message::g_show(message.c_str(), "Archive Stream");
+                return;
+            }
+
+            if (urls_.empty())
+            {
+                popup_message::g_show("No supported audio entries were found in this archive.", "Archive Stream");
+                return;
+            }
+
+            pfc::list_t<const char*> locations;
+            for (const auto& url : urls_)
+                locations.add_item(url.c_str());
+
+            try
+            {
+                // The host playlist manager is called only on the main thread.
+                if (!playlist_manager::get()->activeplaylist_add_locations(locations, true, core_api::get_main_window()))
+                {
+                    popup_message::g_show("foobar2000 could not add the archive entries to the active playlist.", "Archive Stream");
+                    return;
+                }
+
+                console::print(("Archive Stream: requested " + std::to_string(urls_.size()) + " archive audio tracks for the active playlist").c_str());
+            }
+            catch (const std::exception& ex)
+            {
+                console::print((std::string("Archive Stream: playlist add failed: ") + ex.what()).c_str());
+                popup_message::g_show(ex.what(), "Archive Stream - Playlist Error");
+            }
+        }
+
+    private:
+        std::wstring path_;
+        ArchiveListAction action_;
+        std::string error_;
+        std::vector<ArchiveEntry> entries_;
+        std::vector<std::string> urls_;
+    };
+
+    void StartArchiveListProcess(ArchiveListAction action)
     {
         wchar_t filename[32768] = {};
         OPENFILENAMEW dialog{};
@@ -68,88 +191,23 @@ namespace
         dialog.lpstrFile = filename;
         dialog.nMaxFile = _countof(filename);
         dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-        dialog.lpstrTitle = L"Archive Stream - Inspect Archive";
+        dialog.lpstrTitle = action == ArchiveListAction::Inspect ? L"Archive Stream - Inspect Archive" : L"Archive Stream - Add Archive Audio";
 
         if (!GetOpenFileNameW(&dialog))
             return;
-
-        std::vector<ArchiveEntry> entries;
-        std::string error;
-        if (!ArchiveListEntries(filename, entries, error))
-        {
-            std::string message = "Archive Stream: failed to inspect archive: " + error;
-            console::print(message.c_str());
-            popup_message::g_show(message.c_str(), "Archive Stream");
-            return;
-        }
-
-        size_t supported = 0;
-        console::print(("Archive Stream: " + WideToUtf8(filename)).c_str());
-        for (const ArchiveEntry& entry : entries)
-        {
-            if (entry.isFolder || !entry.isSupportedAudio)
-                continue;
-
-            ++supported;
-            console::print(("  [" + std::to_string(entry.index) + "] " + entry.path + " (" + std::to_string(entry.size) + " bytes)").c_str());
-        }
-
-        std::string message = "Archive Stream: " + std::to_string(entries.size()) + " entries, " + std::to_string(supported) + " supported audio files logged in the foobar2000 Console. Use File > Archive Stream: Add archive audio... to add playable tracks.";
-        console::print(message.c_str());
-        popup_message::g_show(message.c_str(), "Archive Stream");
-    }
-
-    void AddArchiveAudio()
-    {
-        wchar_t filename[32768] = {};
-        OPENFILENAMEW dialog{};
-        dialog.lStructSize = sizeof(dialog);
-        dialog.hwndOwner = core_api::get_main_window();
-        dialog.lpstrFilter = L"Archives (*.zip;*.7z;*.rar;*.zip.001;*.7z.001)\0*.zip;*.7z;*.rar;*.zip.001;*.7z.001\0All files (*.*)\0*.*\0";
-        dialog.lpstrFile = filename;
-        dialog.nMaxFile = _countof(filename);
-        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-        dialog.lpstrTitle = L"Archive Stream - Add Archive Audio";
-        if (!GetOpenFileNameW(&dialog))
-            return;
-
-        std::vector<std::string> urls;
-        std::string error;
-        const std::string utf8 = WideToUtf8(filename);
-        if (!FoobarBuildArchivePlaylistUrls(utf8.c_str(), urls, error))
-        {
-            const std::string message = "Archive Stream: cannot enumerate playable archive entries: " + error;
-            console::print(message.c_str());
-            popup_message::g_show(message.c_str(), "Archive Stream");
-            return;
-        }
-
-        if (urls.empty())
-        {
-            popup_message::g_show("No supported audio entries were found in this archive.", "Archive Stream");
-            return;
-        }
-
-        pfc::list_t<const char*> locations;
-        for (const auto& url : urls)
-            locations.add_item(url.c_str());
 
         try
         {
-            if (!playlist_manager::get()->activeplaylist_add_locations(locations, true, core_api::get_main_window()))
-            {
-                popup_message::g_show("foobar2000 could not add the archive entries to the active playlist.", "Archive Stream");
-                return;
-            }
+            auto worker = fb2k::service_new<FoobarArchiveListProcess>(std::wstring(filename), action);
+            const unsigned flags = threaded_process::flag_show_abort | threaded_process::flag_show_progress | threaded_process::flag_show_item;
+            threaded_process::get()->run_modeless(worker, flags, core_api::get_main_window(), "Archive Stream - Enumerating Archive");
         }
         catch (const std::exception& ex)
         {
-            console::print((std::string("Archive Stream: playlist add failed: ") + ex.what()).c_str());
-            popup_message::g_show(ex.what(), "Archive Stream - Playlist Error");
-            return;
+            const std::string message = std::string("Archive Stream: unable to begin archive enumeration: ") + ex.what();
+            console::print(message.c_str());
+            popup_message::g_show(message.c_str(), "Archive Stream");
         }
-
-        console::print(("Archive Stream: requested " + std::to_string(urls.size()) + " archive audio tracks for the active playlist").c_str());
     }
 
     class ArchiveStreamMenu : public mainmenu_commands
@@ -168,9 +226,9 @@ namespace
         {
             (void)callback;
             if (index == 0)
-                InspectArchive();
+                StartArchiveListProcess(ArchiveListAction::Inspect);
             else if (index == 1)
-                AddArchiveAudio();
+                StartArchiveListProcess(ArchiveListAction::AddToPlaylist);
             else
                 FoobarVerifyArchiveDecoding();
         }
