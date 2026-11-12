@@ -29,7 +29,21 @@ enum class ArchiveStreamErrorKind : uint8_t
     UnsupportedFormat,
     BackendFailure,
     TruncatedEntry,
-    Cancelled
+    Cancelled,
+    AlreadyOpen,
+    OutOfRange
+};
+
+// Common typed result for opening and seeking a decoded-entry stream.
+// Existing bool-returning APIs stay available for Winamp compatibility.
+struct ArchiveStreamOperationResult
+{
+    bool success = false;
+    ArchiveStreamReadStatus status = ArchiveStreamReadStatus::NotOpen;
+    ArchiveStreamErrorKind errorKind = ArchiveStreamErrorKind::None;
+    ArchiveFormat format = ArchiveFormat::Unknown;
+    uint64_t position = 0;
+    std::string message;
 };
 
 struct ArchiveStreamReadResult
@@ -42,6 +56,8 @@ struct ArchiveStreamReadResult
     std::string message;
 };
 
+ArchiveStreamOperationResult ArchiveOpenEntryStreamDetailed(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, const ArchiveStreamCancellationToken* cancellation = nullptr);
+ArchiveStreamOperationResult ArchiveSeekEntryStreamDetailed(ArchiveBackendStream& stream, uint64_t absolutePosition);
 ArchiveStreamReadResult ArchiveReadEntryStreamDetailed(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead);
 size_t ArchiveReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead);
 bool ArchiveSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosition);
