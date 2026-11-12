@@ -30,6 +30,27 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Install Visual Studio ATL for v143
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installerDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+          $vswhere = Join-Path $installerDir 'vswhere.exe'
+          $setup = Join-Path $installerDir 'vs_installer.exe'
+          if (-not (Test-Path $setup)) { $setup = Join-Path $installerDir 'setup.exe' }
+          if (-not (Test-Path $vswhere) -or -not (Test-Path $setup)) {
+            throw 'Visual Studio Installer is not available on the runner'
+          }
+          $vsPath = (& $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath | Select-Object -First 1)
+          if (-not $vsPath) { throw 'Visual Studio installation was not found' }
+          $component = 'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL'
+          $arguments = @('modify', '--installPath', ('"' + $vsPath + '"'), '--add', $component, '--quiet', '--norestart', '--nocache')
+          $install = Start-Process -FilePath $setup -ArgumentList $arguments -PassThru -Wait -NoNewWindow
+          if ($install.ExitCode -ne 0) { throw "Visual Studio ATL installation failed with exit code $($install.ExitCode)" }
+          $atl = @(Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC') -Filter atlbase.h -Recurse -ErrorAction SilentlyContinue)
+          if ($atl.Count -eq 0) { throw "ATL installation finished but atlbase.h is still missing at $vsPath" }
+          Write-Host "ATL headers available: $($atl[0].FullName)"
+
       - name: Download official foobar2000 SDK
         shell: pwsh
         run: |
