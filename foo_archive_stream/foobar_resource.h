@@ -13,9 +13,11 @@
 #define IDC_LOGGING_ENABLED        2208
 #define IDC_LOG_PATH               2209
 #define IDC_LOG_BROWSE             2210
+#define IDC_LOG_FOLDER             2213
 #define IDC_CACHE_VIEW            2211
 #define IDC_CACHE_CLEAR           2212
 
 #define IDC_DISPLAY_PREFIX         2301
 #define IDC_DISPLAY_POSTFIX        2302
 #define IDC_DISPLAY_TEMPLATE       2303
+#define IDC_DISPLAY_PRESET         2304
