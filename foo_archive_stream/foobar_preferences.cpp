@@ -15,6 +15,22 @@ namespace
     const GUID kGeneralPageGuid = { 0x8af10230, 0x345e, 0x42de, {0x91,0xc5,0xab,0x81,0xf8,0x65,0x21,0x3a} };
     const GUID kDisplayPageGuid = { 0x8af10231, 0x345e, 0x42de, {0x91,0xc5,0xab,0x81,0xf8,0x65,0x21,0x3b} };
 
+    struct TitlePreset
+    {
+        const char* utf8;
+        const wchar_t* wide;
+    };
+
+    // Keep the same six template presets as in_archive_stream/config_ui.cpp.
+    constexpr TitlePreset kTitlePresets[] = {
+        { "<filename>", L"<filename>" },
+        { "<archivetype>: <filename>", L"<archivetype>: <filename>" },
+        { "<#>. <filename>", L"<#>. <filename>" },
+        { "<filename> [<filetype>]", L"<filename> [<filetype>]" },
+        { "<archivetype>: <#> - <filename>", L"<archivetype>: <#> - <filename>" },
+        { "[<archive>] <#> - <filename>", L"[<archive>] <#> - <filename>" }
+    };
+
     std::string ReadUtf8(HWND hwnd, int id, std::string& error)
     {
         HWND edit = GetDlgItem(hwnd, id);
@@ -163,6 +179,12 @@ namespace
                 auto* self = reinterpret_cast<ArchivePreferencesInstance*>(lParam);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
                 self->hwnd_ = hwnd;
+                if (self->display_)
+                {
+                    for (const auto& preset : kTitlePresets)
+                        SendDlgItemMessageW(hwnd, IDC_DISPLAY_PRESET, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(preset.wide));
+                }
+
                 self->FillControls(FoobarArchiveSettingsLoad());
                 return TRUE;
             }
@@ -183,6 +205,16 @@ namespace
                 const int id = LOWORD(wParam);
                 const int event = HIWORD(wParam);
 
+                if (self->display_ && id == IDC_DISPLAY_PRESET && event == CBN_SELCHANGE)
+                {
+                    const LRESULT index = SendDlgItemMessageW(hwnd, IDC_DISPLAY_PRESET, CB_GETCURSEL, 0, 0);
+                    if (index >= 0 && index < static_cast<LRESULT>(_countof(kTitlePresets)))
+                        SetUtf8(hwnd, IDC_DISPLAY_TEMPLATE, kTitlePresets[index].utf8);
+
+                    self->Changed();
+                    return TRUE;
+                }
+
                 if (event == EN_CHANGE || event == BN_CLICKED)
                 {
                     if (event == BN_CLICKED && !self->display_)
@@ -195,6 +227,29 @@ namespace
                         if (id == IDC_LOG_BROWSE)
                         {
                             BrowsePath(hwnd, IDC_LOG_PATH, L"Log files (*.log)\0*.log\0All files (*.*)\0*.*\0");
+                            return TRUE;
+                        }
+                        if (id == IDC_LOG_FOLDER)
+                        {
+                            wchar_t path[MAX_PATH * 4] = {};
+                            GetDlgItemTextW(hwnd, IDC_LOG_PATH, path, _countof(path));
+                            if (!path[0])
+                            {
+                                char defaultPath[MAX_PATH * 4] = {};
+                                if (ArchiveBuildPluginDataFilePath("foo_archive_stream.log", defaultPath, sizeof(defaultPath)))
+                                    MultiByteToWideChar(CP_ACP, 0, defaultPath, -1, path, _countof(path));
+                            }
+
+                            wchar_t* slash = wcsrchr(path, L'\\');
+                            wchar_t* forward = wcsrchr(path, L'/');
+                            if (forward && (!slash || forward > slash))
+                                slash = forward;
+
+                            if (slash)
+                            {
+                                *slash = L'\0';
+                                ShellExecuteW(hwnd, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);
+                            }
                             return TRUE;
                         }
                         if (id == IDC_CACHE_VIEW)
@@ -246,6 +301,17 @@ namespace
                 SetUtf8(hwnd_, IDC_DISPLAY_PREFIX, settings.displayPrefix);
                 SetUtf8(hwnd_, IDC_DISPLAY_POSTFIX, settings.displayPostfix);
                 SetUtf8(hwnd_, IDC_DISPLAY_TEMPLATE, settings.displayTemplate);
+
+                LRESULT index = -1;
+                for (size_t i = 0; i < _countof(kTitlePresets); ++i)
+                {
+                    if (settings.displayTemplate == kTitlePresets[i].utf8)
+                    {
+                        index = static_cast<LRESULT>(i);
+                        break;
+                    }
+                }
+                SendDlgItemMessageW(hwnd_, IDC_DISPLAY_PRESET, CB_SETCURSEL, index, 0);
             }
             else
             {
