@@ -1,0 +1,75 @@
+name: Archive Stream Windows regression
+
+on:
+  pull_request:
+    paths:
+      - 'archive_backend/**'
+      - 'archive_backend_test/**'
+      - 'foo_archive_stream/**'
+      - 'shared/**'
+      - 'third_party/**'
+      - 'libarchive_static/**'
+      - 'unrar_static/**'
+      - 'zlib_static/**'
+      - '.github/workflows/windows-archive-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  archive-and-foobar:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download official foobar2000 SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://www.foobar2000.org/downloads/SDK-2026-10-01.7z'
+          $archive = Join-Path $env:RUNNER_TEMP 'foobar2000-sdk.7z'
+          $root = Join-Path $env:RUNNER_TEMP 'fb2k-sdk'
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          New-Item -ItemType Directory -Force $root | Out-Null
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZip) { $sevenZip = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path $sevenZip)) { throw '7-Zip is missing from runner' }
+          & $sevenZip x $archive "-o$root" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract foobar2000 SDK' }
+          if (-not (Test-Path (Join-Path $root 'foobar2000\SDK\foobar2000_SDK.vcxproj'))) { throw 'Invalid SDK archive' }
+          "FOOBAR_SDK_ROOT=$root" >> $env:GITHUB_ENV
+
+      - name: Build backend console tests - Release x86
+        shell: pwsh
+        run: |
+          msbuild archive_backend_test/archive_backend_test.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /p:RunPostBuildEvent=Never /m:2 /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Backend test build failed' }
+
+      - name: Run console regressions
+        shell: pwsh
+        run: |
+          $exe = 'archive_backend_test\Release\archive_backend_test.exe'
+          if (-not (Test-Path $exe)) { throw 'Backend test executable missing' }
+          python -c "import pathlib,zipfile; p=pathlib.Path('ci_fixture.zip'); z=zipfile.ZipFile(p,'w',zipfile.ZIP_DEFLATED); z.writestr('Café.flac',b'archive-regression'*256); z.writestr('日本語.mp3',b'second-fixture'*256); z.close()"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create ZIP fixture' }
+          & $exe selftest
+          if ($LASTEXITCODE -ne 0) { throw 'Backend selftest failed' }
+          foreach ($mode in @('ziptest','canceltest','legacytest','ownertest','diagtest')) {
+            & $exe $mode 'ci_fixture.zip'
+            if ($LASTEXITCODE -ne 0) { throw "Regression failed: $mode" }
+          }
+
+      - name: Build native foobar2000 component - Release x86
+        shell: pwsh
+        run: |
+          msbuild foo_archive_stream/foo_archive_stream.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 "/p:FoobarSdkRoot=$env:FOOBAR_SDK_ROOT" /p:RunPostBuildEvent=Never /m:2 /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'foobar2000 component build failed' }
+          if (-not (Test-Path 'foo_archive_stream\Release\foo_archive_stream.dll')) { throw 'foobar2000 component DLL not produced' }
