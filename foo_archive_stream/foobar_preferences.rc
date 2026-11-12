@@ -1,0 +1,47 @@
+#include <windows.h>
+#include "foobar_resource.h"
+
+IDD_ARCHIVE_GENERAL DIALOGEX 0, 0, 450, 280
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+FONT 9, "Segoe UI"
+BEGIN
+    GROUPBOX      "Playback and cache", -1, 8, 5, 434, 101
+    LTEXT         "Playback buffer (MB, 10-200):", -1, 18, 21, 180, 12
+    EDITTEXT      IDC_BUFFER_MB, 208, 19, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT         "Maximum cache size (MB, 0-20480):", -1, 18, 42, 190, 12
+    EDITTEXT      IDC_CACHE_MB, 208, 40, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
+    AUTOCHECKBOX  "Clean cache by size", IDC_CACHE_SIZE_CLEANUP, 18, 63, 170, 12
+    AUTOCHECKBOX  "Clean cache by age", IDC_CACHE_AGE_CLEANUP, 208, 63, 130, 12
+    LTEXT         "Maximum age (days, 1-99):", -1, 208, 83, 155, 12
+    EDITTEXT      IDC_CACHE_AGE_DAYS, 363, 81, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
+
+    GROUPBOX      "Archive passwords", -1, 8, 112, 434, 53
+    LTEXT         "Password list (blank = FoobarArchiveStream\\keeps.txt):", -1, 18, 128, 348, 12
+    EDITTEXT      IDC_PASSWORD_PATH, 18, 144, 350, 14, ES_AUTOHSCROLL
+    PUSHBUTTON    "Browse...", IDC_PASSWORD_BROWSE, 374, 143, 58, 16
+
+    GROUPBOX      "Diagnostics", -1, 8, 170, 434, 70
+    AUTOCHECKBOX  "Enable debug logging", IDC_LOGGING_ENABLED, 18, 184, 165, 12
+    LTEXT         "Debug log path (blank = FoobarArchiveStream\\foo_archive_stream.log):", -1, 18, 201, 385, 11
+    EDITTEXT      IDC_LOG_PATH, 18, 216, 350, 14, ES_AUTOHSCROLL
+    PUSHBUTTON    "Browse...", IDC_LOG_BROWSE, 374, 215, 58, 16
+
+    PUSHBUTTON    "Open cache folder", IDC_CACHE_VIEW, 12, 250, 122, 18
+    PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 144, 250, 104, 18
+    LTEXT         "Playback buffer/title options take effect when the foobar decoder is implemented.", -1, 12, 271, 424, 9
+END
+
+IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 450, 185
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+FONT 9, "Segoe UI"
+BEGIN
+    GROUPBOX      "Playlist title formatting", -1, 8, 6, 434, 121
+    LTEXT         "Prefix (maximum 20 UTF-8 bytes):", -1, 19, 28, 200, 12
+    EDITTEXT      IDC_DISPLAY_PREFIX, 224, 26, 204, 14, ES_AUTOHSCROLL
+    LTEXT         "Postfix (maximum 20 UTF-8 bytes):", -1, 19, 54, 200, 12
+    EDITTEXT      IDC_DISPLAY_POSTFIX, 224, 52, 204, 14, ES_AUTOHSCROLL
+    LTEXT         "Template (maximum 159 UTF-8 bytes):", -1, 19, 80, 200, 12
+    EDITTEXT      IDC_DISPLAY_TEMPLATE, 224, 78, 204, 14, ES_AUTOHSCROLL
+    LTEXT         "Default template: <filename>", -1, 19, 105, 340, 12
+    LTEXT         "Stored for future foobar playlist integration; does not alter the current inspector.", -1, 12, 141, 423, 25
+END
