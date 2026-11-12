@@ -98,3 +98,34 @@ jobs:
           msbuild foo_archive_stream/foo_archive_stream.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 "/p:FoobarSdkRoot=$env:FOOBAR_SDK_ROOT" /p:RunPostBuildEvent=Never /m:2 /v:minimal /nologo
           if ($LASTEXITCODE -ne 0) { throw 'foobar2000 component build failed' }
           if (-not (Test-Path 'foo_archive_stream\Release\foo_archive_stream.dll')) { throw 'foobar2000 component DLL not produced' }
+
+      - name: Build backend console tests - Release x64
+        shell: pwsh
+        run: |
+          msbuild archive_backend_test/archive_backend_test.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:RunPostBuildEvent=Never /m:2 /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Native x64 backend test build failed' }
+
+      - name: Run native x64 console regressions
+        shell: pwsh
+        run: |
+          $exe = 'archive_backend_test\x64\Release\archive_backend_test.exe'
+          if (-not (Test-Path $exe)) { throw 'Native x64 backend executable missing' }
+          & $exe selftest
+          if ($LASTEXITCODE -ne 0) { throw 'Native x64 selftest failed' }
+          foreach ($mode in @('ziptest','canceltest','legacytest','ownertest','diagtest')) {
+            & $exe $mode 'ci_fixture.zip'
+            if ($LASTEXITCODE -ne 0) { throw "Native x64 regression failed: $mode" }
+          }
+
+      - name: Build native foobar2000 component - Release x64
+        shell: pwsh
+        run: |
+          msbuild foo_archive_stream/foo_archive_stream.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 "/p:FoobarSdkRoot=$env:FOOBAR_SDK_ROOT" /p:RunPostBuildEvent=Never /m:2 /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Native x64 foobar2000 component build failed' }
+          $path = 'foo_archive_stream\x64\Release\foo_archive_stream.dll'
+          if (-not (Test-Path $path)) { throw 'Native x64 foobar2000 DLL missing' }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $path).Path)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) { throw "Expected AMD64 DLL, got PE machine 0x$($machine.ToString('X4'))" }
+          Write-Host "Native AMD64 foobar2000 DLL verified: $path"
