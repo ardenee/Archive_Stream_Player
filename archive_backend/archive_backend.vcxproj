@@ -162,6 +162,7 @@
     <ClInclude Include="archive_passwords.h" />
     <ClInclude Include="archive_rar_libarchive.h" />
     <ClInclude Include="archive_rar_reader.h" />
+    <ClInclude Include="archive_rar_native_encrypted.h" />
     <ClInclude Include="archive_reader.h" />
     <ClInclude Include="archive_types.h" />
     <ClInclude Include="archive_zip_libarchive.h" />
@@ -200,6 +201,7 @@
     <ClCompile Include="archive_passwords.cpp" />
     <ClCompile Include="archive_rar_libarchive.cpp" />
     <ClCompile Include="archive_rar_reader.cpp" />
+    <ClCompile Include="archive_rar_native_encrypted.cpp" />
     <ClCompile Include="archive_reader.cpp" />
     <ClCompile Include="archive_zip_libarchive.cpp" />
     <ClCompile Include="archive_zip_reader.cpp" />

@@ -146,16 +146,32 @@ namespace
                 return done;
             }
 
-            // Foobar can signal abort from another thread while a backend read
-            // is active. The owner cancellation token is thread-safe; its
-            // lifetime is bounded by this synchronous notification scope.
-            fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
-            const auto result = stream_.ReadDetailed(destination, amount);
-            abort.check();
-            if (result.errorKind != ArchiveStreamErrorKind::None)
-                pfc::throw_exception_with_message<exception_io_data>(result.message.c_str());
+            // Keep the cancellation notification scope shorter than stream
+            // destruction, since the notify callback borrows the stream owner.
+            ArchiveStreamReadResult result;
+            {
+                fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
+                result = stream_.ReadDetailed(destination, amount);
+            }
 
             abort.check();
+            if (result.errorKind != ArchiveStreamErrorKind::None)
+            {
+                // RAR5 encrypted headers may open successfully but fail during
+                // the first libarchive read. Try the native UnRAR extraction
+                // fallback only before any bytes have been delivered.
+                if (result.bytesRead == 0 && result.errorKind == ArchiveStreamErrorKind::BackendFailure &&
+                    entry_.size > 0 && stream_.RawStream().format == ArchiveFormat::Rar && stream_.Tell() == 0)
+                {
+                    const std::string originalError = result.message;
+                    stream_.Close();
+                    OpenExtractedFallback(originalError, abort);
+                    return read(destination, amount, abort);
+                }
+
+                pfc::throw_exception_with_message<exception_io_data>(result.message.c_str());
+            }
+
             return result.bytesRead;
         }
 

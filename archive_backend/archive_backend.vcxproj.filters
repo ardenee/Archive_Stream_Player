@@ -33,6 +33,9 @@
     <ClInclude Include="archive_rar_reader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="archive_rar_native_encrypted.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="archive_types.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -90,6 +93,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="archive_rar_reader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="archive_rar_native_encrypted.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="archive_zip_reader.cpp">

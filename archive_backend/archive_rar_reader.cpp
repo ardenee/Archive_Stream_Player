@@ -1750,10 +1750,12 @@ void RarCloseEntryStream(ArchiveBackendStream& stream)
 
 #include "archive_rar_reader.h"
 #include "archive_rar_libarchive.h"
+#include "archive_rar_native_encrypted.h"
 #include "archive_passwords.h"
 #include "debug_log.h"
 
 #include <windows.h>
+#include <utility>
 
 void RarSetPasswordListPath(const char* passwordListPath)
 {
@@ -1762,7 +1764,27 @@ void RarSetPasswordListPath(const char* passwordListPath)
 
 bool RarListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error)
 {
-    return LibarchiveRarListEntries(archivePath, entries, error);
+    const bool listed = LibarchiveRarListEntries(archivePath, entries, error);
+    if (listed && !entries.empty())
+        return true;
+
+    // RAR5 archives with encrypted filenames can appear empty to libarchive.
+    // Check the native archive flag before attempting passwords, so ordinary
+    // empty archives retain their original listing semantics.
+    if (!RarNativeHasEncryptedHeaders(archivePath))
+        return listed;
+
+    std::vector<ArchiveEntry> nativeEntries;
+    std::string nativeError;
+    if (RarNativeListHeaderEncryptedEntries(archivePath, nativeEntries, nativeError))
+    {
+        entries = std::move(nativeEntries);
+        error.clear();
+        return true;
+    }
+
+    error = "RAR filenames are encrypted; " + nativeError;
+    return false;
 }
 
 bool RarExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std::vector<unsigned char>& data, std::string& error)
@@ -1772,7 +1794,22 @@ bool RarExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std::ve
 
 bool RarExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
 {
-    return LibarchiveRarExtractEntryToFile(archivePath, index, outputPath, error);
+    if (LibarchiveRarExtractEntryToFile(archivePath, index, outputPath, error))
+        return true;
+
+    // libarchive cannot decode some encrypted RAR5 entries. Only for such an
+    // extraction failure, try the existing native UnRAR static SDK with saved
+    // password candidates; the normal streaming reader remains unchanged.
+    const std::string libarchiveError = error;
+    std::string nativeError;
+    if (RarNativeExtractEncryptedEntryToFile(archivePath, index, outputPath, nativeError))
+    {
+        error.clear();
+        return true;
+    }
+
+    error = libarchiveError + "; " + nativeError;
+    return false;
 }
 
 bool RarOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation)
