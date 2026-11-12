@@ -52,7 +52,16 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="foobar_adapter.cpp" />
+    <ClCompile Include="foobar_settings.cpp" />
+    <ClCompile Include="foobar_preferences.cpp" />
     <ClCompile Include="..\shared\debug_log.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="foobar_preferences.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="foobar_resource.h" />
+    <ClInclude Include="foobar_settings.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\archive_backend\archive_backend.vcxproj" />
