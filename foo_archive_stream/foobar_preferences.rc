@@ -29,7 +29,7 @@ BEGIN
     PUSHBUTTON    "Open cache folder", IDC_CACHE_VIEW, 12, 250, 122, 18
     PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 144, 250, 104, 18
     PUSHBUTTON    "Open log folder", IDC_LOG_FOLDER, 258, 250, 125, 18
-    LTEXT         "Playback buffer/title options take effect when the foobar decoder is implemented.", -1, 12, 271, 424, 9
+    LTEXT         "Buffer and title-format options are reserved for later playback integration.", -1, 12, 271, 424, 9
 END
 
 IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 450, 200

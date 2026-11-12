@@ -90,6 +90,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="foobar_adapter.cpp" />
+    <ClCompile Include="foobar_archive_reader.cpp" />
+    <ClCompile Include="foobar_decode_test.cpp" />
     <ClCompile Include="foobar_settings.cpp" />
     <ClCompile Include="foobar_preferences.cpp" />
     <ClCompile Include="..\shared\debug_log.cpp" />
@@ -98,6 +100,8 @@
     <ResourceCompile Include="foobar_preferences.rc" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="foobar_archive_reader.h" />
+    <ClInclude Include="foobar_decode_test.h" />
     <ClInclude Include="foobar_resource.h" />
     <ClInclude Include="foobar_settings.h" />
   </ItemGroup>
