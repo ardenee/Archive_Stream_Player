@@ -1755,6 +1755,8 @@ void RarCloseEntryStream(ArchiveBackendStream& stream)
 #include "debug_log.h"
 
 #include <windows.h>
+#include <algorithm>
+#include <cwctype>
 #include <utility>
 
 void RarSetPasswordListPath(const char* passwordListPath)
@@ -1762,11 +1764,33 @@ void RarSetPasswordListPath(const char* passwordListPath)
     ArchivePasswordSetListPath(passwordListPath);
 }
 
+static bool RarLooksLikeNumberedFirstVolume(const wchar_t* archivePath)
+{
+    if (!archivePath || !*archivePath)
+        return false;
+
+    std::wstring path(archivePath);
+    std::transform(path.begin(), path.end(), path.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+
+    const auto part = path.rfind(L".part1.rar");
+    const bool partFirst = part != std::wstring::npos && part + 10 == path.size();
+    const bool numericFirst = path.size() >= 8 && path.compare(path.size() - 8, 8, L".rar.001") == 0;
+    return partFirst || numericFirst;
+}
+
 bool RarListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error)
 {
     const bool listed = LibarchiveRarListEntries(archivePath, entries, error);
     if (listed && !entries.empty())
+    {
+        if (RarLooksLikeNumberedFirstVolume(archivePath))
+        {
+            std::string enrichmentError;
+            if (!RarNativeEnrichMultipartEntryEncryption(archivePath, entries, enrichmentError))
+                DebugLogWrite("WARN", "RAR", "MULTIPART_ENCRYPTION_METADATA_UNAVAILABLE", "entries=%zu | error=%s", entries.size(), enrichmentError.c_str());
+        }
         return true;
+    }
 
     // RAR5 archives with encrypted filenames can appear empty to libarchive.
     // Check the native archive flag before attempting passwords, so ordinary

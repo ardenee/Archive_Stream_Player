@@ -1,6 +1,7 @@
 #include <foobar2000/SDK/foobar2000.h>
 #include "foobar_decode_test.h"
 #include "foobar_archive_reader.h"
+#include "debug_log.h"
 
 #include <algorithm>
 #include <commdlg.h>
@@ -120,12 +121,15 @@ namespace
         void VerifyOne(const std::string& url, threaded_process_status& status, abort_callback& abort)
         {
             abort.check();
+            DebugLogWrite("INFO", "FOOBAR", "VERIFY_ENTRY_BEGIN", "url=%s", url.c_str());
             input_decoder::ptr decoder;
             input_entry::g_open_for_decoding(decoder, nullptr, url.c_str(), abort);
+            DebugLogWrite("INFO", "FOOBAR", "VERIFY_DECODER_OPENED", "url=%s", url.c_str());
 
             file_info_impl info;
             decoder->get_info(0, info, abort);
             decoder->initialize(0, 0, abort);
+            DebugLogWrite("INFO", "FOOBAR", "VERIFY_DECODER_INITIALIZED", "url=%s", url.c_str());
 
             audio_chunk_impl chunk;
             uint64_t frames = 0;
@@ -151,6 +155,7 @@ namespace
                 }
             }
 
+            DebugLogWrite("INFO", "FOOBAR", "VERIFY_DECODED", "url=%s | frames=%llu", url.c_str(), (unsigned long long)frames);
             if (frames == 0 || sampleRate == 0 || channels == 0)
                 throw exception_io_data();
 
@@ -171,6 +176,7 @@ namespace
             abort.check();
             totalFrames_ += frames;
             ++passed_;
+            DebugLogWrite("INFO", "FOOBAR", "VERIFY_ENTRY_PASS", "url=%s | seek=%d", url.c_str(), seekVerified ? 1 : 0);
             log_ += "Archive Stream decoder PASS: " + url + " frames=" + std::to_string(frames) + " rate=" + std::to_string(sampleRate) + " channels=" + std::to_string(channels) + " seek=" + (seekVerified ? "PASS" : "SKIPPED_SHORT_TRACK") + "\n";
         }
 

@@ -115,6 +115,15 @@ namespace
             : path_(path), entry_(entry), timestamp_(timestamp)
         {
             abort.check();
+            // libarchive may expose encrypted RAR headers but cannot decode
+            // some RAR5 data. Route such entries directly through the native
+            // UnRAR extraction fallback; do not first poison a stream state.
+            if (entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar)
+            {
+                OpenExtractedFallback("Encrypted RAR uses native UnRAR fallback", abort);
+                return;
+            }
+
             const auto result = stream_.OpenDetailed(path_.c_str(), entry_.index);
             abort.check();
             if (!result.success)

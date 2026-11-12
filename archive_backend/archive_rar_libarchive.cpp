@@ -1443,6 +1443,7 @@ bool LibarchiveRarListEntries(const wchar_t* archivePath, std::vector<ArchiveEnt
         out.size = archive_entry_size_is_set(entry) ? (uint64_t)archive_entry_size(entry) : 0;
         out.isFolder = isFolder;
         out.isSupportedAudio = supportedAudio;
+        out.isEncrypted = archive_entry_is_encrypted(entry) > 0;
 
         if (!LaRarApplyCurrentEntryProfile(a, out, supportedAudio, source.volumes.size() > 1))
         {

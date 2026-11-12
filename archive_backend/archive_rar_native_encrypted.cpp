@@ -9,6 +9,7 @@
 #include <windows.h>
 #include "../third_party/unrar/dll.hpp"
 #include <cstring>
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -48,7 +49,7 @@ namespace
     int CALLBACK NativeRarPasswordCallback(UINT message, LPARAM userData, LPARAM p1, LPARAM p2)
     {
         const auto* context = reinterpret_cast<const NativeRarPasswordContext*>(userData);
-        if (!context || !context->password)
+        if ((message == UCM_NEEDPASSWORD || message == UCM_NEEDPASSWORDW) && (!context || !context->password))
             return -1;
 
         if (message == UCM_NEEDPASSWORD)
@@ -76,10 +77,28 @@ namespace
             return count > 0 ? 1 : -1;
         }
 
-        // Multipart volume transitions are not enabled in this fallback until
-        // the native callback path has a verified no-prompt lifecycle.
-        if (message == UCM_CHANGEVOLUME || message == UCM_CHANGEVOLUMEW)
-            return -1;
+        // Match the existing Winamp UnRAR callbacks: accept a volume only
+        // if the requested on-disk file already exists. This prevents any
+        // interactive missing-volume retry loop, including RAR_VOL_ASK.
+        if (message == UCM_CHANGEVOLUMEW)
+        {
+            const auto* next = reinterpret_cast<const wchar_t*>(p1);
+            if (!next || !*next)
+                return -1;
+
+            const DWORD attributes = GetFileAttributesW(next);
+            return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : -1;
+        }
+
+        if (message == UCM_CHANGEVOLUME)
+        {
+            const auto* next = reinterpret_cast<const char*>(p1);
+            if (!next || !*next)
+                return -1;
+
+            const DWORD attributes = GetFileAttributesA(next);
+            return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : -1;
+        }
 
         return 1;
     }
@@ -315,6 +334,7 @@ static bool NativeRarTryListEncryptedHeaders(const wchar_t* archivePath, const s
         entry.size = (static_cast<uint64_t>(header.UnpSizeHigh) << 32) | header.UnpSize;
         entry.isFolder = (header.Flags & RHDF_DIRECTORY) != 0;
         entry.isSupportedAudio = !entry.isFolder && ArchiveIsSupportedAudioPath(entry.path);
+        entry.isEncrypted = (header.Flags & RHDF_ENCRYPTED) != 0;
         entry.isSolid = (header.Flags & RHDF_SOLID) != 0;
         entry.methodId = header.Method;
         entry.hasMethodId = true;
@@ -388,4 +408,107 @@ bool RarNativeHasEncryptedHeaders(const wchar_t* archivePath)
     NativeRarArchive archive;
     archive.handle = RAROpenArchiveEx(&open);
     return archive.handle && (open.Flags & ROADF_ENCHEADERS) != 0;
+}
+
+
+bool RarNativeEnrichMultipartEntryEncryption(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error)
+{
+    error.clear();
+    if (!archivePath || !*archivePath || entries.empty())
+    {
+        error = "Cannot enrich empty native RAR entry metadata";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+
+    NativeRarPasswordContext callbackContext{};
+    RAROpenArchiveDataEx open{};
+    open.ArcNameW = const_cast<wchar_t*>(archivePath);
+    open.OpenMode = RAR_OM_LIST;
+    open.Callback = NativeRarPasswordCallback;
+    open.UserData = reinterpret_cast<LPARAM>(&callbackContext);
+
+    NativeRarArchive archive;
+    archive.handle = RAROpenArchiveEx(&open);
+    if (!archive.handle)
+    {
+        error = "Native RAR metadata open failed (code " + std::to_string(open.OpenResult) + ")";
+        return false;
+    }
+
+    if (!(open.Flags & ROADF_VOLUME))
+        return true;
+
+    // Collect the complete header-only mapping before changing any entries,
+    // so an incomplete or differently indexed volume set cannot corrupt the
+    // list returned by libarchive.
+    std::vector<bool> encrypted;
+    encrypted.reserve(entries.size());
+
+    for (size_t index = 0;; ++index)
+    {
+        RARHeaderDataEx header{};
+        const int readResult = RARReadHeaderEx(archive.handle, &header);
+        if (readResult == ERAR_END_ARCHIVE)
+            break;
+
+        if (readResult != ERAR_SUCCESS || index >= entries.size())
+        {
+            error = "Native RAR multipart metadata header mismatch (code " + std::to_string(readResult) + ")";
+            return false;
+        }
+
+        const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, header.FileNameW, -1, nullptr, 0, nullptr, nullptr);
+        if (required <= 1)
+        {
+            error = "Native RAR multipart entry has an invalid Unicode name";
+            return false;
+        }
+
+        std::string nativeName(static_cast<size_t>(required), '\0');
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, header.FileNameW, -1, nativeName.data(), required, nullptr, nullptr) != required)
+        {
+            error = "Cannot convert native RAR multipart entry filename";
+            return false;
+        }
+        nativeName.resize(static_cast<size_t>(required - 1));
+
+        std::string libarchiveName = entries[index].path;
+        std::replace(nativeName.begin(), nativeName.end(), '\\', '/');
+        std::replace(libarchiveName.begin(), libarchiveName.end(), '\\', '/');
+
+        const uint64_t nativeSize = (static_cast<uint64_t>(header.UnpSizeHigh) << 32) | header.UnpSize;
+        if (nativeSize != entries[index].size || nativeName != libarchiveName)
+        {
+            error = "Native and libarchive RAR multipart entry identities differ";
+            return false;
+        }
+
+        encrypted.push_back((header.Flags & RHDF_ENCRYPTED) != 0);
+
+        const int skipResult = RARProcessFileW(archive.handle, RAR_SKIP, nullptr, nullptr);
+        if (skipResult != ERAR_SUCCESS)
+        {
+            error = "Native RAR multipart metadata cannot advance (code " + std::to_string(skipResult) + ")";
+            return false;
+        }
+    }
+
+    if (encrypted.size() != entries.size())
+    {
+        error = "Native RAR multipart metadata entry count mismatch";
+        return false;
+    }
+
+    size_t encryptedCount = 0;
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        entries[i].isEncrypted = encrypted[i];
+        if (encrypted[i])
+            ++encryptedCount;
+    }
+
+    DebugLogWrite("INFO", "RAR", "NATIVE_MULTIPART_HEADER_ENCRYPTION", "entries=%zu | encrypted=%zu", entries.size(), encryptedCount);
+    return true;
 }

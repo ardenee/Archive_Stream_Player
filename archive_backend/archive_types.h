@@ -18,6 +18,7 @@ struct ArchiveEntry
     uint64_t size = 0;
     bool isFolder = false;
     bool isSupportedAudio = false;
+    bool isEncrypted = false; // Header-provided entry encryption flag, not inferred from reading content.
 
     uint32_t crc32 = 0;
     bool hasCrc32 = false;

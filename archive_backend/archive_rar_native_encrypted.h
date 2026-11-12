@@ -12,5 +12,6 @@ bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t i
 
 // Fallback listing when RAR5 filename encryption makes libarchive's listing empty.
 // RAR CRC metadata is copied only from native archive headers, never recalculated.
+bool RarNativeEnrichMultipartEntryEncryption(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error);
 bool RarNativeHasEncryptedHeaders(const wchar_t* archivePath);
 bool RarNativeListHeaderEncryptedEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error);

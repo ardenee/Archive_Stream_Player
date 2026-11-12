@@ -15,6 +15,7 @@
 #include "archive_stream_owner.h"
 #include "archive_format.h"
 #include "archive_common.h"
+#include "archive_passwords.h"
 #include "archive_reader.h"
 
 static bool ParseUInt32Arg(const wchar_t* text, uint32_t& outValue)
@@ -808,6 +809,61 @@ static int RunApiValidationTests()
     return failures == 0 ? 0 : 1;
 }
 
+static int RunPasswordedArchiveFileRegression(const wchar_t* archivePath, const wchar_t* passwordListPath, const wchar_t* indexText, const wchar_t* outputPath)
+{
+    if (!archivePath || !passwordListPath || !indexText || !outputPath)
+        return 1;
+
+    uint32_t index = 0;
+    if (!ParseUInt32Arg(indexText, index))
+        return 1;
+
+    const int len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 1)
+        return 1;
+
+    std::string passwordPath(static_cast<size_t>(len), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, passwordPath.data(), len, nullptr, nullptr) != len)
+        return 1;
+
+    ArchivePasswordSetListPath(passwordPath.c_str());
+
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    if (!ArchiveListEntries(archivePath, entries, error))
+    {
+        std::printf("PASSWORD_TEST_LIST_FAIL: %s\n", error.c_str());
+        return 1;
+    }
+
+    const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& e) { return e.index == index && !e.isFolder; });
+    if (found == entries.end())
+    {
+        std::printf("PASSWORD_TEST_INDEX_FAIL: index=%u entries=%zu\n", (unsigned)index, entries.size());
+        return 1;
+    }
+
+    if (!ArchiveExtractEntryToFile(archivePath, index, outputPath, error))
+    {
+        std::printf("PASSWORD_TEST_EXTRACT_FAIL: %s\n", error.c_str());
+        return 1;
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA attrs{};
+    if (!GetFileAttributesExW(outputPath, GetFileExInfoStandard, &attrs))
+        return 1;
+
+    const uint64_t extractedSize = (static_cast<uint64_t>(attrs.nFileSizeHigh) << 32) | attrs.nFileSizeLow;
+    if (extractedSize != found->size)
+    {
+        std::printf("PASSWORD_TEST_SIZE_FAIL: expected=%llu got=%llu\n", (unsigned long long)found->size, (unsigned long long)extractedSize);
+        return 1;
+    }
+
+    std::printf("PASSWORD_TEST_PASS: index=%u bytes=%llu entries=%zu encrypted=%d\n", (unsigned)index, (unsigned long long)extractedSize, entries.size(), found->isEncrypted ? 1 : 0);
+    return 0;
+}
+
 int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
@@ -815,6 +871,23 @@ int wmain(int argc, wchar_t* argv[])
 
     if (argc >= 2 && _wcsicmp(argv[1], L"selftest") == 0)
         return RunApiValidationTests();
+
+    if (argc >= 2 && _wcsicmp(argv[1], L"pwfiletest") == 0)
+    {
+        if (argc != 6 && argc != 8)
+        {
+            std::printf("pwfiletest requires archive, password list, index, output, and optionally a second index/output pair\n");
+            return 1;
+        }
+
+        if (RunPasswordedArchiveFileRegression(argv[2], argv[3], argv[4], argv[5]) != 0)
+            return 1;
+
+        if (argc >= 8)
+            return RunPasswordedArchiveFileRegression(argv[2], argv[3], argv[6], argv[7]);
+
+        return 0;
+    }
 
     if (argc >= 3 && _wcsicmp(argv[1], L"ziptest") == 0)
         return RunGenericZipStreamRegression(argv[2]);
@@ -835,6 +908,7 @@ int wmain(int argc, wchar_t* argv[])
     {
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
+        std::printf("  archive_backend_test.exe pwfiletest archive.rar passwords.txt index extracted.file\n");
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");
         std::printf("  archive_backend_test.exe canceltest archive.zip\n");
         std::printf("  archive_backend_test.exe legacytest archive.zip\n");
