@@ -1,5 +1,7 @@
 # Player adapters: streaming behavior, setup and tests
 
+For a player-by-player status overview with explicit real-host, automated-test and unverified distinctions, see [FEATURE-MATRIX.md](FEATURE-MATRIX.md). This document supplies the implementation details and evidence behind those statuses.
+
 ## Stream-first routing and failure recovery (13 November 2026)
 
 Our **player adapters** select the entry route using the shared archive backend: **direct incremental archive stream -> in-memory decompression within the configured buffer -> persistent managed disk cache only when necessary**. The host player is not asked to extract the archive. AIMP's native `IAIMPStream`, foobar2000's virtual-file reader, and the localhost HTTP bridge all expose decoded archive bytes on demand to the player codec. There is no full-archive extraction step on a successful stream route. Solid layouts and unsupported encrypted codecs may require the memory route from the outset.

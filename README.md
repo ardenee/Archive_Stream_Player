@@ -20,6 +20,8 @@ Not every feature above has been verified in every player or with every archive.
 
 ## Supported players and current progress
 
+**[Full player-by-player feature matrix](FEATURE-MATRIX.md)** — archive formats, streaming/memory/cache routes, encryption, passwords, settings, logging, track-title behavior, live playback evidence, known limitations and links to the relevant tests. The matrix separates **H** (observed in a real player), **T** (adapter/bridge/backend test), **I** (implemented but not fully verified), and **?** (not verified). An archive HTTP request or playback-time progression does **not** prove audible output.
+
 | Player | Integration | Verified so far |
 | --- | --- | --- |
 | **Winamp** | Native 32-bit input and playlist plugins | Archive playback and expansion implemented; wider live playback regression remains |
