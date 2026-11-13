@@ -323,6 +323,13 @@ namespace ArchiveUnifiedCache
         return total <= allowedBytes;
     }
 
+    inline bool Maintain(const ArchiveAdapterPreferences& settings)
+    {
+        if (!settings.cacheAutoCleanup || settings.cacheLimitMb == 0)
+            return true;
+        return Cleanup(static_cast<uint64_t>(settings.cacheLimitMb) * kMb, {}, settings.cacheAgeDays);
+    }
+
     inline bool Prepare(const std::wstring& archive, const ArchiveEntry& entry,
         const ArchiveAdapterPreferences& settings, std::wstring& result, std::string& error)
     {

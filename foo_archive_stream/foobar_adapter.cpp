@@ -12,6 +12,7 @@
 #include <wincred.h>
 #include "archive_passwords.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
 #pragma comment(lib, "credui.lib")
 #include <filesystem>
 #include <fstream>
@@ -100,6 +101,8 @@ namespace
             else
             {
                 FoobarArchiveSettingsApplyBackend(FoobarArchiveSettingsLoad());
+                if (!ArchiveUnifiedCache::Maintain(ArchiveAdapterPreferencesLoad()))
+                    DebugLogWrite("WARN", "FOOBAR", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
                 ArchivePasswordSetPromptCallback(FoobarPromptArchivePassword);
                 console::print("Archive Stream: foobar2000 archive virtual-file adapter initialized");
 #ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST

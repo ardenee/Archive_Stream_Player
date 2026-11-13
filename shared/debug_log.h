@@ -3,6 +3,7 @@
 #include <stdarg.h>
 
 void DebugLogConfigure(bool enabled, const char* logPath, bool resetFile);
+void DebugLogConfigureWide(bool enabled, const wchar_t* logPath, bool resetFile);
 void DebugLogShutdown();
 
 void DebugLogWritePlain(const char* level, const char* area, const char* eventName, const char* fmt, ...);

@@ -12,7 +12,7 @@ Archive Stream Player lets supported players browse the audio tracks inside an a
 - **Read encrypted archives** using a shared password list and interactive prompts in supported native and bridge players. Passwords are only saved after explicit consent and successful verification.
 - **Seek within supported tracks**, so playback does not have to start from the beginning.
 - **Use stream-first playback:** decompress directly from an archive where possible; if streaming fails or is unavailable, use the configured RAM buffer, then a reusable managed disk cache only as a last resort. Cached tracks can be reused by different players without repeating extraction.
-- **Configure shared playback preferences** across adapters: memory limits, managed-cache size and age, password lists/prompts, background solid-archive preparation and track-title presets. Winamp and foobar2000 also retain their native preferences.
+- **Configure shared playback preferences** across adapters: memory limits, managed-cache size and age, password lists/prompts, background solid-archive preparation, track-title presets and optional per-player diagnostic logs. Open or clear managed cache and generated logs from the common settings page. Winamp and foobar2000 also retain their native preferences.
 - **Work without separate archive-extraction programs or runtime archive DLLs.** Archive reading is built into the project's components.
 - **Keep archives intact.** Playing a track does not rewrite or modify the original ZIP, 7z or RAR file.
 
@@ -46,6 +46,7 @@ The following have passed tests in at least one supported player or in the share
 - [x] Use memory before temporary files when archive entries cannot stream, including native in-RAM decryption of encrypted RAR5 entries. The encrypted RAR5 variants pass x86/x64 memory and bridge parity regressions. Injected mid-stream failure recovery passes 8/8 native AIMP, 8/8 native foobar2000 and 4/4 HTTP bridge scenarios, including memory and cache routes with exact source-byte parity.
 - [x] Verify decoded audio bytes and seeking.
 - [x] Use a shared managed cache and common settings policy in Winamp, foobar2000, AIMP, XMPlay and the HTTP bridge. A synthetic solid 7z test verified background preparation, persistent reuse across Win32/x64 bridge processes, and cache invalidation after a source archive changes.
+- [x] Share opt-in debugging and per-host diagnostic log files (including Unicode paths); Win32/x64 HTTP bridge, AIMP Win32/x64, XMPlay Win32, and MusicBee x86 adapter logging plus selective cleanup pass regression tests. Win32/x64 cache-age startup maintenance and preservation of unrelated cache-folder files are also verified. Shared title presets work in Winamp's virtual title/expander metadata (with a playlist-title cache flush on native settings save), AIMP virtual-file metadata, and M3U/ASX bridge playlists.
 - [x] Expand archives into individual playlist tracks in supported hosts.
 - [x] Provide portable, self-contained archive readers without external extraction utilities.
 - [x] Build the shared backend and newer playback bridge for both 32-bit and 64-bit Windows.
@@ -57,7 +58,7 @@ The following have passed tests in at least one supported player or in the share
 - [ ] Confirm Windows Media Player's complete playback path on a system with a working audio output.
 - [x] Investigate WACUP 64-bit: confirm the current native-plugin limitation and provide tested archive playback through the local playlist bridge.
 - [x] Add shared password prompts, settings, managed-cache controls, background solid-archive preparation and title templates to AIMP, XMPlay, MusicBee, Winamp, foobar2000 and playlist-bridge clients.
-- [ ] Finish interactive password-dialog, shared settings-page, background preparation and track-title display checks in every actual player interface.
+- [ ] Finish interactive password-dialog, shared settings-page, background preparation and track-title display checks in every actual player interface, including live refreshing of already-present host playlist rows. foobar2000's host titleformat and XMPlay's extraction-key rules need host-specific handling.
 - [ ] Expand automatic tests for Unicode names, additional encryption coder graphs, real corruption/truncation, cancellation and cleanup; the current encrypted 7z header/Copy/LZMA2, split, solid, wrong-password and stream-open cancellation matrix is automated and passing.
 - [ ] Improve installer/distribution packages and include the required third-party licence notices.
 - [x] Publish MIT licensing for the original Archive Stream Player code while retaining separate licences for third-party components.

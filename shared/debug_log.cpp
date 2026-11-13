@@ -1,5 +1,7 @@
 #include <windows.h>
 #include <cstdio>
+#include <cwchar>
+#include <filesystem>
 #include <cstring>
 #include <cstdarg>
 #include <string.h>
@@ -9,6 +11,7 @@
 
 static bool g_debugLogEnabled = false;
 static char g_debugLogPathInternal[MAX_PATH * 4] = "";
+static wchar_t g_debugLogPathWide[MAX_PATH * 4] = L"";
 static CRITICAL_SECTION g_debugLogLock;
 static bool g_debugLogLockReady = false;
 
@@ -150,6 +153,7 @@ void DebugLogConfigure(bool enabled, const char* logPath, bool resetFile)
 
     g_debugLogEnabled = enabled;
     g_debugLogPathInternal[0] = '\0';
+    g_debugLogPathWide[0] = L'\0';
 
     if (logPath && logPath[0])
     {
@@ -173,6 +177,31 @@ void DebugLogConfigure(bool enabled, const char* logPath, bool resetFile)
     LeaveCriticalSection(&g_debugLogLock);
 }
 
+void DebugLogConfigureWide(bool enabled, const wchar_t* logPath, bool resetFile)
+{
+    DebugLogEnsureLock();
+    EnterCriticalSection(&g_debugLogLock);
+
+    g_debugLogEnabled = enabled;
+    g_debugLogPathInternal[0] = '\0';
+    g_debugLogPathWide[0] = L'\0';
+    if (logPath && logPath[0] && wcslen(logPath) < _countof(g_debugLogPathWide))
+        wcscpy_s(g_debugLogPathWide, logPath);
+
+    if (g_debugLogEnabled && g_debugLogPathWide[0])
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(g_debugLogPathWide).parent_path(), ec);
+        if (resetFile)
+            DeleteFileW(g_debugLogPathWide);
+        LeaveCriticalSection(&g_debugLogLock);
+        DebugLogWriteEx(__FILE__, __LINE__, "INFO", "LOGGER", "FORMAT_VERSION", "version=trace_src_v1");
+        return;
+    }
+
+    LeaveCriticalSection(&g_debugLogLock);
+}
+
 void DebugLogShutdown()
 {
     if (!g_debugLogLockReady)
@@ -182,6 +211,7 @@ void DebugLogShutdown()
 
     g_debugLogEnabled = false;
     g_debugLogPathInternal[0] = '\0';
+    g_debugLogPathWide[0] = L'\0';
 
     LeaveCriticalSection(&g_debugLogLock);
 
@@ -204,17 +234,18 @@ void DebugLogWriteVEx(const char* sourceFile, int sourceLine, const char* level,
     DebugLogEnsureLock();
     EnterCriticalSection(&g_debugLogLock);
 
-    if (!g_debugLogEnabled || !g_debugLogPathInternal[0])
+    if (!g_debugLogEnabled || (!g_debugLogPathInternal[0] && !g_debugLogPathWide[0]))
     {
         LeaveCriticalSection(&g_debugLogLock);
         return;
     }
 
-    DebugLogEnsureFolderExistsForFile(g_debugLogPathInternal);
+    if (!g_debugLogPathWide[0])
+        DebugLogEnsureFolderExistsForFile(g_debugLogPathInternal);
 
     FILE* f = nullptr;
-
-    if (fopen_s(&f, g_debugLogPathInternal, "ab") != 0 || !f)
+    const int opened = g_debugLogPathWide[0] ? _wfopen_s(&f, g_debugLogPathWide, L"ab") : fopen_s(&f, g_debugLogPathInternal, "ab");
+    if (opened != 0 || !f)
     {
         DWORD err = GetLastError();
         DebugLogWriteFallbackFailure(g_debugLogPathInternal, err);

@@ -8,6 +8,7 @@
 #include <xmparc.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
 #include "archive_common.h"
@@ -344,12 +345,11 @@ extern "C" XMPARC* WINAPI XMPARC_GetInterface(DWORD face, InterfaceProc get)
     static const bool traceConfigured = []()
     {
         char enabled[8]{};
-        if (GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", enabled, sizeof(enabled)) > 0 && enabled[0] == '1')
-        {
-            char tracePath[MAX_PATH * 4]{};
-            if (ArchiveBuildPluginDataFilePath("xmplay_archive_stream.log", tracePath, sizeof(tracePath)))
-                DebugLogConfigure(true, tracePath, true);
-        }
+        const bool debugOverride = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", enabled, sizeof(enabled)) > 0 && enabled[0] == '1';
+        const auto preferences = ArchiveAdapterPreferencesLoad();
+        ArchiveAdapterLogging::Configure(L"xmplay", preferences.debugLogging || debugOverride);
+        if (!ArchiveUnifiedCache::Maintain(preferences))
+            DebugLogWrite("WARN", "XMPLAY", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
         return true;
     }();
     (void)traceConfigured;

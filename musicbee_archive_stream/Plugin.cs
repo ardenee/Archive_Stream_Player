@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace MusicBeePlugin
 {
@@ -19,15 +20,41 @@ namespace MusicBeePlugin
         private readonly List<string> shutdownUrls = new List<string>();
         private readonly object stateLock = new object();
 
+        private static readonly object traceLock = new object();
+
         private static void Trace(string message)
         {
-            if (Environment.GetEnvironmentVariable("ARCHIVE_STREAM_ADAPTER_DEBUG") != "1")
-                return;
             try
             {
-                string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MusicBeeArchiveStream");
+                bool enabled = Environment.GetEnvironmentVariable("ARCHIVE_STREAM_ADAPTER_DEBUG") == "1";
+                string configuredFolder = "";
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
+                {
+                    if (key != null)
+                    {
+                        object stored = key.GetValue("DebugLogging", 0);
+                        if (stored is int && (int)stored == 1)
+                            enabled = true;
+                        configuredFolder = key.GetValue("LogDirectory", "") as string ?? "";
+                    }
+                }
+                if (!enabled)
+                    return;
+
+                string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+                if (String.IsNullOrWhiteSpace(local))
+                    local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string folder = String.IsNullOrWhiteSpace(configuredFolder)
+                    ? Path.Combine(local, "ArchiveStreamPlayer", "Logs") : configuredFolder;
                 Directory.CreateDirectory(folder);
-                File.AppendAllText(Path.Combine(folder, "adapter.log"), DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine);
+
+                // One log record per line. Never record a prompted password.
+                string safe = (message ?? "").Replace('\r', ' ').Replace('\n', ' ');
+                string line = DateTime.UtcNow.ToString("o") + " | INFO | MUSICBEE | " + safe + Environment.NewLine;
+                lock (traceLock)
+                {
+                    File.AppendAllText(Path.Combine(folder, "archive_stream_musicbee.log"), line);
+                }
             }
             catch { }
         }
@@ -57,7 +84,7 @@ namespace MusicBeePlugin
                     "Add audio entries from a ZIP, 7z or RAR archive", OnAddArchive);
                 Trace(item == null ? "MENU_ITEM_FAILED" : "MENU_ITEM_REGISTERED");
                 api.MB_AddMenuItem("mnuTools/Archive Stream: Settings...",
-                    "Manage passwords, memory, temporary cache and track-title formats", OnShowSettings);
+                    "Configure shared titles, cache cleanup, passwords and diagnostic logging", OnShowSettings);
             }
             return info;
         }
@@ -91,6 +118,7 @@ namespace MusicBeePlugin
 
         private string[] StartArchiveSession(string archive)
         {
+            Trace("SESSION_REQUEST archive=" + archive);
             string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             string bridge = Path.Combine(baseDir, "archive_player_bridge.exe");
             if (!File.Exists(bridge))
@@ -144,6 +172,7 @@ namespace MusicBeePlugin
                     int entryPosition = tracks[0].IndexOf("/entry/", StringComparison.Ordinal);
                     shutdownUrls.Add(entryPosition > 0 ? tracks[0].Substring(0, entryPosition) + "/shutdown" : "");
                 }
+                Trace("SESSION_READY tracks=" + tracks.Length);
                 return tracks;
             }
             catch
@@ -160,6 +189,7 @@ namespace MusicBeePlugin
 
         private void OnShowSettings(object sender, EventArgs args)
         {
+            Trace("SETTINGS_OPEN_REQUEST");
             Configure(IntPtr.Zero);
         }
 

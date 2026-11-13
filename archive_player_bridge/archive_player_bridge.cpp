@@ -25,6 +25,7 @@
 #include <windows.h>
 #include <wincred.h>
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
 #include <winsock2.h>
@@ -43,6 +44,7 @@ struct Settings
     bool promptPasswords = true;
     bool askToSavePassword = true;
     std::wstring titleTemplate = L"<filename>";
+    bool titleOverride = false;
     unsigned short port = 0;
     unsigned lifetime = 0;
 #ifdef ARCHIVE_STREAM_BRIDGE_FAULT_TEST
@@ -150,9 +152,9 @@ std::string Name(const ArchiveEntry &e)
     }
     return name;
 }
-std::string Title(const ArchiveEntry& e)
+std::string Title(const ArchiveEntry& e, const std::wstring& titleTemplate)
 {
-    const auto value = ArchiveAdapterFormatTitle(g_settings.archive, Wide(e.path), e.index + 1, g_settings.titleTemplate);
+    const auto value = ArchiveAdapterFormatTitle(g_settings.archive, Wide(e.path), e.index + 1, titleTemplate);
     return Utf8(value);
 }
 std::string Link(const ArchiveEntry &e)
@@ -161,12 +163,15 @@ std::string Link(const ArchiveEntry &e)
 }
 std::string Playlist(bool asx)
 {
+    // The bridge may outlive the settings window. An HTTP playlist re-fetch
+    // always uses the latest shared title template unless CLI explicitly set it.
+    const auto titleTemplate = g_settings.titleOverride ? g_settings.titleTemplate : ArchiveAdapterPreferencesLoad().titleTemplate;
     std::string text = asx ? "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<asx version=\"3.0\">\r\n" : "#EXTM3U\r\n";
     for (auto &e : g_entries)
     {
         if (e.isFolder || !e.isSupportedAudio)
             continue;
-        const std::string title = Title(e);
+        const std::string title = Title(e, titleTemplate);
         text += asx ? "<entry><title>" + Xml(title) + "</title><ref href=\"" + Link(e) + "\"/></entry>\r\n"
                     : "#EXTINF:-1," + title + "\r\n" + Link(e) + "\r\n";
     }
@@ -269,6 +274,7 @@ std::wstring Cache(const ArchiveEntry &e)
     if (g_settings.cacheLimit == 0 || e.size > g_settings.cacheLimit)
     {
         std::fprintf(stderr, "CACHE_LIMIT index=%u\r\n", e.index);
+        DebugLogWrite("WARN", "BRIDGE", "CACHE_LIMIT", "index=%u | limit=%llu | entry=%llu", e.index, (unsigned long long)g_settings.cacheLimit, (unsigned long long)e.size);
         return {};
     }
     auto options = ArchiveAdapterPreferencesLoad();
@@ -278,9 +284,11 @@ std::wstring Cache(const ArchiveEntry &e)
     if (!ArchiveUnifiedCache::Prepare(g_settings.archive, e, options, path, error))
     {
         std::fprintf(stderr, "CACHE_FAIL entry=%u reason=%s\r\n", e.index, error.c_str());
+        DebugLogWrite("WARN", "BRIDGE", "CACHE_FAIL", "index=%u | error=%s", e.index, error.c_str());
         return {};
     }
     g_fileCache[e.index] = path;
+    DebugLogWrite("INFO", "BRIDGE", "CACHE_READY", "index=%u | bytes=%llu", e.index, (unsigned long long)e.size);
     ArchiveUnifiedWarmer::Queue(g_settings.archive, e, options);
     return path;
 }
@@ -353,6 +361,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
     bool partial = false;
     if (!Range(request, e.size, start, end, partial))
     {
+        DebugLogWrite("WARN", "BRIDGE", "RANGE_INVALID", "index=%u | entry_size=%llu", e.index, (unsigned long long)e.size);
         Header(s, 416, "text/plain", 0, "Content-Range: bytes */" + std::to_string(e.size) + "\r\n");
         return false;
     }
@@ -390,6 +399,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
     if (streamReady)
     {
         ++g_stream;
+        DebugLogWrite("INFO", "BRIDGE", "ROUTE_STREAM", "index=%u | start=%llu | bytes=%llu", e.index, (unsigned long long)start, (unsigned long long)length);
         passwordLock.unlock();
         if (!Header(s, status, Type(e), length, rangeHeader))
             return false;
@@ -435,6 +445,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
         if (ArchiveExtractEntryToMemory(g_settings.archive.c_str(), e.index, bytes, error) && bytes.size() == e.size)
         {
             ++g_memory;
+            DebugLogWrite("INFO", "BRIDGE", "ROUTE_MEMORY", "index=%u | start=%llu | bytes=%llu", e.index, (unsigned long long)start, (unsigned long long)length);
             passwordLock.unlock();
             if (!Header(s, status, Type(e), length, rangeHeader))
                 return false;
@@ -463,6 +474,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
         return false;
     }
     ++g_cacheCount;
+    DebugLogWrite("INFO", "BRIDGE", "ROUTE_CACHE", "index=%u | start=%llu | bytes=%llu", e.index, (unsigned long long)start, (unsigned long long)length);
     passwordLock.unlock();
     bool ok = Header(s, status, Type(e), length, rangeHeader);
     uint64_t left = length;
@@ -618,6 +630,7 @@ bool Arguments(int argc, wchar_t **argv)
                     val != L"[<archive>] <#> - <filename>")
                     return false;
                 g_settings.titleTemplate = val;
+                g_settings.titleOverride = true;
             }
             else if (key == L"--cache-limit-mb")
             {
@@ -730,6 +743,12 @@ int wmain(int argc, wchar_t **argv)
         return 2;
     }
     ArchiveSetDataDirectoryName("ArchiveBridgeStream");
+    char debugSwitch[8]{};
+    const bool debugOverride = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", debugSwitch, sizeof(debugSwitch)) > 0 && debugSwitch[0] == '1';
+    ArchiveAdapterLogging::Configure(L"bridge", preferences.debugLogging || debugOverride);
+    if (!ArchiveUnifiedCache::Maintain(preferences))
+        DebugLogWrite("WARN", "BRIDGE", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
+    DebugLogWrite("INFO", "BRIDGE", "SESSION_OPEN", "entries_pending=1 | cache_limit=%llu | memory_limit=%zu", (unsigned long long)g_settings.cacheLimit, g_settings.memoryLimit);
     if (g_settings.passwordPath.empty())
     {
         wchar_t local[MAX_PATH * 4]{};
@@ -826,9 +845,40 @@ int wmain(int argc, wchar_t **argv)
     std::fflush(stdout);
     SetConsoleCtrlHandler(OnCtrl, TRUE);
     const auto began = std::chrono::steady_clock::now();
+    auto lastTitleTemplate = g_settings.titleTemplate;
+    auto lastTitleCheck = began;
 
     while (!g_quit)
     {
+        const auto now = std::chrono::steady_clock::now();
+        if (!g_settings.titleOverride && now - lastTitleCheck >= std::chrono::seconds(1))
+        {
+            lastTitleCheck = now;
+            const auto current = ArchiveAdapterPreferencesLoad().titleTemplate;
+            if (current != lastTitleTemplate)
+            {
+                // Replace playlist files atomically; clients already using the
+                // old playlist keep their current URLs until they reload it.
+                const auto refresh = [&](const std::wstring& file, bool asxFormat)
+                {
+                    const auto temporary = file + L".partial";
+                    if (!WriteText(temporary, Playlist(asxFormat)) ||
+                        !MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                    {
+                        DeleteFileW(temporary.c_str());
+                        return false;
+                    }
+                    return true;
+                };
+                if (refresh(m3u, false) && refresh(asx, true))
+                {
+                    lastTitleTemplate = current;
+                    DebugLogWrite("INFO", "BRIDGE", "PLAYLIST_TITLES_REFRESHED", "tracks=%zu", audio);
+                }
+                else
+                    DebugLogWrite("WARN", "BRIDGE", "PLAYLIST_TITLES_REFRESH_FAIL", "winerr=%lu", GetLastError());
+            }
+        }
         if (g_settings.lifetime && std::chrono::steady_clock::now() - began >= std::chrono::seconds(g_settings.lifetime))
             break;
         fd_set ready{};

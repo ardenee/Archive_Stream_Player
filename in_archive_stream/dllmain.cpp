@@ -12,6 +12,7 @@
 #include "archive_metadata.h"
 #include "plugin_state.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
 #include "config_ui.h"
@@ -351,7 +352,12 @@ static void Init()
 
     LoadConfig();
 
-    DebugLogConfigure(g_debugLoggingEnabled, g_debugLogPath, true);
+    if (ArchiveAdapterPreferencesConfigured())
+        ArchiveAdapterLogging::ConfigureShared(L"winamp");
+    else
+        DebugLogConfigure(g_debugLoggingEnabled, g_debugLogPath, true);
+    if (!ArchiveUnifiedCache::Maintain(ArchiveAdapterPreferencesLoad()))
+        DebugLogWrite("WARN", "WINAMP", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
     ArchivePasswordSetPromptCallback(PromptForArchivePassword);
     ArchivePasswordSetAcceptedCallback(OnArchivePasswordAccepted);
 
@@ -562,6 +568,26 @@ static void FormatStableVirtualTitle(const char* virtualPath, const char* intern
     }
 
     outTitle[0] = '\0';
+
+    if (ArchiveAdapterPreferencesConfigured() && virtualPath && internalPath)
+    {
+        char archivePath[MAX_PATH * 4]{};
+        char ignored[1024]{};
+        mz_uint parsedIndex = 0;
+        if (ParseVirtualDisplayPath(virtualPath, archivePath, sizeof(archivePath), &parsedIndex, ignored, sizeof(ignored)))
+        {
+            const auto shared = ArchiveAdapterPreferencesLoad();
+            const std::wstring title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archivePath),
+                ArchiveAdapterUtf8ToWide(internalPath), static_cast<unsigned>(archiveIndex + 1), shared.titleTemplate);
+            if (!title.empty())
+            {
+                const int count = WideCharToMultiByte(CP_ACP, 0, title.c_str(), -1,
+                    outTitle, static_cast<int>(outTitleSize), nullptr, nullptr);
+                if (count > 0)
+                    return;
+            }
+        }
+    }
 
     std::string filename = StripKnownAudioExtension(GetBaseNameOnly(internalPath));
     std::string archive = GetArchiveNameFromVirtualPath(virtualPath);

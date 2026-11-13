@@ -3,6 +3,8 @@
 #include "foobar_settings.h"
 #include "../shared/archive_adapter_preferences.h"
 #include "../shared/archive_unified_cache.h"
+#include "../shared/archive_adapter_logging.h"
+#include <filesystem>
 
 #include "archive_cache.h"
 #include "archive_common.h"
@@ -233,6 +235,18 @@ namespace
                         }
                         if (id == IDC_LOG_FOLDER)
                         {
+                            if (ArchiveAdapterPreferencesConfigured())
+                            {
+                                const std::wstring folder = ArchiveAdapterLogging::Directory(ArchiveAdapterPreferencesLoad());
+                                std::error_code ec;
+                                std::filesystem::create_directories(std::filesystem::path(folder), ec);
+                                if (!folder.empty() && !ec &&
+                                    reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32)
+                                    return TRUE;
+                                popup_message::g_show("Unable to open the shared diagnostic log folder.", "Archive Stream");
+                                return TRUE;
+                            }
+
                             wchar_t path[MAX_PATH * 4] = {};
                             GetDlgItemTextW(hwnd, IDC_LOG_PATH, path, _countof(path));
                             if (!path[0])

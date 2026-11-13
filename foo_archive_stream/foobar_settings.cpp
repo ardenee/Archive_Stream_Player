@@ -7,6 +7,7 @@
 #include "archive_rar_reader.h"
 #include "debug_log.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
 
 #include <algorithm>
 #include <string>
@@ -75,6 +76,7 @@ FoobarArchiveSettings FoobarArchiveSettingsLoad()
         settings.cacheAgeDays = static_cast<int>(common.cacheAgeDays);
         settings.passwordListPath = ArchiveAdapterWideToUtf8(common.passwordListPath);
         settings.displayTemplate = ArchiveAdapterWideToUtf8(common.titleTemplate);
+        settings.debugLogging = common.debugLogging;
     }
 
     settings.bufferSizeMb = std::clamp(settings.bufferSizeMb, static_cast<int>(MIN_BUFFER_SIZE_MB), static_cast<int>(MAX_BUFFER_SIZE_MB));
@@ -143,6 +145,7 @@ bool FoobarArchiveSettingsSave(const FoobarArchiveSettings& requested, std::stri
     common.memoryMb = static_cast<unsigned>(settings.bufferSizeMb);
     common.cacheLimitMb = static_cast<unsigned>(settings.cacheSizeMb);
     common.cacheAgeDays = static_cast<unsigned>(settings.cacheAgeDays);
+    common.debugLogging = settings.debugLogging;
     common.passwordListPath = ArchiveAdapterUtf8ToWide(settings.passwordListPath);
     if (!settings.displayTemplate.empty())
         common.titleTemplate = ArchiveAdapterUtf8ToWide(settings.displayTemplate);
@@ -170,6 +173,11 @@ void FoobarArchiveSettingsApplyBackend(const FoobarArchiveSettings& settings)
     ArchivePasswordSetListPath(passwords.c_str());
     RarSetPasswordListPath(passwords.c_str());
 
-    const std::string logPath = ResolveDataPath(settings.debugLogPath, "foo_archive_stream.log");
-    DebugLogConfigure(settings.debugLogging, logPath.c_str(), false);
+    if (ArchiveAdapterPreferencesConfigured())
+        ArchiveAdapterLogging::ConfigureShared(L"foobar2000");
+    else
+    {
+        const std::string logPath = ResolveDataPath(settings.debugLogPath, "foo_archive_stream.log");
+        DebugLogConfigure(settings.debugLogging, logPath.c_str(), false);
+    }
 }

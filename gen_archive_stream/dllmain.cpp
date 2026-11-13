@@ -7,6 +7,7 @@
 #include "wa_ipc.h"
 #include "playlist_expand.h"
 #include "debug_log.h"
+#include "../shared/archive_adapter_logging.h"
 #include "archive_common.h"
 #include "winamp_bridge_protocol.h"
 
@@ -90,6 +91,12 @@ static void BuildDefaultGeneralPluginLogPath(char* outPath, size_t outPathSize)
 
 static void ConfigureGeneralPluginLogging()
 {
+    if (ArchiveAdapterPreferencesConfigured())
+    {
+        ArchiveAdapterLogging::ConfigureShared(L"winamp-gen");
+        return;
+    }
+
     char iniPath[MAX_PATH * 4];
     char inputLogPath[MAX_PATH * 4];
     char genLogPath[MAX_PATH * 4];

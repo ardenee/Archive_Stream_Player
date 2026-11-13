@@ -13,6 +13,8 @@
 #include "debug_log.h"
 #include "archive_passwords.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
+#include <filesystem>
 #include "../shared/archive_unified_cache.h"
 
 #pragma comment(lib, "shell32.lib")
@@ -462,16 +464,21 @@ static void RefreshPlaylistCacheForPath(HWND hwndWinamp, const char* path)
 // -----------------------------------------------------------------------------
 // RefreshPlaylistTitlesAfterDisplayConfigChange
 //
-// Do not rewrite Winamp playlist rows from the input-plugin config UI.
-//
-// The general plugin is responsible for creating playlist entries during archive
-// expansion. Existing entries do not need to be deleted/re-enqueued from here.
-// New expansions will use the updated display template once the general plugin
-// reads the same config file as the input plugin.
+// Ask Winamp to invalidate its playlist title cache after a settings save.
+// This preserves playlist order, selection, playback position and all entries:
+// no delete/re-enqueue cycle and no archive extraction. Winamp may repaint
+// visible rows at its own next UI refresh.
 // -----------------------------------------------------------------------------
 static void RefreshPlaylistTitlesAfterDisplayConfigChange()
 {
-    return;
+    if (!g_mod.hMainWindow || !IsWindow(g_mod.hMainWindow))
+    {
+        DebugLogWrite("WARN", "UI", "DISPLAY_REFRESH_SKIP", "reason=main_window_unavailable");
+        return;
+    }
+
+    SendMessage(g_mod.hMainWindow, WM_WA_IPC, 0, IPC_REFRESHPLCACHE);
+    DebugLogWrite("INFO", "UI", "DISPLAY_REFRESH_REQUESTED", "method=IPC_REFRESHPLCACHE | scope=all_playlist_rows");
 }
 
 void LoadConfig()
@@ -537,6 +544,7 @@ void LoadConfig()
         g_audioBufferSize = g_configuredBufferSizeMb * 1024 * 1024;
         g_configuredCacheSizeMb = ClampCacheMb(shared.cacheLimitMb);
         g_cacheMaxAgeDays = ClampCacheAgeDays(shared.cacheAgeDays);
+        g_debugLoggingEnabled = shared.debugLogging;
 
         const std::string passwordUtf8 = ArchiveAdapterWideToUtf8(shared.passwordListPath);
         if (!passwordUtf8.empty() && passwordUtf8.size() < sizeof(g_rarPasswordListPath))
@@ -666,6 +674,7 @@ void SaveConfig()
     common.memoryMb = static_cast<unsigned>(g_configuredBufferSizeMb);
     common.cacheLimitMb = static_cast<unsigned>(g_configuredCacheSizeMb);
     common.cacheAgeDays = g_cacheMaxAgeDays;
+    common.debugLogging = g_debugLoggingEnabled;
     common.passwordListPath = ArchiveAdapterUtf8ToWide(g_rarPasswordListPath);
     if (!ArchiveAdapterPreferencesSave(common))
         DebugLogWrite("WARN", "CONFIG", "SHARED_SAVE_FAIL", "source=winamp");
@@ -936,6 +945,20 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             case IDC_OPEN_LOG_FOLDER_BUTTON:
             {
+                if (ArchiveAdapterPreferencesConfigured())
+                {
+                    const std::wstring folder = ArchiveAdapterLogging::Directory(ArchiveAdapterPreferencesLoad());
+                    std::error_code ec;
+                    std::filesystem::create_directories(std::filesystem::path(folder), ec);
+                    if (!folder.empty() && !ec &&
+                        reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32)
+                        return 0;
+
+                    DebugLogWrite("ERROR", "UI", "OPEN_SHARED_LOG_FOLDER_FAIL", "winerr=%lu", GetLastError());
+                    MessageBoxA(hwnd, "Could not open the shared logging folder.", "Archive Stream", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
+
                 if (!g_debugLogPath[0])
                     BuildDefaultDebugLogPath(g_debugLogPath, sizeof(g_debugLogPath));
 
@@ -1060,7 +1083,10 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 ReallocateAudioBuffer(clampedBufferMb);
                 SetCacheSize(clampedCacheMb);
                 SetCacheCleanupOptions(sizeCleanupEnabled, ageCleanupEnabled, clampedAgeDays);
-                DebugLogConfigure(g_debugLoggingEnabled, g_debugLogPath, false);
+                if (ArchiveAdapterPreferencesConfigured())
+                    ArchiveAdapterLogging::ConfigureShared(L"winamp");
+                else
+                    DebugLogConfigure(g_debugLoggingEnabled, g_debugLogPath, false);
 
                 RefreshPlaylistTitlesAfterDisplayConfigChange();
 

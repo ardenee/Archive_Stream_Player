@@ -11,6 +11,7 @@
 #include "archive_reader.h"
 #include "archive_metadata.h"
 #include "debug_log.h"
+#include "../shared/archive_adapter_preferences.h"
 
 //#include "playlist_expand.h"
 
@@ -328,6 +329,32 @@ static std::string LoadDisplayConfigValue(const char* key, const char* fallback)
 
 static std::string BuildExpandedArchiveTitle(const char* virtualPath, const char* entryName, size_t displayIndex)
 {
+    if (ArchiveAdapterPreferencesConfigured() && virtualPath && entryName)
+    {
+        char archivePath[MAX_PATH * 4]{};
+        char internal[1024]{};
+        mz_uint index = 0;
+        if (ParseVirtualArchivePath(virtualPath, archivePath, sizeof(archivePath), &index, internal, sizeof(internal)))
+        {
+            const auto common = ArchiveAdapterPreferencesLoad();
+            const std::wstring title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archivePath),
+                ArchiveAdapterUtf8ToWide(entryName), static_cast<unsigned>(displayIndex ? displayIndex : index + 1), common.titleTemplate);
+            // Winamp's legacy playlist enqueue/title IPC is ANSI, while the
+            // shared title formatter operates on Unicode. Convert at the host
+            // boundary instead of displaying UTF-8 bytes as ANSI characters.
+            const int length = WideCharToMultiByte(CP_ACP, 0, title.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            if (length > 1)
+            {
+                std::string converted(static_cast<size_t>(length), '\0');
+                if (WideCharToMultiByte(CP_ACP, 0, title.c_str(), -1, converted.data(), length, nullptr, nullptr) == length)
+                {
+                    converted.resize(static_cast<size_t>(length - 1));
+                    return converted;
+                }
+            }
+        }
+    }
+
     std::string filename = StripExtensionFromFileName(entryName);
     std::string archive = GetCleanArchiveNameFromVirtualPath(virtualPath);
 

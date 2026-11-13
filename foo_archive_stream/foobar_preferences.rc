@@ -22,7 +22,7 @@ BEGIN
 
     GROUPBOX      "Diagnostics", -1, 8, 170, 434, 70
     AUTOCHECKBOX  "Enable debug logging", IDC_LOGGING_ENABLED, 18, 184, 165, 12
-    LTEXT         "Debug log path (blank = FoobarArchiveStream\\foo_archive_stream.log):", -1, 18, 201, 385, 11
+    LTEXT         "Legacy log path (shared log folder takes precedence):", -1, 18, 201, 385, 11
     EDITTEXT      IDC_LOG_PATH, 18, 216, 350, 14, ES_AUTOHSCROLL
     PUSHBUTTON    "Browse...", IDC_LOG_BROWSE, 374, 215, 58, 16
 

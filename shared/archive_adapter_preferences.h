@@ -28,6 +28,8 @@ struct ArchiveAdapterPreferences
     bool warmSolidArchives = true;
     bool promptPasswords = true;
     bool askToSavePassword = true;
+    bool debugLogging = false;
+    std::wstring logDirectory;
     std::wstring passwordListPath = ArchiveAdapterDefaultPasswordList();
     std::wstring titleTemplate = L"<filename>";
 };
@@ -106,6 +108,8 @@ inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
     settings.warmSolidArchives = number(L"WarmSolidArchives", 1, 0, 1) != 0;
     settings.promptPasswords = number(L"PromptPasswords", 1, 0, 1) != 0;
     settings.askToSavePassword = number(L"AskToSavePassword", 1, 0, 1) != 0;
+    settings.debugLogging = number(L"DebugLogging", 0, 0, 1) != 0;
+    settings.logDirectory = string(L"LogDirectory");
     const std::wstring configuredList = string(L"PasswordList");
     if (!configuredList.empty())
         settings.passwordListPath = configuredList;
@@ -124,7 +128,8 @@ inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
 inline bool ArchiveAdapterPreferencesSave(const ArchiveAdapterPreferences& settings)
 {
     if (settings.memoryMb < 1 || settings.memoryMb > 512 || settings.cacheLimitMb > 20480 ||
-        settings.cacheAgeDays < 1 || settings.cacheAgeDays > 365 || settings.passwordListPath.size() >= 4096)
+        settings.cacheAgeDays < 1 || settings.cacheAgeDays > 365 || settings.passwordListPath.size() >= 4096 ||
+        settings.logDirectory.size() >= 4096)
         return false;
 
     HKEY key = nullptr;
@@ -147,7 +152,9 @@ inline bool ArchiveAdapterPreferencesSave(const ArchiveAdapterPreferences& setti
         number(L"WarmSolidArchives", settings.warmSolidArchives ? 1 : 0) &&
         number(L"PromptPasswords", settings.promptPasswords ? 1 : 0) &&
         number(L"AskToSavePassword", settings.askToSavePassword ? 1 : 0) &&
-        string(L"PasswordList", settings.passwordListPath) && string(L"TitleTemplate", settings.titleTemplate);
+        number(L"DebugLogging", settings.debugLogging ? 1 : 0) &&
+        string(L"LogDirectory", settings.logDirectory) && string(L"PasswordList", settings.passwordListPath) &&
+        string(L"TitleTemplate", settings.titleTemplate);
     RegCloseKey(key);
     return saved;
 }

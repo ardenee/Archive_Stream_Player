@@ -9,6 +9,7 @@
 #include <apiOptions.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
 #include "archive_format.h"
@@ -818,12 +819,10 @@ namespace
             }
             ArchivePasswordSetPromptCallback(AskPassword);
             char traceSwitch[8]{};
-            if (GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", traceSwitch, sizeof(traceSwitch)) > 0 && traceSwitch[0] == '1')
-            {
-                char tracePath[MAX_PATH * 4]{};
-                if (ArchiveBuildPluginDataFilePath("aimp_archive_stream.log", tracePath, sizeof(tracePath)))
-                    DebugLogConfigure(true, tracePath, true);
-            }
+            const bool debugOverride = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", traceSwitch, sizeof(traceSwitch)) > 0 && traceSwitch[0] == '1';
+            ArchiveAdapterLogging::Configure(L"aimp", preferences.debugLogging || debugOverride);
+            if (!ArchiveUnifiedCache::Maintain(preferences))
+                DebugLogWrite("WARN", "AIMP", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
             DebugLogWrite("INFO", "AIMP", "PLUGIN_INIT", "core=%p", core);
             core->AddRef();
             g_core = core;
