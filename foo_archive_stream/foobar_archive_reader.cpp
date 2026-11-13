@@ -186,7 +186,8 @@ namespace
                 memoryPosition_ += static_cast<size_t>(count);
                 abort.check();
                 return count;
-            }            if (tempFile_ != INVALID_HANDLE_VALUE)
+            }
+            if (tempFile_ != INVALID_HANDLE_VALUE)
             {
                 DWORD done = 0;
                 const DWORD limit = static_cast<DWORD>((std::min)(amount, static_cast<t_size>((std::numeric_limits<DWORD>::max)())));
@@ -199,6 +200,7 @@ namespace
 
             // Keep the cancellation notification scope shorter than stream
             // destruction, since the notify callback borrows the stream owner.
+            const uint64_t readStart = stream_.Tell();
             ArchiveStreamReadResult result;
             {
                 fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
@@ -208,15 +210,14 @@ namespace
             abort.check();
             if (result.errorKind != ArchiveStreamErrorKind::None)
             {
-                // RAR5 encrypted headers may open successfully but fail during
-                // the first libarchive read. Try the native UnRAR extraction
-                // fallback only before any bytes have been delivered.
-                if (result.bytesRead == 0 && result.errorKind == ArchiveStreamErrorKind::BackendFailure &&
-                    entry_.size > 0 && stream_.RawStream().format == ArchiveFormat::Rar && stream_.Tell() == 0)
+                // If the decoder fails after earlier successful reads, the
+                // caller has not received any bytes from this failed call.
+                // Rebuild the entry in RAM or disk, then resume at its
+                // original offset rather than replaying or skipping data.
+                if ((result.errorKind == ArchiveStreamErrorKind::BackendFailure ||
+                     result.errorKind == ArchiveStreamErrorKind::TruncatedEntry) && readStart < entry_.size)
                 {
-                    const std::string originalError = result.message;
-                    stream_.Close();
-                    OpenMemoryOrExtractedFallback(originalError, abort);
+                    RecoverFromStreamFailure(result.message, readStart, abort);
                     return read(destination, amount, abort);
                 }
 
@@ -270,11 +271,22 @@ namespace
                 return;
             }
 
-            fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
-            const auto result = stream_.SeekDetailed(position);
+            ArchiveStreamOperationResult result;
+            {
+                fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
+                result = stream_.SeekDetailed(position);
+            }
             abort.check();
             if (!result.success)
+            {
+                if (result.errorKind == ArchiveStreamErrorKind::BackendFailure)
+                {
+                    RecoverFromStreamFailure(result.message, position, abort);
+                    return;
+                }
+
                 pfc::throw_exception_with_message<exception_io_data>(result.message.c_str());
+            }
 
             abort.check();
         }
@@ -295,6 +307,16 @@ namespace
         }
 
     private:
+        void RecoverFromStreamFailure(const std::string& originalError, uint64_t position, abort_callback& abort)
+        {
+            abort.check();
+            DebugLogWrite("WARN", "FOOBAR", "STREAM_RECOVER", "index=%u | resume_at=%llu | error=%s", (unsigned)entry_.index, (unsigned long long)position, originalError.c_str());
+            stream_.Close();
+            OpenMemoryOrExtractedFallback(originalError, abort);
+            seek(position, abort);
+            DebugLogWrite("INFO", "FOOBAR", "STREAM_RECOVER_OK", "index=%u | resume_at=%llu | route=%s", (unsigned)entry_.index, (unsigned long long)position, !memoryData_.empty() ? "memory" : "cache");
+        }
+
         void CloseExtractedFallback() noexcept
         {
             if (tempFile_ != INVALID_HANDLE_VALUE)
@@ -315,13 +337,16 @@ namespace
             abort.check();
             const uint64_t memoryLimit = static_cast<uint64_t>(FoobarArchiveSettingsLoad().bufferSizeMb) * 1024 * 1024;
             const bool nativeEncryptedRar = entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar;
-            if (!nativeEncryptedRar && entry_.size > 0 && entry_.size <= memoryLimit)
+            if (entry_.size > 0 && entry_.size <= memoryLimit && entry_.size <= SIZE_MAX)
             {
                 try
                 {
                     std::string error;
                     std::vector<unsigned char> extracted;
-                    if (ArchiveExtractEntryToMemory(path_.c_str(), entry_.index, extracted, error) && extracted.size() == entry_.size)
+                    const bool decoded = nativeEncryptedRar
+                        ? RarNativeExtractEncryptedEntryToMemory(path_.c_str(), entry_.index, static_cast<size_t>(memoryLimit), extracted, error)
+                        : ArchiveExtractEntryToMemory(path_.c_str(), entry_.index, extracted, error);
+                    if (decoded && extracted.size() == entry_.size)
                     {
                         abort.check();
                         memoryData_ = std::move(extracted);

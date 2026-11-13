@@ -11,7 +11,7 @@ Archive Stream Player lets supported players browse the audio tracks inside an a
 - **Play common music formats**, including MP3, FLAC, WAV and Ogg Vorbis. AAC, M4A and WMA depend on the player's available decoders.
 - **Read encrypted archives** using saved passwords and, where implemented, player-specific password prompts.
 - **Seek within supported tracks**, so playback does not have to start from the beginning.
-- **Choose efficient playback automatically:** stream eligible files directly, use memory when appropriate, and fall back to a managed temporary cache when needed.
+- **Use stream-first playback:** decompress directly from an archive where possible; if streaming fails or is unavailable, use the configured RAM buffer, then a managed disk cache only as a last resort.
 - **Customize supported player adapters:** configure password prompts, memory limits, temporary-cache budgets and playlist track-title styles.
 - **Work without separate archive-extraction programs or runtime archive DLLs.** Archive reading is built into the project's components.
 - **Keep archives intact.** Playing a track does not rewrite or modify the original ZIP, 7z or RAR file.
@@ -43,7 +43,7 @@ The following have passed tests in at least one supported player or in the share
 - [x] Read supported split and multipart archives.
 - [x] Decrypt supported password-protected ZIP, RAR and 7z entries.
 - [x] Stream eligible archive entries without extracting an entire album. ZIP, non-solid 7z and non-solid RAR direct HTTP streams pass x86/x64 range tests (`archive_player_bridge/test_stream_priority.py`).
-- [x] Use memory or temporary files for archive entries that cannot stream.
+- [x] Use memory before temporary files when archive entries cannot stream, including native in-RAM decryption of encrypted RAR5 entries. The RAR5 data/header password variants pass x86/x64 memory and bridge parity regressions.
 - [x] Verify decoded audio bytes and seeking.
 - [x] Expand archives into individual playlist tracks in supported hosts.
 - [x] Provide portable, self-contained archive readers without external extraction utilities.
@@ -57,7 +57,7 @@ The following have passed tests in at least one supported player or in the share
 - [x] Investigate WACUP 64-bit: confirm the current native-plugin limitation and provide tested archive playback through the local playlist bridge.
 - [x] Add shared password prompts, settings, temporary-cache controls and title templates to the newer AIMP, XMPlay, MusicBee and playlist-bridge adapters.
 - [ ] Finish interactive password-dialog, settings-page and track-title display checks in the actual player interfaces.
-- [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup.
+- [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup, including injected mid-stream faults and cross-player recovery checks.
 - [ ] Improve installer/distribution packages and include the required third-party licence notices.
 - [x] Publish MIT licensing for the original Archive Stream Player code while retaining separate licences for third-party components.
 - [ ] Finish archive-header metadata checks and remaining performance/reliability testing.

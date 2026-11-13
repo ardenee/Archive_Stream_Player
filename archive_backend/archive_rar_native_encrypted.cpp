@@ -10,6 +10,7 @@
 #include "../third_party/unrar/dll.hpp"
 #include <cstring>
 #include <algorithm>
+#include <new>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -44,6 +45,9 @@ namespace
     struct NativeRarPasswordContext
     {
         const std::string* password = nullptr;
+        std::vector<unsigned char>* output = nullptr;
+        size_t written = 0;
+        bool captureFailed = false;
     };
 
     int CALLBACK NativeRarPasswordCallback(UINT message, LPARAM userData, LPARAM p1, LPARAM p2)
@@ -51,6 +55,26 @@ namespace
         const auto* context = reinterpret_cast<const NativeRarPasswordContext*>(userData);
         if ((message == UCM_NEEDPASSWORD || message == UCM_NEEDPASSWORDW) && (!context || !context->password))
             return -1;
+
+        if (message == UCM_PROCESSDATA)
+        {
+            auto* capture = reinterpret_cast<NativeRarPasswordContext*>(userData);
+            if (!capture || !capture->output)
+                return 1;
+
+            const auto* chunk = reinterpret_cast<const unsigned char*>(p1);
+            if (p2 < 0 || (!chunk && p2 != 0) || capture->written > capture->output->size() ||
+                static_cast<size_t>(p2) > capture->output->size() - capture->written)
+            {
+                capture->captureFailed = true;
+                return -1;
+            }
+
+            if (p2 != 0)
+                memcpy(capture->output->data() + capture->written, chunk, static_cast<size_t>(p2));
+            capture->written += static_cast<size_t>(p2);
+            return 1;
+        }
 
         if (message == UCM_NEEDPASSWORD)
         {
@@ -227,6 +251,97 @@ namespace
             return true;
         }
     }
+
+    bool NativeRarTryOnePasswordToMemory(const wchar_t* archivePath, uint32_t index, size_t maxBytes, const std::string& password, std::vector<unsigned char>& data, std::string& error)
+    {
+        data.clear();
+        error.clear();
+        if (password.empty())
+        {
+            error = "Empty password candidate";
+            return false;
+        }
+
+        NativeRarPasswordContext callbackContext{ &password };
+        RAROpenArchiveDataEx open{};
+        open.ArcNameW = const_cast<wchar_t*>(archivePath);
+        open.OpenMode = RAR_OM_EXTRACT;
+        open.Callback = NativeRarPasswordCallback;
+        open.UserData = reinterpret_cast<LPARAM>(&callbackContext);
+
+        NativeRarArchive archive;
+        archive.handle = RAROpenArchiveEx(&open);
+        if (!archive.handle)
+        {
+            error = "Native UnRAR failed to open archive (code " + std::to_string(open.OpenResult) + ")";
+            return false;
+        }
+
+        RARSetPassword(archive.handle, const_cast<char*>(password.c_str()));
+
+        uint32_t currentIndex = 0;
+        for (;;)
+        {
+            RARHeaderDataEx header{};
+            const int readResult = RARReadHeaderEx(archive.handle, &header);
+            if (readResult != ERAR_SUCCESS)
+            {
+                error = readResult == ERAR_END_ARCHIVE ? "Selected encrypted RAR entry not found" :
+                    "Native UnRAR header failed (code " + std::to_string(readResult) + ")";
+                return false;
+            }
+
+            if (currentIndex != index)
+            {
+                const int skipResult = RARProcessFileW(archive.handle, (header.Flags & RHDF_SOLID) ? RAR_TEST : RAR_SKIP, nullptr, nullptr);
+                if (skipResult != ERAR_SUCCESS)
+                {
+                    error = "Native UnRAR could not advance to selected entry (code " + std::to_string(skipResult) + ")";
+                    return false;
+                }
+                ++currentIndex;
+                continue;
+            }
+
+            if ((header.Flags & RHDF_DIRECTORY) || !(header.Flags & RHDF_ENCRYPTED))
+            {
+                error = "Native memory fallback requires an encrypted file entry";
+                return false;
+            }
+
+            const uint64_t expected = (static_cast<uint64_t>(header.UnpSizeHigh) << 32) | header.UnpSize;
+            if (expected > static_cast<uint64_t>(maxBytes))
+            {
+                error = "Encrypted RAR entry exceeds memory limit";
+                return false;
+            }
+
+            std::vector<unsigned char> decoded;
+            try
+            {
+                decoded.resize(static_cast<size_t>(expected));
+            }
+            catch (const std::bad_alloc&)
+            {
+                error = "Insufficient memory for encrypted RAR entry";
+                return false;
+            }
+
+            callbackContext.output = &decoded;
+            callbackContext.written = 0;
+            callbackContext.captureFailed = false;
+            const int decodeResult = RARProcessFileW(archive.handle, RAR_TEST, nullptr, nullptr);
+            callbackContext.output = nullptr;
+            if (decodeResult != ERAR_SUCCESS || callbackContext.captureFailed || callbackContext.written != decoded.size())
+            {
+                error = "Native UnRAR memory test failed (code " + std::to_string(decodeResult) + ")";
+                return false;
+            }
+
+            data = std::move(decoded);
+            return true;
+        }
+    }
 }
 
 bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
@@ -263,6 +378,44 @@ bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t i
 
     error = "Native encrypted RAR extraction failed: " + candidateError;
     DebugLogWrite("WARN", "RAR", "NATIVE_ENCRYPTED_FALLBACK_FAIL", "index=%u | candidates=%zu | error=%s", static_cast<unsigned>(index), passwordList.passwords.size(), error.c_str());
+    return false;
+}
+
+bool RarNativeExtractEncryptedEntryToMemory(const wchar_t* archivePath, uint32_t index, size_t maxBytes, std::vector<unsigned char>& data, std::string& error)
+{
+    data.clear();
+    error.clear();
+    if (!archivePath || !*archivePath)
+    {
+        error = "Invalid native encrypted RAR memory request";
+        return false;
+    }
+
+    ArchivePasswordList passwordList;
+    if (!ArchivePasswordLoadList(passwordList, error))
+        return false;
+
+    if (passwordList.passwords.empty())
+    {
+        error = "No saved RAR passwords are available";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+
+    std::string candidateError;
+    for (const std::string& password : passwordList.passwords)
+    {
+        if (NativeRarTryOnePasswordToMemory(archivePath, index, maxBytes, password, data, candidateError))
+        {
+            DebugLogWrite("INFO", "RAR", "NATIVE_ENCRYPTED_MEMORY_OK", "index=%u | bytes=%zu", static_cast<unsigned>(index), data.size());
+            return true;
+        }
+    }
+
+    data.clear();
+    error = "Native encrypted RAR memory decode failed: " + candidateError;
+    DebugLogWrite("WARN", "RAR", "NATIVE_ENCRYPTED_MEMORY_FAIL", "index=%u | candidates=%zu | error=%s", static_cast<unsigned>(index), passwordList.passwords.size(), error.c_str());
     return false;
 }
 

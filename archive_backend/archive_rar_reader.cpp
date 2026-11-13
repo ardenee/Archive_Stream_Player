@@ -1751,6 +1751,7 @@ void RarCloseEntryStream(ArchiveBackendStream& stream)
 #include "archive_rar_reader.h"
 #include "archive_rar_libarchive.h"
 #include "archive_rar_native_encrypted.h"
+#include "archive_common.h"
 #include "archive_passwords.h"
 #include "debug_log.h"
 
@@ -1813,6 +1814,31 @@ bool RarListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& entri
 
 bool RarExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std::vector<unsigned char>& data, std::string& error)
 {
+    // The shared memory route must also work with encrypted RAR5 entries that
+    // libarchive cannot decode. Native UnRAR captures RAR_TEST output in RAM.
+    ArchiveEntry nativeEntry;
+    std::string lookupError;
+    if (RarNativeLookupEntryMetadata(archivePath, index, nativeEntry, lookupError) && nativeEntry.isEncrypted)
+    {
+        // Do not allow the native header to request an unbounded allocation,
+        // even if an adapter trusted a smaller size from another RAR reader.
+        const size_t limit = static_cast<size_t>((std::min)(nativeEntry.size, ARCHIVE_MAX_EXTRACT_TO_MEMORY_BYTES));
+        std::string nativeError;
+        if (RarNativeExtractEncryptedEntryToMemory(archivePath, index, limit, data, nativeError))
+        {
+            error.clear();
+            return true;
+        }
+
+        // Preserve the existing libarchive password-prompt/runtime-password
+        // path when no saved native UnRAR candidate can decode the entry.
+        if (LibarchiveRarExtractEntryToMemory(archivePath, index, data, error))
+            return true;
+
+        error = nativeError + "; " + error;
+        return false;
+    }
+
     return LibarchiveRarExtractEntryToMemory(archivePath, index, data, error);
 }
 

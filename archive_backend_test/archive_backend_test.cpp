@@ -16,6 +16,7 @@
 #include "archive_format.h"
 #include "archive_common.h"
 #include "archive_passwords.h"
+#include "archive_rar_native_encrypted.h"
 #include "archive_reader.h"
 
 static bool ParseUInt32Arg(const wchar_t* text, uint32_t& outValue)
@@ -858,6 +859,37 @@ static int RunPasswordedArchiveFileRegression(const wchar_t* archivePath, const 
     {
         std::printf("PASSWORD_TEST_SIZE_FAIL: expected=%llu got=%llu\n", (unsigned long long)found->size, (unsigned long long)extractedSize);
         return 1;
+    }
+
+    if (DetectArchiveFormatFromPath(archivePath) == ArchiveFormat::Rar && found->isEncrypted && extractedSize > 0 && extractedSize <= 8 * 1024 * 1024)
+    {
+        std::vector<unsigned char> memory;
+        if (!ArchiveExtractEntryToMemory(archivePath, index, memory, error) || memory.size() != extractedSize)
+        {
+            std::printf("PASSWORD_MEMORY_FAIL: %s\n", error.c_str());
+            return 1;
+        }
+
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, outputPath, L"rb") != 0 || !file)
+            return 1;
+        std::vector<unsigned char> expected(static_cast<size_t>(extractedSize));
+        const size_t got = fread(expected.data(), 1, expected.size(), file);
+        fclose(file);
+        if (got != expected.size() || memory != expected)
+        {
+            std::printf("PASSWORD_MEMORY_PARITY_FAIL: index=%u\n", (unsigned)index);
+            return 1;
+        }
+
+        std::vector<unsigned char> bounded;
+        if (RarNativeExtractEncryptedEntryToMemory(archivePath, index, memory.size() - 1, bounded, error) ||
+            !bounded.empty() || error.find("exceeds memory limit") == std::string::npos)
+        {
+            std::printf("PASSWORD_MEMORY_LIMIT_FAIL: index=%u\n", (unsigned)index);
+            return 1;
+        }
+        std::printf("PASSWORD_MEMORY_PASS: index=%u bytes=%zu parity=ok limit=ok\n", (unsigned)index, memory.size());
     }
 
     std::printf("PASSWORD_TEST_PASS: index=%u bytes=%llu entries=%zu encrypted=%d\n", (unsigned)index, (unsigned long long)extractedSize, entries.size(), found->isEncrypted ? 1 : 0);

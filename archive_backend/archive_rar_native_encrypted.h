@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -9,6 +10,9 @@
 // Uses the configured backend password list and the already-linked UnRAR SDK.
 // Only the selected entry is written, to a caller-owned destination path.
 bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error);
+// UnRAR RAR_TEST delivers decrypted bytes through UCM_PROCESSDATA, without
+// creating a temporary file. maxBytes bounds the allocation before decoding.
+bool RarNativeExtractEncryptedEntryToMemory(const wchar_t* archivePath, uint32_t index, size_t maxBytes, std::vector<unsigned char>& data, std::string& error);
 
 // Fallback listing when RAR5 filename encryption makes libarchive's listing empty.
 // RAR CRC metadata is copied only from native archive headers, never recalculated.

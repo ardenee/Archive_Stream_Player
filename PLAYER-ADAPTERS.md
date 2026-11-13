@@ -1,4 +1,22 @@
-# Additional player adapters: XMPlay, AIMP, and WACUP
+# Player adapters: streaming behavior, setup and tests
+
+## Stream-first routing and failure recovery (13 November 2026)
+
+Our **player adapters** select the entry route using the shared archive backend: **direct incremental archive stream -> in-memory decompression within the configured buffer -> temporary disk cache only when necessary**. The host player is not asked to extract the archive. AIMP's native `IAIMPStream`, foobar2000's virtual-file reader, and the localhost HTTP bridge all expose decoded archive bytes on demand to the player codec. There is no full-archive extraction step on a successful stream route. Solid layouts and unsupported encrypted codecs may require the memory route from the outset.
+
+**Encrypted RAR5 memory fallback:** The shared backend now uses the statically linked UnRAR SDK's `RAR_TEST` / `UCM_PROCESSDATA` callback to capture a selected encrypted entry directly in RAM, with a hard pre-allocation size check and UnRAR's test/CRC verification. It does not create a transient extracted audio file. The same `ArchiveExtractEntryToMemory()` API is used by AIMP, the HTTP bridge and foobar2000; foobar2000 also has a direct native-RAR path to avoid the previously problematic libarchive RAR5 decoder. Entries above the memory limit continue to use the permitted disk fallback.
+
+**Mid-stream recovery:** AIMP and foobar2000 can now switch from an archive stream to memory, then cache, on a backend read/seek failure. They retain the already delivered byte offset and restart the failed read from that offset rather than skipping or duplicating bytes. A cancellation is not retried. These paths compile; deterministic injected mid-stream failure tests and audible real-player validation remain outstanding. The HTTP bridge probes its stream before sending headers, but a decoding failure **after** the HTTP response begins still terminates that response; it does not yet recover mid-response.
+
+**XMPlay exception:** The native `XMPARC` interface returns a completed host-owned memory block, so incremental reads by the plugin are **not** true on-demand host playback. Use the XMPlay HTTP bridge route for genuine archive streaming. This is a host API limitation, not a reason to extract the archive by default.
+
+The repeatable encrypted-RAR regression uses WinRAR **only to generate small synthetic test archives**, never at playback runtime:
+
+~~~powershell
+py -3.13 '.\archive_backend_test\test_encrypted_rar_memory.py'
+~~~
+
+**DEV confirmed:** encrypted RAR5 with data encryption and with encrypted headers each passed x86/x64 in-memory byte parity and memory-limit rejection; both types also served correct HTTP byte ranges on x86/x64 with `ROUTE_COUNTS stream=0 memory=1 cache=0`. The installed WinRAR cannot generate legacy RAR4 archives for this test, so RAR4 was explicitly skipped rather than reported as passing. The normal ZIP/non-solid 7z/non-solid RAR direct stream regressions remain separate.
 
 ## Shared preferences and password / cache / title parity (13 November 2026)
 

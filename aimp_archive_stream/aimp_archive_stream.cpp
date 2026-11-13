@@ -157,41 +157,7 @@ namespace
                 ArchiveCloseEntryStream(backend_);
             }
 
-            const auto preferences = ArchiveAdapterPreferencesLoad();
-            if (entry_.size <= static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024)
-            {
-                if (ArchiveExtractEntryToMemory(archive_.c_str(), entry_.index, memory_, error) &&
-                    memory_.size() == entry_.size)
-                {
-                    mode_ = Mode::Memory;
-                    DebugLogWrite("INFO", "AIMP", "ROUTE_MEMORY", "index=%u | bytes=%zu", entry_.index, memory_.size());
-                    return S_OK;
-                }
-                memory_.clear();
-            }
-
-            if (preferences.cacheLimitMb == 0 || entry_.size > static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024)
-                return E_FAIL;
-            wchar_t folder[MAX_PATH]{};
-            wchar_t tempFile[MAX_PATH]{};
-            if (!GetTempPathW(MAX_PATH, folder) || !GetTempFileNameW(folder, L"ASP", 0, tempFile))
-                return E_FAIL;
-            cachePath_ = tempFile;
-            if (!ArchiveExtractEntryToFile(archive_.c_str(), entry_.index, cachePath_.c_str(), error))
-            {
-                DebugLogWrite("WARN", "AIMP", "CACHE_FAIL", "index=%u | error=%s", entry_.index, error.c_str());
-                return E_FAIL;
-            }
-            cache_ = CreateFileW(cachePath_.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_RANDOM_ACCESS, nullptr);
-            if (cache_ == INVALID_HANDLE_VALUE)
-                return E_FAIL;
-            LARGE_INTEGER actual{};
-            if (!GetFileSizeEx(cache_, &actual) || static_cast<uint64_t>(actual.QuadPart) != entry_.size)
-                return E_FAIL;
-            mode_ = Mode::Cache;
-            DebugLogWrite("INFO", "AIMP", "ROUTE_CACHE", "index=%u | size=%llu", entry_.index, (unsigned long long)entry_.size);
-            return S_OK;
+            return OpenFallback(error) ? S_OK : E_FAIL;
         }
 
         HRESULT WINAPI QueryInterface(REFIID iid, void** out) override
@@ -233,7 +199,10 @@ namespace
             if (target < 0 || static_cast<uint64_t>(target) > entry_.size)
                 return E_INVALIDARG;
             if (mode_ == Mode::Stream && !ArchiveSeekEntryStream(backend_, static_cast<uint64_t>(target)))
-                return E_FAIL;
+            {
+                if (!RecoverFromStreamFailure("archive seek failed"))
+                    return E_FAIL;
+            }
             if (mode_ == Mode::Cache)
             {
                 LARGE_INTEGER offset64{};
@@ -254,7 +223,19 @@ namespace
                 return 0;
             size_t delivered = 0;
             if (mode_ == Mode::Stream)
-                delivered = ArchiveReadEntryStream(backend_, buffer, wanted);
+            {
+                const auto result = ArchiveReadEntryStreamDetailed(backend_, buffer, wanted);
+                if (result.errorKind != ArchiveStreamErrorKind::None)
+                {
+                    if ((result.errorKind == ArchiveStreamErrorKind::BackendFailure ||
+                         result.errorKind == ArchiveStreamErrorKind::TruncatedEntry) &&
+                        RecoverFromStreamFailure(result.message.c_str()))
+                        return Read(buffer, count);
+
+                    return -1;
+                }
+                delivered = result.bytesRead;
+            }
             else if (mode_ == Mode::Memory)
             {
                 memcpy(buffer, memory_.data() + static_cast<size_t>(position_), wanted);
@@ -279,6 +260,71 @@ namespace
             return E_NOTIMPL;
         }
     private:
+        bool OpenFallback(std::string& error)
+        {
+            const auto preferences = ArchiveAdapterPreferencesLoad();
+            const uint64_t memoryLimit = static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024;
+            if (entry_.size <= memoryLimit && entry_.size <= SIZE_MAX)
+            {
+                if (ArchiveExtractEntryToMemory(archive_.c_str(), entry_.index, memory_, error) &&
+                    memory_.size() == entry_.size)
+                {
+                    mode_ = Mode::Memory;
+                    DebugLogWrite("INFO", "AIMP", "ROUTE_MEMORY", "index=%u | bytes=%zu", entry_.index, memory_.size());
+                    return true;
+                }
+                memory_.clear();
+            }
+
+            if (preferences.cacheLimitMb == 0 || entry_.size > static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024)
+                return false;
+
+            wchar_t folder[MAX_PATH]{};
+            wchar_t tempFile[MAX_PATH]{};
+            if (!GetTempPathW(MAX_PATH, folder) || !GetTempFileNameW(folder, L"ASP", 0, tempFile))
+                return false;
+            cachePath_ = tempFile;
+            if (!ArchiveExtractEntryToFile(archive_.c_str(), entry_.index, cachePath_.c_str(), error))
+            {
+                DebugLogWrite("WARN", "AIMP", "CACHE_FAIL", "index=%u | error=%s", entry_.index, error.c_str());
+                return false;
+            }
+
+            cache_ = CreateFileW(cachePath_.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_RANDOM_ACCESS, nullptr);
+            if (cache_ == INVALID_HANDLE_VALUE)
+                return false;
+
+            LARGE_INTEGER actual{};
+            if (!GetFileSizeEx(cache_, &actual) || actual.QuadPart < 0 ||
+                static_cast<uint64_t>(actual.QuadPart) != entry_.size)
+                return false;
+
+            LARGE_INTEGER offset{};
+            offset.QuadPart = static_cast<LONGLONG>(position_);
+            if (!SetFilePointerEx(cache_, offset, nullptr, FILE_BEGIN))
+                return false;
+
+            mode_ = Mode::Cache;
+            DebugLogWrite("INFO", "AIMP", "ROUTE_CACHE", "index=%u | size=%llu", entry_.index, (unsigned long long)entry_.size);
+            return true;
+        }
+
+        bool RecoverFromStreamFailure(const char* reason)
+        {
+            DebugLogWrite("WARN", "AIMP", "STREAM_RECOVER", "index=%u | resume_at=%llu | reason=%s", entry_.index, (unsigned long long)position_, reason ? reason : "unknown");
+            ArchiveCloseEntryStream(backend_);
+            mode_ = Mode::None;
+            std::string error;
+            if (!OpenFallback(error))
+            {
+                DebugLogWrite("ERROR", "AIMP", "STREAM_RECOVER_FAIL", "index=%u | error=%s", entry_.index, error.c_str());
+                return false;
+            }
+            DebugLogWrite("INFO", "AIMP", "STREAM_RECOVER_OK", "index=%u | resume_at=%llu | route=%s", entry_.index, (unsigned long long)position_, mode_ == Mode::Memory ? "memory" : "cache");
+            return true;
+        }
+
         enum class Mode { None, Stream, Memory, Cache } mode_ = Mode::None;
         ComCounter refs_;
         std::wstring archive_;
