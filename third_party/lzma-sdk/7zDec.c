@@ -8,6 +8,7 @@
 /* #define Z7_PPMD_SUPPORT */
 
 #include "7z.h"
+#include "7zAesDec.h"
 #include "7zCrc.h"
 
 #include "Bcj2.h"
@@ -19,6 +20,22 @@
 #ifdef Z7_PPMD_SUPPORT
 #include "Ppmd7.h"
 #endif
+
+/* A scoped thread-local UTF-16 password allows the original C archive
+   parser to decrypt both encoded headers and data folders, without changing
+   the public SzArEx_Open / SzArEx_Extract signatures or using a DLL. */
+#if defined(_MSC_VER)
+static __declspec(thread) const UInt16 *g_7zAesPassword;
+#else
+static _Thread_local const UInt16 *g_7zAesPassword;
+#endif
+
+const UInt16 *Sz7z_SetPassword(const UInt16 *password)
+{
+  const UInt16 *previous = g_7zAesPassword;
+  g_7zAesPassword = password;
+  return previous;
+}
 
 #define k_Copy 0
 #ifndef Z7_NO_METHOD_LZMA2
@@ -421,6 +438,55 @@ static SRes SzFolder_Decode2(const CSzFolder *folder,
   SizeT tempSizes[3] = { 0, 0, 0};
   SizeT tempSize3 = 0;
   Byte *tempBuf3 = 0;
+
+  /* 7z AES stores an AES coder before LZMA/LZMA2, optionally followed
+     by a Delta/BCJ filter. Decrypt on demand, then feed exactly the same
+     plaintext bytes into the established static decoder pipeline. */
+  if (folder->Coders[0].MethodID == 0x06F10701)
+  {
+    CSzFolder plain;
+    UInt64 positions[2];
+    UInt32 i;
+    C7zAesLook aes;
+    SRes res;
+    if (folder->NumCoders < 2 || folder->NumCoders > 3 ||
+        folder->NumBonds != folder->NumCoders - 1 ||
+        folder->NumPackStreams != 1 || folder->PackStreams[0] != 0 ||
+        folder->UnpackStream != folder->NumCoders - 1 ||
+        !IS_SUPPORTED_CODER(&folder->Coders[1]))
+      return SZ_ERROR_UNSUPPORTED;
+    for (i = 0; i < folder->NumBonds; i++)
+    {
+      if (folder->Bonds[i].InIndex != i + 1 ||
+          folder->Bonds[i].OutIndex != i)
+        return SZ_ERROR_UNSUPPORTED;
+    }
+    plain = *folder;
+    plain.NumCoders--;
+    plain.NumBonds--;
+    plain.UnpackStream--;
+    for (i = 0; i < plain.NumCoders; i++)
+      plain.Coders[i] = folder->Coders[i + 1];
+    for (i = 0; i < plain.NumBonds; i++)
+    {
+      plain.Bonds[i].InIndex = folder->Bonds[i + 1].InIndex - 1;
+      plain.Bonds[i].OutIndex = folder->Bonds[i + 1].OutIndex - 1;
+    }
+    if (CheckSupportedFolder(&plain) != SZ_OK)
+      return SZ_ERROR_UNSUPPORTED;
+    positions[0] = 0;
+    positions[1] = unpackSizes[0];
+    res = Sz7zAes_Init(&aes, inStream, startPos + packPositions[0],
+        packPositions[1] - packPositions[0], propsData + folder->Coders[0].PropsOffset,
+        folder->Coders[0].PropsSize, g_7zAesPassword);
+    if (res != SZ_OK)
+      return res;
+    res = SzFolder_Decode2(&plain, propsData, unpackSizes + 1, positions,
+        &aes.vt, 0, outBuffer, outSize, allocMain, tempBuf);
+    /* AES buffers hold plaintext and expanded key material. */
+    Sz7zAes_Clear(&aes);
+    return res;
+  }
 
   RINOK(CheckSupportedFolder(folder))
 

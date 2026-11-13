@@ -5,10 +5,12 @@
 #include <sstream>
 #include <new>
 #include <string>
+#include <functional>
 #include <vector>
 
 #include "archive_common.h"
 #include "archive_7z_reader.h"
+#include "archive_passwords.h"
 #include "archive_7z_stream_reader.h"
 #include "debug_log.h"
 
@@ -468,6 +470,133 @@ static bool SevenZipConcatStreamOpen(SevenZipConcatInStream* stream, const wchar
     return true;
 }
 
+// The SDK receives passwords only during the synchronous Open/Extract call.
+// Restore the caller's thread-local value before returning (including on error).
+class SevenZipScopedPassword
+{
+public:
+    explicit SevenZipScopedPassword(const std::string& utf8)
+    {
+        if (!utf8.empty())
+        {
+            int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.c_str(), -1, nullptr, 0);
+            if (size > 0)
+            {
+                wide_.resize(static_cast<size_t>(size));
+                MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.c_str(), -1, wide_.data(), size);
+            }
+        }
+        previous_ = Sz7z_SetPassword(wide_.empty() ? nullptr : reinterpret_cast<const UInt16*>(wide_.c_str()));
+    }
+
+    ~SevenZipScopedPassword()
+    {
+        Sz7z_SetPassword(previous_);
+        if (!wide_.empty())
+            SecureZeroMemory(wide_.data(), wide_.size() * sizeof(wchar_t));
+    }
+
+    SevenZipScopedPassword(const SevenZipScopedPassword&) = delete;
+    SevenZipScopedPassword& operator=(const SevenZipScopedPassword&) = delete;
+private:
+    std::wstring wide_;
+    const UInt16* previous_ = nullptr;
+};
+
+struct SevenZipPasswordCandidate
+{
+    std::string value;
+    bool save = false;
+};
+
+static std::string SevenZipPasswordKey(const wchar_t* archivePath)
+{
+    if (!archivePath)
+        return {};
+    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, archivePath, -1, nullptr, 0, nullptr, nullptr);
+    if (bytes <= 1)
+        return {};
+    std::string key(static_cast<size_t>(bytes), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, archivePath, -1, key.data(), bytes, nullptr, nullptr) != bytes)
+        return {};
+    key.pop_back();
+    return key;
+}
+
+static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
+    const std::function<bool(const std::string&, std::string&)>& tryCandidate, std::string& error)
+{
+    const std::string key = SevenZipPasswordKey(path);
+    // Unencrypted 7z remains a single SDK attempt without password-list I/O.
+    std::string lastError;
+    if (tryCandidate("", lastError))
+    {
+        error.clear();
+        return true;
+    }
+    std::vector<SevenZipPasswordCandidate> candidates;
+    auto addCandidate = [&](const std::string& value)
+    {
+        if (value.empty())
+            return;
+        for (const auto& candidate : candidates)
+            if (candidate.value == value)
+                return;
+        candidates.push_back({value, false});
+    };
+    std::vector<std::string> runtime;
+    ArchivePasswordGetRuntimePasswords(key.c_str(), runtime);
+    for (const auto& candidate : runtime)
+        addCandidate(candidate);
+    ArchivePasswordList saved;
+    std::string listError;
+    if (!ArchivePasswordLoadList(saved, listError))
+        DebugLogWrite("WARN", "7Z", "PASSWORD_LIST_FAIL", "error=%s", listError.c_str());
+    for (const auto& candidate : saved.passwords)
+        addCandidate(candidate);
+
+    for (const auto& candidate : candidates)
+    {
+        lastError.clear();
+        if (tryCandidate(candidate.value, lastError))
+        {
+            if (!candidate.value.empty())
+            {
+                ArchivePasswordAddRuntimePassword(key.c_str(), candidate.value.c_str());
+                ArchivePasswordNotifyAccepted(key.c_str());
+            }
+            error.clear();
+            return true;
+        }
+    }
+    if (!ArchivePasswordIsArchiveCancelled(key.c_str()))
+    {
+        char buffer[256]{};
+        bool savePassword = false;
+        if (ArchivePasswordPromptUser(key.c_str(), entry.c_str(), buffer, sizeof(buffer), &savePassword))
+        {
+            const std::string entered = buffer;
+            SecureZeroMemory(buffer, sizeof(buffer));
+            if (!entered.empty() && tryCandidate(entered, lastError))
+            {
+                ArchivePasswordAddRuntimePassword(key.c_str(), entered.c_str());
+                ArchivePasswordNotifyAccepted(key.c_str());
+                if (savePassword)
+                {
+                    std::string saveError;
+                    if (!ArchivePasswordAppendIfMissing(entered.c_str(), saveError))
+                        DebugLogWrite("WARN", "7Z", "PASSWORD_SAVE_FAIL", "error=%s", saveError.c_str());
+                }
+                error.clear();
+                return true;
+            }
+        }
+        SecureZeroMemory(buffer, sizeof(buffer));
+    }
+    error = lastError.empty() ? "7z archive password missing or incorrect" : lastError;
+    return false;
+}
+
 struct SevenZipOpenArchive
 {
     CFileInStream fileStream{};
@@ -510,7 +639,7 @@ struct SevenZipOpenArchive
     // All open/setup failures are logged because they block archive expansion and
     // playback routing.
     // -------------------------------------------------------------------------
-    bool open(const wchar_t* archivePath, std::string& error)
+    bool open(const wchar_t* archivePath, std::string& error, const std::string& password = {})
     {
         if (!archivePath || !*archivePath)
         {
@@ -560,6 +689,7 @@ struct SevenZipOpenArchive
         LookToRead2_INIT(&lookStream);
         CrcGenerateTable();
 
+        SevenZipScopedPassword scope(password);
         SRes res = SzArEx_Open(&db, &lookStream.vt, &g_Alloc, &g_AllocTemp);
 
         if (res != SZ_OK)
@@ -678,14 +808,14 @@ static bool GetSevenZipFolderPrimaryMethod(const CSzArEx* db, UInt32 folderIndex
     return true;
 }
 
-bool SevenZipListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error)
+static bool SevenZipListEntriesCore(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error, const std::string& password)
 {
     entries.clear();
     error.clear();
 
     SevenZipOpenArchive archive;
 
-    if (!archive.open(archivePath, error))
+    if (!archive.open(archivePath, error, password))
     {
         DebugLogWrite("ERROR", "7Z", "LIST_FAIL", "reason=open_failed | error=%s", error.c_str());
         return false;
@@ -769,6 +899,26 @@ bool SevenZipListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& 
             }
         }
 
+        if (!entry.isFolder && entry.folderIndex < archive.db.db.NumFolders)
+        {
+            CSzFolder folder{};
+            CSzData props{};
+            props.Data = archive.db.db.CodersData + archive.db.db.FoCodersOffsets[entry.folderIndex];
+            props.Size = archive.db.db.FoCodersOffsets[(size_t)entry.folderIndex + 1] - archive.db.db.FoCodersOffsets[entry.folderIndex];
+            if (SzGetNextFolderItem(&folder, &props) == SZ_OK && props.Size == 0)
+            {
+                for (UInt32 coder = 0; coder < folder.NumCoders; ++coder)
+                {
+                    if (folder.Coders[coder].MethodID == 0x06F10701)
+                    {
+                        entry.isEncrypted = true;
+                        entry.streamCandidate = false;
+                        break;
+                    }
+                }
+            }
+        }
+
         try
         {
             entries.push_back(entry);
@@ -782,6 +932,14 @@ bool SevenZipListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& 
     }
 
     return true;
+}
+
+bool SevenZipListEntries(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error)
+{
+    return SevenZipWithPasswords(archivePath, "", [&](const std::string& password, std::string& attemptError)
+    {
+        return SevenZipListEntriesCore(archivePath, entries, attemptError, password);
+    }, error);
 }
 
 static bool WriteBufferToFileW(const wchar_t* outputPath, const void* data, size_t dataSize, std::string& error)
@@ -834,14 +992,14 @@ static bool WriteBufferToFileW(const wchar_t* outputPath, const void* data, size
     return true;
 }
 
-bool SevenZipExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std::vector<unsigned char>& data, std::string& error)
+static bool SevenZipExtractEntryToMemoryCore(const wchar_t* archivePath, uint32_t index, std::vector<unsigned char>& data, std::string& error, const std::string& password)
 {
     data.clear();
     error.clear();
 
     SevenZipOpenArchive archive;
 
-    if (!archive.open(archivePath, error))
+    if (!archive.open(archivePath, error, password))
     {
         DebugLogWrite("ERROR", "7Z", "MEMORY_EXTRACT_FAIL", "index=%u | reason=open_failed | error=%s", (unsigned int)index, error.c_str());
         return false;
@@ -878,6 +1036,7 @@ bool SevenZipExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, st
     size_t offset = 0;
     size_t outSizeProcessed = 0;
 
+    SevenZipScopedPassword scope(password);
     SRes res = SzArEx_Extract(&archive.db, &archive.lookStream.vt, index, &blockIndex, &outBuffer, &outBufferSize, &offset, &outSizeProcessed, &g_Alloc, &g_AllocTemp);
 
     if (res != SZ_OK)
@@ -935,7 +1094,15 @@ bool SevenZipExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, st
     return true;
 }
 
-bool SevenZipExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
+bool SevenZipExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std::vector<unsigned char>& data, std::string& error)
+{
+    return SevenZipWithPasswords(archivePath, std::to_string(index), [&](const std::string& password, std::string& attemptError)
+    {
+        return SevenZipExtractEntryToMemoryCore(archivePath, index, data, attemptError, password);
+    }, error);
+}
+
+static bool SevenZipExtractEntryToFileCore(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error, const std::string& password)
 {
     error.clear();
 
@@ -948,7 +1115,7 @@ bool SevenZipExtractEntryToFile(const wchar_t* archivePath, uint32_t index, cons
 
     SevenZipOpenArchive archive;
 
-    if (!archive.open(archivePath, error))
+    if (!archive.open(archivePath, error, password))
     {
         DebugLogWrite("ERROR", "7Z", "FILE_EXTRACT_FAIL", "index=%u | reason=open_failed | error=%s", (unsigned int)index, error.c_str());
         return false;
@@ -985,6 +1152,7 @@ bool SevenZipExtractEntryToFile(const wchar_t* archivePath, uint32_t index, cons
     size_t offset = 0;
     size_t outSizeProcessed = 0;
 
+    SevenZipScopedPassword scope(password);
     SRes res = SzArEx_Extract(&archive.db, &archive.lookStream.vt, index, &blockIndex, &outBuffer, &outBufferSize, &offset, &outSizeProcessed, &g_Alloc, &g_AllocTemp);
 
     if (res != SZ_OK)
@@ -1035,7 +1203,15 @@ bool SevenZipExtractEntryToFile(const wchar_t* archivePath, uint32_t index, cons
 // failed entry is logged and skipped so one bad item does not stop the rest of
 // the cache-warm pass.
 // -----------------------------------------------------------------------------
-bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector<SevenZipExtractFileRequest>& requests, std::vector<uint32_t>& outSucceededIndexes, std::string& error)
+bool SevenZipExtractEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
+{
+    return SevenZipWithPasswords(archivePath, std::to_string(index), [&](const std::string& password, std::string& attemptError)
+    {
+        return SevenZipExtractEntryToFileCore(archivePath, index, outputPath, attemptError, password);
+    }, error);
+}
+
+static bool SevenZipExtractEntriesToFilesCore(const wchar_t* archivePath, const std::vector<SevenZipExtractFileRequest>& requests, std::vector<uint32_t>& outSucceededIndexes, std::string& error, const std::string& password)
 {
     outSucceededIndexes.clear();
     error.clear();
@@ -1056,7 +1232,7 @@ bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector
 
     SevenZipOpenArchive archive;
 
-    if (!archive.open(archivePath, error))
+    if (!archive.open(archivePath, error, password))
     {
         DebugLogWrite("ERROR", "7Z", "BATCH_FILE_EXTRACT_FAIL", "requests=%zu | reason=open_failed | error=%s", requests.size(), error.c_str());
         return false;
@@ -1140,6 +1316,7 @@ bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector
 
         DebugLogWrite("INFO", "7Z", "BATCH_FILE_EXTRACT_ITEM_START", "index=%u | folder=%u | previous_block=%u | expected=%llu", (unsigned int)request.index, (unsigned int)folderIndex, (unsigned int)blockIndex, (unsigned long long)expectedSize64);
 
+        SevenZipScopedPassword scope(password);
         SRes res = SzArEx_Extract(&archive.db, &archive.lookStream.vt, request.index, &blockIndex, &outBuffer, &outBufferSize, &offset, &outSizeProcessed, &g_Alloc, &g_AllocTemp);
 
         if (res != SZ_OK)
@@ -1224,6 +1401,29 @@ bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector
     return anySuccess;
 }
 
+bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector<SevenZipExtractFileRequest>& requests, std::vector<uint32_t>& outSucceededIndexes, std::string& error)
+{
+    outSucceededIndexes.clear();
+    std::vector<SevenZipExtractFileRequest> pending = requests;
+    return SevenZipWithPasswords(archivePath, "", [&](const std::string& password, std::string& attemptError)
+    {
+        std::vector<uint32_t> completed;
+        SevenZipExtractEntriesToFilesCore(archivePath, pending, completed, attemptError, password);
+        for (uint32_t index : completed)
+        {
+            if (std::find(outSucceededIndexes.begin(), outSucceededIndexes.end(), index) == outSucceededIndexes.end())
+                outSucceededIndexes.push_back(index);
+        }
+        pending.erase(std::remove_if(pending.begin(), pending.end(), [&](const SevenZipExtractFileRequest& request)
+        {
+            return std::find(completed.begin(), completed.end(), request.index) != completed.end();
+        }), pending.end());
+        // Partial unencrypted batches must continue trying passwords for
+        // encrypted members rather than prematurely declaring the pass done.
+        return pending.empty();
+    }, error);
+}
+
 bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error)
 {
     stream.impl = nullptr;
@@ -1272,6 +1472,25 @@ bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, Archive
         error = "7z stream open failed: solid 7z entries are not streamable";
         DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | folder=%u | files_in_folder=%u | reason=solid_not_streamable", (unsigned int)index, (unsigned int)folderIndex, (unsigned int)filesInFolder);
         return false;
+    }
+
+    if (folderIndex < archive.db.db.NumFolders)
+    {
+        CSzFolder folder{};
+        CSzData props{};
+        props.Data = archive.db.db.CodersData + archive.db.db.FoCodersOffsets[folderIndex];
+        props.Size = archive.db.db.FoCodersOffsets[(size_t)folderIndex + 1] - archive.db.db.FoCodersOffsets[folderIndex];
+        if (SzGetNextFolderItem(&folder, &props) == SZ_OK && props.Size == 0)
+        {
+            for (UInt32 coder = 0; coder < folder.NumCoders; ++coder)
+            {
+                if (folder.Coders[coder].MethodID == 0x06F10701)
+                {
+                    error = "Encrypted 7z requires static AES extraction rather than direct stream";
+                    return false;
+                }
+            }
+        }
     }
 
     if (!SevenZipOpenNonSolidEntryStreamImpl(archivePath, index, stream, error))

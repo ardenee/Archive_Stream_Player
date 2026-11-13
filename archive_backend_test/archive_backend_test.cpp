@@ -908,7 +908,7 @@ int wmain(int argc, wchar_t* argv[])
     {
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
-        std::printf("  archive_backend_test.exe pwfiletest archive.rar passwords.txt index extracted.file\n");
+        std::printf("  archive_backend_test.exe pwfiletest archive.rar-or-7z passwords.txt index extracted.file\n");
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");
         std::printf("  archive_backend_test.exe canceltest archive.zip\n");
         std::printf("  archive_backend_test.exe legacytest archive.zip\n");

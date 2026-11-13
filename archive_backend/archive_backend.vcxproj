@@ -151,6 +151,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\third_party\lzma-sdk\7z.h" />
+    <ClInclude Include="..\third_party\lzma-sdk\7zAesDec.h" />
     <ClInclude Include="..\third_party\lzma-sdk\7zTypes.h" />
     <ClInclude Include="archive_7z_reader.h" />
     <ClInclude Include="archive_7z_stream_reader.h" />
@@ -179,6 +180,11 @@
     <ClCompile Include="..\third_party\lzma-sdk\7zCrc.c" />
     <ClCompile Include="..\third_party\lzma-sdk\7zCrcOpt.c" />
     <ClCompile Include="..\third_party\lzma-sdk\7zDec.c" />
+    <ClCompile Include="..\third_party\lzma-sdk\7zAesDec.c" />
+    <ClCompile Include="..\third_party\lzma-sdk\Aes.c" />
+    <ClCompile Include="..\third_party\lzma-sdk\AesOpt.c" />
+    <ClCompile Include="..\third_party\lzma-sdk\Sha256.c" />
+    <ClCompile Include="..\third_party\lzma-sdk\Sha256Opt.c" />
     <ClCompile Include="..\third_party\lzma-sdk\7zFile.c" />
     <ClCompile Include="..\third_party\lzma-sdk\7zStream.c" />
     <ClCompile Include="..\third_party\lzma-sdk\Bcj2.c" />

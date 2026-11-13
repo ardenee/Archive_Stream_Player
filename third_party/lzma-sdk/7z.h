@@ -172,6 +172,10 @@ UInt16 *SzArEx_GetFullNameUtf16_Back(const CSzArEx *p, size_t fileIndex, UInt16 
     Free *outBuffer and set *outBuffer to 0, if you want to flush cache.
 */
 
+/* Scoped UTF-16 password for AES-encrypted 7z headers and data.
+   Returns the prior thread-local password; caller must restore it. */
+const UInt16 *Sz7z_SetPassword(const UInt16 *password);
+
 SRes SzArEx_Extract(
     const CSzArEx *db,
     ILookInStreamPtr inStream,
