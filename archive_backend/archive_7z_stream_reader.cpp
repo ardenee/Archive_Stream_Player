@@ -944,6 +944,9 @@ static size_t ReadCopyBytes(SevenZipNonSolidStreamState* state, void* buffer, si
             break;
         }
 
+        if (state->deltaDistance != 0)
+            Delta_Decode(state->deltaState, state->deltaDistance, out + totalRead, want);
+
         totalRead += want;
         state->position += want;
         state->packBytesRead += want;
@@ -1222,7 +1225,8 @@ bool SevenZipOpenNonSolidEntryStreamImpl(const wchar_t* archivePath, uint32_t in
             folder.NumPackStreams != 1 || folder.PackStreams[0] != 0 ||
             folder.UnpackStream != folder.NumCoders - 1 ||
             folder.Coders[0].NumStreams != 1 || folder.Coders[1].NumStreams != 1 ||
-            folder.Coders[1].MethodID != STREAM_7Z_METHOD_LZMA2 ||
+            (folder.Coders[1].MethodID != STREAM_7Z_METHOD_LZMA2 &&
+             folder.Coders[1].MethodID != STREAM_7Z_METHOD_COPY) ||
             (folder.NumCoders == 3 &&
                 (folder.Bonds[1].InIndex != 2 || folder.Bonds[1].OutIndex != 1 ||
                  folder.Coders[2].MethodID != 0x03 || folder.Coders[2].NumStreams != 1 ||
@@ -1428,6 +1432,41 @@ bool SevenZipSeekNonSolidEntryStreamImpl(ArchiveBackendStream& stream, uint64_t 
 
     if (state->mode == SEVENZIP_STREAM_MODE_COPY)
     {
+        if (state->encrypted || state->deltaDistance != 0)
+        {
+            // AES-CBC and Delta both depend on all earlier bytes. Rewind the
+            // decoder state and discard output rather than seeking within
+            // ciphertext or using an incorrectly reset Delta history.
+            if (absolutePosition == state->position)
+                return true;
+
+            std::string error;
+            if (!ResetStreamToBeginning(state, error))
+            {
+                DebugLogWrite("WARN", "7Z", "STREAM_SEEK_FAIL", "index=%u | target=%llu | mode=COPY | error=%s | reason=rewind_failed", (unsigned)state->index, (unsigned long long)absolutePosition, error.c_str());
+                return false;
+            }
+
+            unsigned char temp[64 * 1024];
+            uint64_t remaining = absolutePosition;
+            while (remaining > 0)
+            {
+                if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+                    return false;
+
+                const size_t want = remaining > sizeof(temp) ? sizeof(temp) : static_cast<size_t>(remaining);
+                const size_t got = ReadCopyBytes(state, temp, want);
+                if (!got)
+                {
+                    DebugLogWrite("WARN", "7Z", "STREAM_SEEK_FAIL", "index=%u | target=%llu | position=%llu | mode=COPY | reason=discard_read_zero", (unsigned)state->index, (unsigned long long)absolutePosition, (unsigned long long)state->position);
+                    return false;
+                }
+                remaining -= got;
+            }
+            stream.position = state->position;
+            return true;
+        }
+
         SRes res = LookInStream_SeekTo(&state->lookStream.vt, state->packStart + absolutePosition);
 
         if (res != SZ_OK)
@@ -1481,6 +1520,67 @@ bool SevenZipSeekNonSolidEntryStreamImpl(ArchiveBackendStream& stream, uint64_t 
 
     DebugLogWrite("WARN", "7Z", "STREAM_SEEK_FAIL", "index=%u | target=%llu | mode=%s | reason=unsupported_stream_mode", (unsigned int)state->index, (unsigned long long)absolutePosition, SevenZipStreamModeName(state->mode));
     return false;
+}
+
+bool SevenZipVerifyNonSolidEntryPasswordImpl(ArchiveBackendStream& stream, std::string& error)
+{
+    if (!stream.impl)
+    {
+        error = "7z password verification requires an open stream";
+        return false;
+    }
+
+    auto* state = static_cast<SevenZipNonSolidStreamState*>(stream.impl);
+    if (!state->encrypted || state->mode != SEVENZIP_STREAM_MODE_COPY)
+        return true;
+
+    if (!SzBitWithVals_Check(&state->db.CRCs, state->index))
+    {
+        error = "7z AES Copy entry has no CRC, so its password cannot be authenticated";
+        DebugLogWrite("WARN", "7Z", "AES_COPY_VERIFY_FAIL", "index=%u | reason=no_entry_crc", (unsigned)state->index);
+        return false;
+    }
+
+    UInt32 crc = CRC_INIT_VAL;
+    uint64_t remaining = state->size;
+    unsigned char block[64 * 1024];
+    while (remaining > 0)
+    {
+        if (stream.cancellation && stream.cancellation->IsCancellationRequested())
+        {
+            error = "7z AES Copy password verification cancelled";
+            return false;
+        }
+
+        const size_t wanted = remaining > sizeof(block) ? sizeof(block) : static_cast<size_t>(remaining);
+        const size_t got = ReadCopyBytes(state, block, wanted);
+        if (got != wanted)
+        {
+            error = "7z AES Copy password verification could not read all decoded bytes";
+            DebugLogWrite("WARN", "7Z", "AES_COPY_VERIFY_FAIL", "index=%u | reason=read_truncated | expected=%zu | got=%zu", (unsigned)state->index, wanted, got);
+            return false;
+        }
+        crc = CrcUpdate(crc, block, got);
+        remaining -= got;
+    }
+
+    const UInt32 actual = CRC_GET_DIGEST(crc);
+    const UInt32 expected = state->db.CRCs.Vals[state->index];
+    if (actual != expected)
+    {
+        error = "7z AES Copy password verification failed: decoded entry CRC mismatch";
+        DebugLogWrite("WARN", "7Z", "AES_COPY_VERIFY_FAIL", "index=%u | reason=crc_mismatch", (unsigned)state->index);
+        return false;
+    }
+
+    if (!SevenZipSeekNonSolidEntryStreamImpl(stream, 0))
+    {
+        error = "7z AES Copy verification could not rewind the decoder";
+        return false;
+    }
+    DebugLogWrite("INFO", "7Z", "AES_COPY_VERIFY_OK", "index=%u | decoded=%llu", (unsigned)state->index, (unsigned long long)state->size);
+    error.clear();
+    return true;
 }
 
 void SevenZipCloseNonSolidEntryStreamImpl(ArchiveBackendStream& stream)

@@ -17,7 +17,7 @@ struct SevenZipExtractFileRequest
 };
 
 bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector<SevenZipExtractFileRequest>& requests, std::vector<uint32_t>& outSucceededIndexes,  std::string& error);
-bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error);
+bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation = nullptr);
 size_t SevenZipReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead);
 bool SevenZipSeekEntryStream(ArchiveBackendStream& stream, uint64_t absolutePosition);
 void SevenZipCloseEntryStream(ArchiveBackendStream& stream);

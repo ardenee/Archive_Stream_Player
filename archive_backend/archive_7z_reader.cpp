@@ -524,7 +524,7 @@ static std::string SevenZipPasswordKey(const wchar_t* archivePath)
 }
 
 static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
-    const std::function<bool(const std::string&, std::string&)>& tryCandidate, std::string& error, bool streamMode = false)
+    const std::function<bool(const std::string&, std::string&)>& tryCandidate, std::string& error, bool streamMode = false, const ArchiveStreamCancellationToken* cancellation = nullptr)
 {
     // Unsupported stream graphs and solid folders cannot be repaired by a
     // password; do not show spurious password dialogs before memory fallback.
@@ -540,14 +540,31 @@ static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
             message.rfind("7z AES stream has an invalid decrypted packed size", 0) == 0;
     };
 
+    const auto stopped = [&]() -> bool
+    {
+        if (cancellation && cancellation->IsCancellationRequested())
+        {
+            error = "7z stream open cancelled";
+            return true;
+        }
+        return false;
+    };
+
+    if (stopped())
+        return false;
+
     const std::string key = SevenZipPasswordKey(path);
     // Unencrypted 7z remains a single SDK attempt without password-list I/O.
     std::string lastError;
     if (tryCandidate("", lastError))
     {
+        // The stream-owning caller closes a successfully opened stream if
+        // cancellation arrives between the final read and this return.
         error.clear();
         return true;
     }
+    if (stopped())
+        return false;
     if (deterministicStreamFailure(lastError))
     {
         error = lastError;
@@ -576,6 +593,8 @@ static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
 
     for (const auto& candidate : candidates)
     {
+        if (stopped())
+            return false;
         lastError.clear();
         if (tryCandidate(candidate.value, lastError))
         {
@@ -587,12 +606,16 @@ static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
             error.clear();
             return true;
         }
+        if (stopped())
+            return false;
         if (deterministicStreamFailure(lastError))
         {
             error = lastError;
             return false;
         }
     }
+    if (stopped())
+        return false;
     if (!ArchivePasswordIsArchiveCancelled(key.c_str()))
     {
         char buffer[256]{};
@@ -941,7 +964,8 @@ static bool SevenZipListEntriesCore(const wchar_t* archivePath, std::vector<Arch
                             folder.NumBonds == folder.NumCoders - 1 &&
                             folder.Bonds[0].InIndex == 1 && folder.Bonds[0].OutIndex == 0 &&
                             folder.NumPackStreams == 1 && folder.PackStreams[0] == 0 &&
-                            folder.UnpackStream == folder.NumCoders - 1 && folder.Coders[1].MethodID == 0x21 &&
+                            folder.UnpackStream == folder.NumCoders - 1 &&
+                            (folder.Coders[1].MethodID == 0x21 || folder.Coders[1].MethodID == 0) &&
                             (folder.NumCoders == 2 || (folder.Bonds[1].InIndex == 2 &&
                                 folder.Bonds[1].OutIndex == 1 && folder.Coders[2].MethodID == 0x03 &&
                                 folder.Coders[2].PropsSize == 1));
@@ -1456,7 +1480,7 @@ bool SevenZipExtractEntriesToFiles(const wchar_t* archivePath, const std::vector
     }, error);
 }
 
-bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error)
+bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation)
 {
     stream.impl = nullptr;
     stream.size = 0;
@@ -1468,6 +1492,7 @@ bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, Archive
     {
         SevenZipScopedPassword scope(password);
         ArchiveBackendStream candidate{};
+        candidate.cancellation = cancellation;
         if (!SevenZipOpenNonSolidEntryStreamImpl(archivePath, index, candidate, attemptError))
             return false;
 
@@ -1487,13 +1512,22 @@ bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, Archive
             }
         }
 
+        // AES-CBC Copy/Store has no decoder-level wrong-password detection.
+        // Validate full decoded CRC with fixed-size reads before caching an
+        // accepted key; the verifier rewinds to position zero on success.
+        if (!SevenZipVerifyNonSolidEntryPasswordImpl(candidate, attemptError))
+        {
+            SevenZipCloseNonSolidEntryStreamImpl(candidate);
+            return false;
+        }
+
         // Preserve the public stream's format, read status and cancellation
         // fields; only transfer ownership of the decoder handle and counters.
         stream.impl = candidate.impl;
         stream.size = candidate.size;
         stream.position = candidate.position;
         return true;
-    }, error, true);
+    }, error, true, cancellation);
 }
 size_t SevenZipReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
 {
@@ -1510,7 +1544,7 @@ void SevenZipCloseEntryStream(ArchiveBackendStream& stream)
     SevenZipCloseNonSolidEntryStreamImpl(stream);
 }
 
-bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error);
+bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveBackendStream& stream, std::string& error, const ArchiveStreamCancellationToken* cancellation);
 
 size_t SevenZipReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead);
 

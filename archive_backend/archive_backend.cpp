@@ -150,8 +150,15 @@ bool ArchiveOpenEntryStream(const wchar_t* archivePath, uint32_t index, ArchiveB
     switch (format)
     {
     case ArchiveFormat::SevenZip:
-        if (!SevenZipOpenEntryStream(archivePath, index, stream, error))
+        if (!SevenZipOpenEntryStream(archivePath, index, stream, error, cancellation))
+        {
+            if (cancellation && cancellation->IsCancellationRequested())
+            {
+                stream.readStatus = ArchiveStreamReadStatus::Cancelled;
+                error = "Archive stream open cancelled";
+            }
             return false;
+        }
 
         stream.cancellation = cancellation;
         if (cancellation && cancellation->IsCancellationRequested())

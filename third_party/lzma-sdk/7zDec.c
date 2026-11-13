@@ -449,6 +449,37 @@ static SRes SzFolder_Decode2(const CSzFolder *folder,
      plaintext bytes into the established static decoder pipeline. */
   if (folder->Coders[0].MethodID == 0x06F10701)
   {
+    /*
+       7-Zip's -mhe=on encoded header commonly has one AES coder without
+       LZMA/LZMA2. Its AES payload is padded to a 16-byte ciphertext block,
+       while unpackSizes[0] describes only the actual header bytes. Decode
+       exactly the logical size; the caller verifies the header CRC.
+    */
+    if (folder->NumCoders == 1)
+    {
+      C7zAesLook aes;
+      UInt64 physicalSize;
+      SRes result;
+      if (folder->NumBonds != 0 || folder->NumPackStreams != 1 ||
+          folder->PackStreams[0] != 0 || folder->UnpackStream != 0 ||
+          folder->Coders[0].NumStreams != 1 ||
+          packPositions[1] < packPositions[0] ||
+          unpackSizes[0] != (UInt64)outSize)
+        return SZ_ERROR_UNSUPPORTED;
+      physicalSize = packPositions[1] - packPositions[0];
+      if (physicalSize < (UInt64)outSize ||
+          physicalSize - (UInt64)outSize >= 16)
+        return SZ_ERROR_ARCHIVE;
+      result = Sz7zAes_Init(&aes, inStream, startPos + packPositions[0],
+          physicalSize, propsData + folder->Coders[0].PropsOffset,
+          folder->Coders[0].PropsSize, g_7zAesPassword);
+      if (result != SZ_OK)
+        return result;
+      result = LookInStream_Read2(&aes.vt, outBuffer, outSize, SZ_ERROR_INPUT_EOF);
+      Sz7zAes_Clear(&aes);
+      return result;
+    }
+
     CSzFolder plain;
     UInt64 positions[2];
     UInt32 i;

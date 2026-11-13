@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <thread>
+#include <chrono>
 #include <type_traits>
 #include <utility>
 
@@ -973,6 +974,45 @@ static int RunPasswordedArchiveStreamRegression(const wchar_t* archivePath, cons
     return 0;
 }
 
+static int RunPasswordedStreamOpenCancellationRegression(const wchar_t* archivePath, const wchar_t* passwordListPath)
+{
+    if (!archivePath || !passwordListPath)
+        return 1;
+    const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, nullptr, 0, nullptr, nullptr);
+    if (length <= 1)
+        return 1;
+
+    std::string passwordPath(static_cast<size_t>(length), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, passwordPath.data(), length, nullptr, nullptr) != length)
+        return 1;
+    ArchivePasswordSetListPath(passwordPath.c_str());
+    ArchivePasswordSetPromptAllowedForCurrentThread(false);
+
+    ArchiveStreamCancellationToken cancellation;
+    std::thread worker([&]()
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        cancellation.RequestCancellation();
+    });
+
+    ArchiveBackendStream stream{};
+    std::string error;
+    const bool opened = ArchiveOpenEntryStream(archivePath, 0, stream, error, &cancellation);
+    worker.join();
+    if (opened)
+        ArchiveCloseEntryStream(stream);
+
+    if (opened || stream.impl || !cancellation.IsCancellationRequested() ||
+        stream.readStatus != ArchiveStreamReadStatus::Cancelled)
+    {
+        std::printf("PASSWORD_STREAM_CANCEL_OPEN_FAIL: opened=%d status=%d error=%s\n", opened ? 1 : 0, static_cast<int>(stream.readStatus), error.c_str());
+        return 1;
+    }
+
+    std::printf("PASSWORD_STREAM_CANCEL_OPEN_PASS: status=cancelled bytes=0\n");
+    return 0;
+}
+
 // Uses an isolated throwaway Unicode filename. Never opens the user's keeps.txt.
 static int RunUnicodePasswordListSelftest()
 {
@@ -1065,6 +1105,13 @@ int wmain(int argc, wchar_t* argv[])
         return RunPasswordedArchiveStreamRegression(argv[2], argv[3], argv[4]);
     }
 
+    if (argc >= 2 && _wcsicmp(argv[1], L"pwcancelopentest") == 0)
+    {
+        if (argc != 4)
+            return 1;
+        return RunPasswordedStreamOpenCancellationRegression(argv[2], argv[3]);
+    }
+
     if (argc >= 3 && _wcsicmp(argv[1], L"ziptest") == 0)
         return RunGenericZipStreamRegression(argv[2]);
 
@@ -1087,6 +1134,7 @@ int wmain(int argc, wchar_t* argv[])
         std::printf("  archive_backend_test.exe pwlistselftest (isolated Unicode password list)\n");
         std::printf("  archive_backend_test.exe pwfiletest archive.rar-or-7z passwords.txt index extracted.file\n");
         std::printf("  archive_backend_test.exe pwstreamtest archive.7z passwords.txt index\n");
+        std::printf("  archive_backend_test.exe pwcancelopentest archive.7z passwords.txt\n");
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");
         std::printf("  archive_backend_test.exe canceltest archive.zip\n");
         std::printf("  archive_backend_test.exe legacytest archive.zip\n");
