@@ -66,9 +66,17 @@ $sdk = 'D:\Temp\ArchiveStreamPlayerAdapters\xmplay-sdk'
 
 Copy xmp_archive_stream\Release\xmp-archive-stream.dll into the XMPlay installation directory. XMPlay detects its plugins by filename; the **xmp- prefix is mandatory**. This plugin uses XMPlay's native XMPARC archive interface rather than a Winamp plugin wrapper. It lists supported audio members, exposes encrypted and multipart ZIP/7z/RAR archive support, and handles file names in UTF-8.
 
-XMPARC.DecompressFile takes the requested maximum decoded-byte length, which may be shorter than the entry; the adapter supports such partial probes. It prefers backend decoded-byte streaming, otherwise extracts entirely into memory when at most 50 MiB, otherwise uses a temporary file. Temporary files are removed automatically. The return value is always an **XMPlay-owned decoded byte block**; XMPARC does not provide a way to transfer an ongoing archive stream directly to the host decoder. This is not full zero-buffer streaming at the player level.
+XMPARC.DecompressFile takes the requested maximum decoded-byte length, which may be shorter than the entry; the adapter supports such partial probes. It prefers backend decoded-byte streaming, otherwise extracts entirely into memory when within the configured memory threshold, otherwise uses a temporary file. Temporary files are removed automatically. The return value is always an **XMPlay-owned decoded byte block**; XMPARC does not provide a way to transfer an ongoing archive stream directly to the host decoder. A large entry can therefore require a large host buffer even when the archive backend reads it incrementally. This is **not on-demand streaming at the player level**. The memory threshold applies to fallback extraction, not the memory block requested by XMPARC.
 
-The DEV x86 host contract test passed WAV full-entry and first-64-byte parity for ZIP, 7z and RAR, and a 61 MiB solid 7z fixture passed through cache fallback. A real XMPlay 4.1 instance loaded the DLL, enumerated four tracks from a solid 7z, routed solid members to memory and the nonsolid member through the stream. Audible output is not independently certified.
+**XMPlay streaming playback alternative:** XMPlay can receive an M3U8 playlist with decoded archive bytes served on demand by our loopback HTTP bridge. This bypasses XMPARC's full-entry buffer requirement while preserving the required **direct stream → memory fallback → disk cache** order in the shared backend. The player still handles MP3/FLAC/WAV/Ogg decoding; only the compressed archive entries are streamed. Use the following command with the local XMPlay installation (or supply your own `-PlayerPath`):
+
+~~~powershell
+& '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player XMPlay -PlayerPath 'D:\Temp\ArchiveStreamPlayerAdapters\xmplay\xmplay.exe'
+~~~
+
+This bridge alternative provides stream-first playback but **does not give XMPlay native archive drag-and-drop expansion**. The XMPARC plugin remains available for native archive browsing and buffered playback. Keep the bridge launcher open until playback ends. For on-demand streaming inside XMPlay's native archive browsing flow, a different host integration would be required; XMPARC cannot supply it.
+
+The DEV x86 host contract test passed WAV full-entry and first-64-byte parity for ZIP, 7z and RAR, and a 61 MiB solid 7z fixture passed through cache fallback. A real XMPlay 4.1 instance loaded the DLL, enumerated four tracks from a solid 7z, routed solid members to memory and the nonsolid member through the backend stream (then into an XMPlay-owned buffer). Separately, an isolated XMPlay 4.1 instance launched with a generated bridge M3U8 and `-play` requested a live archive-backed HTTP stream: `ROUTE_COUNTS stream=1 memory=0 cache=0`. Audible output and interactive seeking are not independently certified.
 
 ## AIMP 5.40 — native x86 and x64 adapters
 
@@ -86,7 +94,7 @@ Copy the matching-architecture aimp_archive_stream.dll into an AIMP plugin subfo
 
 Each virtual stream uses **stream first → in-memory extraction (default 50 MiB, configurable) → temporary file cache**. Solid 7z and RAR bypass direct streaming; temp files are automatically removed when the stream is released. The official SDK provides the COM interfaces used by the independent host contract test.
 
-AIMP x86 and x64 mock-host tests verified registration of FileFormat and FileExpander, virtual-file URI properties, reads and rewind/end seeking, and a 61 MiB solid 7z cache case. Both actual portable AIMP 5.40 builds accepted archive files in the Add Files dialog and expanded four tracks in a solid 7z. AIMP x64 traced route-to-memory when playback was requested. Audible playback, UI seeking, and interactive encrypted-password prompts are not yet fully verified.
+AIMP x86 and x64 mock-host tests verified registration of FileFormat and FileExpander, virtual-file URI properties, reads and rewind/end seeking, and a 61 MiB solid 7z cache case. Six additional x86/x64 host-contract runs across ZIP, nonsolid 7z and RAR WAV archives passed read/seek/rewind tests, with direct streaming verified through the plugin's route logging. Both actual portable AIMP 5.40 builds accepted archive files in the Add Files dialog and expanded four tracks in a solid 7z. AIMP x64 traced route-to-memory when playback was requested. Audible playback, UI seeking, and interactive encrypted-password prompts are not yet fully verified.
 
 ## WACUP (Winamp compatibility)
 
@@ -138,16 +146,17 @@ $msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=Win32
 & $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=x64
 
-# Choose a player: VLC, WMP, MusicBee, MediaMonkey, or WACUPx64
+# Choose a player: VLC, WMP, MusicBee, MediaMonkey, WACUPx64, or XMPlay
 & '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player VLC
 ~~~
 
 The launcher starts its own temporary bridge, passes the corresponding M3U8 or ASX playlist to the player, and stays alive until the user closes the launcher. Do not close it during playback. `archive_player_bridge.exe --archive "C:\audiotest\Archives\7Z_NonSolid.7z"` also works on its own and prints the generated playlist paths and URLs; optional flags are `--port`, `--playlist-dir`, `--memory-mb`, `--lifetime` and `--password-list`.
 
-**Testing:** The self-contained `archive_player_bridge/test_bridge.py` builds small ZIP and solid 7z fixtures from `C:\audiotest\01.MP3File.mp3` and `C:\audiotest\02.OGGFile.ogg`, using installed 7z.exe **for generating test data only**. DEV Win32/x64 tests passed every mid-track 2,000-byte HTTP range/byte-parity read, HEAD size, rejected unknown endpoint, and clean shutdown. Both ZIP cases used 2/2 streams; solid 7z cases used 2/2 memory extractions with the default buffer, and **2/2 file-cache reads with the memory limit forced to 1 MiB**. All three routes passed byte-for-byte parity on both architectures. Run after building the executables:
+**Testing:** The self-contained `archive_player_bridge/test_bridge.py` builds small ZIP and solid 7z fixtures from `C:\audiotest\01.MP3File.mp3` and `C:\audiotest\02.OGGFile.ogg`, using installed 7z.exe **for generating test data only**. DEV Win32/x64 tests passed every mid-track 2,000-byte HTTP range/byte-parity read, HEAD size, rejected unknown endpoint, and clean shutdown. Both ZIP cases used 2/2 streams; solid 7z cases used 2/2 memory extractions with the default buffer, and **2/2 file-cache reads with the memory limit forced to 1 MiB**. All three routes passed byte-for-byte parity on both architectures. An additional stream-priority regression (`test_stream_priority.py`) checks ZIP, nonsolid 7z and nonsolid RAR HTTP range requests on both architectures with disk caching disabled. All six cases returned `ROUTE_COUNTS stream=1 memory=0 cache=0`. Run after building the executables:
 
 ~~~powershell
 py -3.13 '.\archive_player_bridge\test_bridge.py'
+py -3.13 '.\archive_player_bridge\test_stream_priority.py'
 py -3.13 '.\archive_player_bridge\test_passwords.py' --audiotest-generator-key
 ~~~
 

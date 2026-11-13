@@ -1,7 +1,7 @@
 param(
     [string]$Archive = '',
     [switch]$Configure,
-    [ValidateSet('VLC','WMP','MusicBee','MediaMonkey','WACUPx64')]
+    [ValidateSet('VLC','WMP','MusicBee','MediaMonkey','WACUPx64','XMPlay')]
     [string]$Player = 'VLC',
     [int]$MemoryMB = 0,
     [int]$CacheLimitMB = -1,
@@ -31,6 +31,7 @@ $hosts = @{
     MusicBee = @('C:\Program Files (x86)\MusicBee\MusicBee.exe','C:\Program Files\MusicBee\MusicBee.exe')
     MediaMonkey = @('C:\Program Files (x86)\MediaMonkey 5\MediaMonkey.exe','C:\Program Files\MediaMonkey 5\MediaMonkey.exe')
     WACUPx64 = @('C:\Program Files\WACUP\wacup.exe')
+    XMPlay = @('C:\Program Files\XMPlay\xmplay.exe','C:\Program Files (x86)\XMPlay\xmplay.exe')
 }
 if ($PlayerPath) {
     if (!(Test-Path -LiteralPath $PlayerPath -PathType Leaf)) {
@@ -92,6 +93,10 @@ try {
             # The WACUP x64 preview does not load third-party Winamp input/general DLLs.
             # Its own playlist and HTTP playback interfaces accept the archive bridge URLs.
             Start-Process -FilePath $playerExe -WorkingDirectory (Split-Path -Path $playerExe -Parent) -ArgumentList @('/ENQPLAY', ('"' + $playlist + '"'))
+        }
+        elseif ($Player -eq 'XMPlay') {
+            # XMPARC only returns decoded memory blocks; use native M3U8/HTTP playback for live streaming.
+            Start-Process -FilePath $playerExe -WorkingDirectory (Split-Path -Path $playerExe -Parent) -ArgumentList @('-play', ('"' + $playlist + '"'))
         }
         else {
             Start-Process -FilePath $playerExe -ArgumentList @('"' + $playlist + '"')

@@ -25,8 +25,8 @@ Not every feature above has been verified in every player or with every archive.
 | **Winamp** | Native 32-bit input and playlist plugins | Archive playback and expansion implemented; wider live playback regression remains |
 | **foobar2000** | Native 32/64-bit component | Playlist integration, audio decoding and seeking verified |
 | **WACUP** | Native plugins (32-bit); playlist bridge (64-bit) | x86 expansion and playback progression verified; x64 archive playlist and playback progression verified; native x64 plugins unsupported |
-| **AIMP** | Native 32/64-bit plugin | Real-player archive expansion verified; audible playback still to verify |
-| **XMPlay** | Native 32-bit archive plugin | Plugin loads and archive entry reads verified; audible playback still to verify |
+| **AIMP** | Native 32/64-bit plugin | Native ZIP, non-solid 7z and RAR streaming and seeking pass x86/x64 host-contract tests; real-player expansion verified; audible playback still to verify |
+| **XMPlay** | Native 32-bit archive plugin or streaming playlist bridge | Archive callback returns buffered bytes; isolated XMPlay process requested a live archive-backed HTTP stream (no cache); audible playback and player-level seeking still to verify |
 | **MusicBee** | Native 32-bit menu plugin with playback bridge | Plugin registers and serves playable track URLs; complete interactive playback still to verify |
 | **MediaMonkey** | Winamp-compatible DLLs and playlist bridge | DLLs load and playlist playback reaches the archive stream; native expansion still to verify |
 | **VLC** | Local playlist/HTTP playback bridge | Two-track playback verified with a test audio output; audible output still to verify |
@@ -42,7 +42,7 @@ The following have passed tests in at least one supported player or in the share
 - [x] Read ordinary and supported solid/nonsolid archives.
 - [x] Read supported split and multipart archives.
 - [x] Decrypt supported password-protected ZIP, RAR and 7z entries.
-- [x] Stream eligible archive entries without extracting an entire album.
+- [x] Stream eligible archive entries without extracting an entire album. ZIP, non-solid 7z and non-solid RAR direct HTTP streams pass x86/x64 range tests (`archive_player_bridge/test_stream_priority.py`).
 - [x] Use memory or temporary files for archive entries that cannot stream.
 - [x] Verify decoded audio bytes and seeking.
 - [x] Expand archives into individual playlist tracks in supported hosts.
