@@ -352,10 +352,14 @@ static void Init()
 
     LoadConfig();
 
+    // Same opt-in test/debug override as the HTTP bridge. No registry writes.
+    char debugOverrideValue[8]{};
+    const DWORD debugOverrideLength = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", debugOverrideValue, sizeof(debugOverrideValue));
+    const bool debugOverride = debugOverrideLength == 1 && debugOverrideValue[0] == '1';
     if (ArchiveAdapterPreferencesConfigured())
-        ArchiveAdapterLogging::ConfigureShared(L"winamp");
+        ArchiveAdapterLogging::Configure(L"winamp", ArchiveAdapterPreferencesLoad().debugLogging || debugOverride);
     else
-        DebugLogConfigure(g_debugLoggingEnabled, g_debugLogPath, true);
+        DebugLogConfigure(g_debugLoggingEnabled || debugOverride, g_debugLogPath, true);
     if (!ArchiveUnifiedCache::Maintain(ArchiveAdapterPreferencesLoad()))
         DebugLogWrite("WARN", "WINAMP", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
     ArchivePasswordSetPromptCallback(PromptForArchivePassword);

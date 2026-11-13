@@ -1025,7 +1025,9 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             int bytesToWrite = (int)bytesRead;
             char* writePtr = (char*)pcm;
 
-            while (bytesToWrite > 0 && InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0)
+            while (bytesToWrite > 0 &&
+                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
+                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
             {
                 int canWrite = g_mod.outMod->CanWrite();
 
@@ -1190,6 +1192,7 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
 
                     InterlockedExchange(&g_outputTimeBaseMs, seekMs);
                     InterlockedExchange(&g_trackStartTick, GetTickCount());
+                    DebugLogWrite("INFO", "PLAYBACK", "SEEK_APPLIED", "decoder=WAV | seek_ms=%ld | playback_mode=%ld | archive=%s | index=%u", seekMs, InterlockedCompareExchange(&g_playbackMode, 0, 0), g_currentArchivePath, (unsigned int)g_currentArchiveIndex);
                 }
                 else
                 {
@@ -1208,7 +1211,9 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             int bytesToWrite = (int)(framesRead * channels * sizeof(short));
             char* writePtr = (char*)pcm;
 
-            while (bytesToWrite > 0 && InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0)
+            while (bytesToWrite > 0 &&
+                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
+                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
             {
                 int canWrite = g_mod.outMod->CanWrite();
 
@@ -1388,7 +1393,9 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             int bytesToWrite = (int)(framesRead * channels * sizeof(short));
             char* writePtr = (char*)pcm;
 
-            while (bytesToWrite > 0 && InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0)
+            while (bytesToWrite > 0 &&
+                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
+                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
             {
                 int canWrite = g_mod.outMod->CanWrite();
 
@@ -1607,7 +1614,9 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             int bytesToWrite = framesRead * channels * sizeof(short);
             char* writePtr = (char*)pcm;
 
-            while (bytesToWrite > 0 && InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0)
+            while (bytesToWrite > 0 &&
+                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
+                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
             {
                 int canWrite = g_mod.outMod->CanWrite();
 
@@ -1808,7 +1817,9 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
         int bytesToWrite = (int)(framesRead * channels * sizeof(short));
         char* writePtr = (char*)pcm;
 
-        while (bytesToWrite > 0 && InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0)
+        while (bytesToWrite > 0 &&
+            InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
+            InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
         {
             int canWrite = g_mod.outMod->CanWrite();
 
@@ -1930,6 +1941,7 @@ int GetOutputTime()
 
 void SetOutputTime(int time_in_ms)
 {
+    DebugLogWrite("INFO", "PLAYBACK", "SEEK_REQUEST", "requested_ms=%d | playing=%ld | current_ms=%d", time_in_ms, InterlockedCompareExchange(&g_isPlaying, 0, 0), GetOutputTime());
     if (time_in_ms < 0)
         time_in_ms = 0;
 
