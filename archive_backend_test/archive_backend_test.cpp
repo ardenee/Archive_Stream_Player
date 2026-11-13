@@ -864,6 +864,83 @@ static int RunPasswordedArchiveFileRegression(const wchar_t* archivePath, const 
     return 0;
 }
 
+static int RunPasswordedArchiveStreamRegression(const wchar_t* archivePath, const wchar_t* passwordListPath, const wchar_t* indexText)
+{
+    uint32_t index = 0;
+    if (!archivePath || !passwordListPath || !indexText || !ParseUInt32Arg(indexText, index))
+        return 1;
+
+    const int len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 1)
+        return 1;
+    std::string passwordPath(static_cast<size_t>(len), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, passwordPath.data(), len, nullptr, nullptr) != len)
+        return 1;
+    ArchivePasswordSetListPath(passwordPath.c_str());
+
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    if (!ArchiveListEntries(archivePath, entries, error))
+    {
+        std::printf("PASSWORD_STREAM_LIST_FAIL: %s\n", error.c_str());
+        return 1;
+    }
+    const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& e) { return e.index == index && !e.isFolder; });
+    if (found == entries.end() || found->size > 8 * 1024 * 1024)
+        return 1;
+
+    ArchiveBackendStream stream{};
+    if (!ArchiveOpenEntryStream(archivePath, index, stream, error))
+    {
+        std::printf("PASSWORD_STREAM_OPEN_FAIL: %s\n", error.c_str());
+        return 1;
+    }
+
+    std::vector<unsigned char> decoded;
+    unsigned char buffer[8192];
+    while (decoded.size() < found->size)
+    {
+        const size_t wanted = (std::min)(sizeof(buffer), static_cast<size_t>(found->size - decoded.size()));
+        const size_t got = ArchiveReadEntryStream(stream, buffer, wanted);
+        if (got == 0)
+            break;
+        decoded.insert(decoded.end(), buffer, buffer + got);
+    }
+    if (decoded.size() != found->size)
+    {
+        std::printf("PASSWORD_STREAM_TRUNCATED: expected=%llu got=%zu\n", (unsigned long long)found->size, decoded.size());
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+
+    const uint64_t seekTarget = found->size / 2;
+    if (!ArchiveSeekEntryStream(stream, seekTarget))
+    {
+        std::printf("PASSWORD_STREAM_SEEK_FAIL\n");
+        ArchiveCloseEntryStream(stream);
+        return 1;
+    }
+    const size_t nextBytes = (std::min)(sizeof(buffer), decoded.size() - static_cast<size_t>(seekTarget));
+    const size_t got = ArchiveReadEntryStream(stream, buffer, nextBytes);
+    const bool seekValid = got == nextBytes && std::memcmp(buffer, decoded.data() + seekTarget, nextBytes) == 0;
+    ArchiveCloseEntryStream(stream);
+    if (!seekValid)
+    {
+        std::printf("PASSWORD_STREAM_SEEK_MISMATCH\n");
+        return 1;
+    }
+
+    std::vector<unsigned char> extracted;
+    if (!ArchiveExtractEntryToMemory(archivePath, index, extracted, error) || decoded != extracted)
+    {
+        std::printf("PASSWORD_STREAM_MEMORY_PARITY_FAIL: %s\n", error.c_str());
+        return 1;
+    }
+
+    std::printf("PASSWORD_STREAM_PASS: index=%u bytes=%zu seek=PASS memory_parity=PASS encrypted=%d\n", (unsigned)index, decoded.size(), found->isEncrypted ? 1 : 0);
+    return 0;
+}
+
 int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
@@ -889,6 +966,16 @@ int wmain(int argc, wchar_t* argv[])
         return 0;
     }
 
+    if (argc >= 2 && _wcsicmp(argv[1], L"pwstreamtest") == 0)
+    {
+        if (argc != 5)
+        {
+            std::printf("pwstreamtest requires archive, password list and entry index\n");
+            return 1;
+        }
+        return RunPasswordedArchiveStreamRegression(argv[2], argv[3], argv[4]);
+    }
+
     if (argc >= 3 && _wcsicmp(argv[1], L"ziptest") == 0)
         return RunGenericZipStreamRegression(argv[2]);
 
@@ -909,6 +996,7 @@ int wmain(int argc, wchar_t* argv[])
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
         std::printf("  archive_backend_test.exe pwfiletest archive.rar-or-7z passwords.txt index extracted.file\n");
+        std::printf("  archive_backend_test.exe pwstreamtest archive.7z passwords.txt index\n");
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");
         std::printf("  archive_backend_test.exe canceltest archive.zip\n");
         std::printf("  archive_backend_test.exe legacytest archive.zip\n");

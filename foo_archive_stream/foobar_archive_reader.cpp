@@ -9,12 +9,14 @@
 #include "archive_rar_native_encrypted.h"
 #include "archive_stream_owner.h"
 #include "foobar_archive_reader.h"
+#include "foobar_settings.h"
 #include "debug_log.h"
 
 #include <algorithm>
 #include <charconv>
 #include <limits>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -143,7 +145,16 @@ namespace
             // UnRAR extraction fallback; do not first poison a stream state.
             if (entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar)
             {
-                OpenExtractedFallback("Encrypted RAR uses native UnRAR fallback", abort);
+                OpenMemoryOrExtractedFallback("Encrypted RAR uses native UnRAR fallback", abort);
+                return;
+            }
+
+            // Solid 7z folders have no independent incremental entry stream.
+            // Do not ask the backend to open one (or prompt for a password
+            // twice); choose memory first, then the temporary-file cache.
+            if (entry_.isSolid && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::SevenZip)
+            {
+                OpenMemoryOrExtractedFallback("Solid 7z folder is not independently streamable", abort);
                 return;
             }
 
@@ -155,7 +166,7 @@ namespace
                 // incremental decoder. A uniquely named foobar-owned temp
                 // file is a deliberate fallback; no content CRC is computed.
                 DebugLogWrite("INFO", "FOOBAR", "STREAM_FALLBACK", "index=%u | reason=%s", (unsigned)entry_.index, result.message.c_str());
-                OpenExtractedFallback(result.message, abort);
+                OpenMemoryOrExtractedFallback(result.message, abort);
             }
         }
 
@@ -167,7 +178,15 @@ namespace
         t_size read(void* destination, t_size amount, abort_callback& abort) override
         {
             abort.check();
-            if (tempFile_ != INVALID_HANDLE_VALUE)
+            if (!memoryData_.empty())
+            {
+                const t_size available = static_cast<t_size>(memoryData_.size() - memoryPosition_);
+                const t_size count = (std::min)(amount, available);
+                std::memcpy(destination, memoryData_.data() + memoryPosition_, static_cast<size_t>(count));
+                memoryPosition_ += static_cast<size_t>(count);
+                abort.check();
+                return count;
+            }            if (tempFile_ != INVALID_HANDLE_VALUE)
             {
                 DWORD done = 0;
                 const DWORD limit = static_cast<DWORD>((std::min)(amount, static_cast<t_size>((std::numeric_limits<DWORD>::max)())));
@@ -197,7 +216,7 @@ namespace
                 {
                     const std::string originalError = result.message;
                     stream_.Close();
-                    OpenExtractedFallback(originalError, abort);
+                    OpenMemoryOrExtractedFallback(originalError, abort);
                     return read(destination, amount, abort);
                 }
 
@@ -216,7 +235,8 @@ namespace
         t_filesize get_position(abort_callback& abort) override
         {
             abort.check();
-            if (tempFile_ != INVALID_HANDLE_VALUE)
+            if (!memoryData_.empty())
+                return memoryPosition_;            if (tempFile_ != INVALID_HANDLE_VALUE)
             {
                 LARGE_INTEGER zero{}, position{};
                 if (!SetFilePointerEx(tempFile_, zero, &position, FILE_CURRENT))
@@ -234,6 +254,11 @@ namespace
             if (position > entry_.size || position > static_cast<t_filesize>((std::numeric_limits<LONGLONG>::max)()))
                 throw exception_io_seek_out_of_range();
 
+            if (!memoryData_.empty())
+            {
+                memoryPosition_ = static_cast<size_t>(position);
+                return;
+            }
             if (tempFile_ != INVALID_HANDLE_VALUE)
             {
                 LARGE_INTEGER target{};
@@ -283,6 +308,40 @@ namespace
                 DeleteFileW(tempPath_.c_str());
                 tempPath_.clear();
             }
+        }
+
+        void OpenMemoryOrExtractedFallback(const std::string& streamError, abort_callback& abort)
+        {
+            abort.check();
+            const uint64_t memoryLimit = static_cast<uint64_t>(FoobarArchiveSettingsLoad().bufferSizeMb) * 1024 * 1024;
+            const bool nativeEncryptedRar = entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar;
+            if (!nativeEncryptedRar && entry_.size > 0 && entry_.size <= memoryLimit)
+            {
+                try
+                {
+                    std::string error;
+                    std::vector<unsigned char> extracted;
+                    if (ArchiveExtractEntryToMemory(path_.c_str(), entry_.index, extracted, error) && extracted.size() == entry_.size)
+                    {
+                        abort.check();
+                        memoryData_ = std::move(extracted);
+                        memoryPosition_ = 0;
+                        DebugLogWrite("INFO", "FOOBAR", "FALLBACK_MEMORY_READY", "index=%u | bytes=%zu | limit=%llu", (unsigned)entry_.index, memoryData_.size(), (unsigned long long)memoryLimit);
+                        return;
+                    }
+                    DebugLogWrite("WARN", "FOOBAR", "FALLBACK_MEMORY_FAIL", "index=%u | expected=%llu | extracted=%zu | error=%s", (unsigned)entry_.index, (unsigned long long)entry_.size, extracted.size(), error.c_str());
+                }
+                catch (const std::bad_alloc&)
+                {
+                    DebugLogWrite("WARN", "FOOBAR", "FALLBACK_MEMORY_FAIL", "index=%u | reason=not_enough_memory", (unsigned)entry_.index);
+                }
+            }
+            else
+            {
+                DebugLogWrite("INFO", "FOOBAR", "FALLBACK_MEMORY_SKIP", "index=%u | bytes=%llu | limit=%llu | native_encrypted_rar=%d", (unsigned)entry_.index, (unsigned long long)entry_.size, (unsigned long long)memoryLimit, nativeEncryptedRar ? 1 : 0);
+            }
+            abort.check();
+            OpenExtractedFallback(streamError, abort);
         }
 
         void OpenExtractedFallback(const std::string& streamError, abort_callback& abort)
@@ -344,6 +403,8 @@ namespace
         ArchiveEntry entry_;
         t_filetimestamp timestamp_ = filetimestamp_invalid;
         ArchiveStreamOwner stream_;
+        std::vector<unsigned char> memoryData_;
+        size_t memoryPosition_ = 0;
         HANDLE tempFile_ = INVALID_HANDLE_VALUE;
         std::wstring tempPath_;
     };

@@ -524,8 +524,22 @@ static std::string SevenZipPasswordKey(const wchar_t* archivePath)
 }
 
 static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
-    const std::function<bool(const std::string&, std::string&)>& tryCandidate, std::string& error)
+    const std::function<bool(const std::string&, std::string&)>& tryCandidate, std::string& error, bool streamMode = false)
 {
+    // Unsupported stream graphs and solid folders cannot be repaired by a
+    // password; do not show spurious password dialogs before memory fallback.
+    auto deterministicStreamFailure = [&](const std::string& message)
+    {
+        if (!streamMode)
+            return false;
+        if (message.rfind("7z stream open failed: SzArEx_Open failed", 0) == 0)
+            return false;
+        return message.rfind("7z stream open failed:", 0) == 0 ||
+            message.rfind("7z stream split open failed:", 0) == 0 ||
+            message.rfind("7z AES stream unsupported coder graph:", 0) == 0 ||
+            message.rfind("7z AES stream has an invalid decrypted packed size", 0) == 0;
+    };
+
     const std::string key = SevenZipPasswordKey(path);
     // Unencrypted 7z remains a single SDK attempt without password-list I/O.
     std::string lastError;
@@ -533,6 +547,11 @@ static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
     {
         error.clear();
         return true;
+    }
+    if (deterministicStreamFailure(lastError))
+    {
+        error = lastError;
+        return false;
     }
     std::vector<SevenZipPasswordCandidate> candidates;
     auto addCandidate = [&](const std::string& value)
@@ -567,6 +586,11 @@ static bool SevenZipWithPasswords(const wchar_t* path, const std::string& entry,
             }
             error.clear();
             return true;
+        }
+        if (deterministicStreamFailure(lastError))
+        {
+            error = lastError;
+            return false;
         }
     }
     if (!ArchivePasswordIsArchiveCancelled(key.c_str()))
@@ -912,7 +936,15 @@ static bool SevenZipListEntriesCore(const wchar_t* archivePath, std::vector<Arch
                     if (folder.Coders[coder].MethodID == 0x06F10701)
                     {
                         entry.isEncrypted = true;
-                        entry.streamCandidate = false;
+                        entry.streamCandidate = !entry.isSolid && entry.filesInFolder == 1 &&
+                            (folder.NumCoders == 2 || folder.NumCoders == 3) &&
+                            folder.NumBonds == folder.NumCoders - 1 &&
+                            folder.Bonds[0].InIndex == 1 && folder.Bonds[0].OutIndex == 0 &&
+                            folder.NumPackStreams == 1 && folder.PackStreams[0] == 0 &&
+                            folder.UnpackStream == folder.NumCoders - 1 && folder.Coders[1].MethodID == 0x21 &&
+                            (folder.NumCoders == 2 || (folder.Bonds[1].InIndex == 2 &&
+                                folder.Bonds[1].OutIndex == 1 && folder.Coders[2].MethodID == 0x03 &&
+                                folder.Coders[2].PropsSize == 1));
                         break;
                     }
                 }
@@ -1429,79 +1461,40 @@ bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, Archive
     stream.impl = nullptr;
     stream.size = 0;
     stream.position = 0;
-    error.clear();
 
-    SevenZipOpenArchive archive;
-
-    if (!archive.open(archivePath, error))
+    // The same saved/runtime/password-prompt path handles encrypted archive
+    // headers and encrypted packed data. Only validated passwords are retained.
+    return SevenZipWithPasswords(archivePath, std::to_string(index), [&](const std::string& password, std::string& attemptError)
     {
-        DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | reason=open_failed | error=%s", (unsigned int)index, error.c_str());
-        return false;
-    }
+        SevenZipScopedPassword scope(password);
+        ArchiveBackendStream candidate{};
+        if (!SevenZipOpenNonSolidEntryStreamImpl(archivePath, index, candidate, attemptError))
+            return false;
 
-    if (index >= archive.db.NumFiles)
-    {
-        error = "7z stream open failed: index out of range";
-        DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | files=%u | reason=index_out_of_range", (unsigned int)index, (unsigned int)archive.db.NumFiles);
-        return false;
-    }
-
-    if (SzArEx_IsDir(&archive.db, index))
-    {
-        error = "7z stream open failed: selected index is a folder";
-        DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | reason=index_is_folder", (unsigned int)index);
-        return false;
-    }
-
-    UInt32 folderIndex = 0xFFFFFFFF;
-
-    if (archive.db.FileToFolder)
-        folderIndex = archive.db.FileToFolder[index];
-
-    if (folderIndex == 0xFFFFFFFF)
-    {
-        error = "7z stream open failed: entry has no folder";
-        DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | reason=no_folder", (unsigned int)index);
-        return false;
-    }
-
-    uint32_t filesInFolder = CountRealFilesInSevenZipFolder(&archive.db, folderIndex);
-
-    if (filesInFolder > 1)
-    {
-        error = "7z stream open failed: solid 7z entries are not streamable";
-        DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | folder=%u | files_in_folder=%u | reason=solid_not_streamable", (unsigned int)index, (unsigned int)folderIndex, (unsigned int)filesInFolder);
-        return false;
-    }
-
-    if (folderIndex < archive.db.db.NumFolders)
-    {
-        CSzFolder folder{};
-        CSzData props{};
-        props.Data = archive.db.db.CodersData + archive.db.db.FoCodersOffsets[folderIndex];
-        props.Size = archive.db.db.FoCodersOffsets[(size_t)folderIndex + 1] - archive.db.db.FoCodersOffsets[folderIndex];
-        if (SzGetNextFolderItem(&folder, &props) == SZ_OK && props.Size == 0)
+        // A wrong AES password can initialise CBC successfully. Probe the
+        // compressed plaintext before accepting and remembering a candidate.
+        // All bytes are decoded, not CRC-calculated; seek resets the CBC IV.
+        if (!password.empty() && candidate.size > 0)
         {
-            for (UInt32 coder = 0; coder < folder.NumCoders; ++coder)
+            unsigned char probe[4096];
+            const size_t expected = candidate.size < sizeof(probe) ? static_cast<size_t>(candidate.size) : sizeof(probe);
+            const size_t got = SevenZipReadNonSolidEntryStreamImpl(candidate, probe, expected);
+            if (got != expected || !SevenZipSeekNonSolidEntryStreamImpl(candidate, 0))
             {
-                if (folder.Coders[coder].MethodID == 0x06F10701)
-                {
-                    error = "Encrypted 7z requires static AES extraction rather than direct stream";
-                    return false;
-                }
+                attemptError = "7z AES stream password verification failed";
+                SevenZipCloseNonSolidEntryStreamImpl(candidate);
+                return false;
             }
         }
-    }
 
-    if (!SevenZipOpenNonSolidEntryStreamImpl(archivePath, index, stream, error))
-    {
-        DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | reason=nonsolid_stream_impl_failed | error=%s", (unsigned int)index, error.c_str());
-        return false;
-    }
-
-    return true;
+        // Preserve the public stream's format, read status and cancellation
+        // fields; only transfer ownership of the decoder handle and counters.
+        stream.impl = candidate.impl;
+        stream.size = candidate.size;
+        stream.position = candidate.position;
+        return true;
+    }, error, true);
 }
-
 size_t SevenZipReadEntryStream(ArchiveBackendStream& stream, void* buffer, size_t bytesToRead)
 {
     return SevenZipReadNonSolidEntryStreamImpl(stream, buffer, bytesToRead);

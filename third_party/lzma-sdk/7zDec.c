@@ -37,6 +37,11 @@ const UInt16 *Sz7z_SetPassword(const UInt16 *password)
   return previous;
 }
 
+const UInt16 *Sz7z_GetPassword(void)
+{
+  return g_7zAesPassword;
+}
+
 #define k_Copy 0
 #ifndef Z7_NO_METHOD_LZMA2
 #define k_LZMA2 0x21

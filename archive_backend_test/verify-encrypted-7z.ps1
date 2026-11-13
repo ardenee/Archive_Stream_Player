@@ -83,13 +83,17 @@ try
     Push-Location $fixtureDir
     try
     {
+        $plain = Join-Path $work "plain-nonsolid.7z"
         $visible = Join-Path $work "aes-visible.7z"
         $hidden = Join-Path $work "aes-hidden-solid.7z"
         $split = Join-Path $work "aes-multipart.7z"
+        $splitNonSolid = Join-Path $work "aes-multipart-nonsolid.7z"
         foreach ($archiveArguments in @(
+            @("a", "-t7z", "-mx=1", "-ms=off", $plain, "*.wav"),
             @("a", "-t7z", "-mx=1", "-ms=off", "-mhe=off", "-p$password", $visible, "*.wav"),
             @("a", "-t7z", "-mx=1", "-ms=on", "-mhe=on", "-p$password", $hidden, "*.wav"),
-            @("a", "-t7z", "-mx=1", "-ms=on", "-mhe=on", "-v8k", "-p$password", $split, "*.wav")
+            @("a", "-t7z", "-mx=1", "-ms=on", "-mhe=on", "-v8k", "-p$password", $split, "*.wav"),
+            @("a", "-t7z", "-mx=1", "-ms=off", "-mhe=on", "-v8k", "-p$password", $splitNonSolid, "*.wav")
         ))
         {
             & $SevenZipExe @archiveArguments | Out-Null
@@ -108,12 +112,26 @@ try
     {
         $label = $arch[0]
         $exe = $arch[1]
-        foreach ($fixture in @(@("visible", $visible), @("hidden", $hidden), @("multipart", $splitFirst)))
+        foreach ($fixture in @(@("plain", $plain), @("visible", $visible), @("hidden", $hidden), @("multipart", $splitFirst), @("multipart-nonsolid", ($splitNonSolid + ".001"))))
         {
             $prefix = Join-Path $work ($label + "-" + $fixture[0])
             Invoke-Test $exe $fixture[1] $passList ($prefix + "-0.wav") ($prefix + "-1.wav")
-            Write-Host "PASS $label AES 7z $($fixture[0]): 2 entries and source SHA-256 hashes match"
+            Write-Host "PASS $label 7z $($fixture[0]): 2 entries and source SHA-256 hashes match"
+            if ($fixture[0] -eq "plain" -or $fixture[0] -eq "visible" -or $fixture[0] -eq "multipart-nonsolid")
+            {
+                foreach ($index in @(0, 1))
+                {
+                    & $exe pwstreamtest $fixture[1] $passList "$index"
+                    if ($LASTEXITCODE -ne 0) { throw "AES stream decode/seek/parity failed: $label $($fixture[0]) entry $index" }
+                }
+                Write-Host "PASS $label non-solid 7z $($fixture[0]): 2 direct streams with byte parity and seeking"
+            }
         }
+        & $exe pwstreamtest $visible $wrongList "0" | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw "Incorrect AES stream password unexpectedly accepted: $label" }
+        & $exe pwstreamtest $hidden $passList "0" | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw "Solid AES 7z unexpectedly opened as a direct stream: $label" }
+        Write-Host "PASS $label incorrect AES password stream rejected and solid 7z stream refused"
         Assert-Rejected $exe $hidden $wrongList (Join-Path $work "$label-wrong.wav")
         Write-Host "PASS $label incorrect password rejected without partial output"
     }

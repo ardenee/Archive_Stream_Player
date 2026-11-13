@@ -14,6 +14,8 @@
 
 extern "C" {
 #include "7z.h"
+#include "7zAesDec.h"
+#include "Delta.h"
 #include "7zAlloc.h"
 #include "7zCrc.h"
 #include "7zFile.h"
@@ -499,8 +501,13 @@ struct SevenZipNonSolidStreamState
 
     UInt32 folderIndex = 0xFFFFFFFF;
     UInt64 packStart = 0;
-    UInt64 packSize = 0;
-
+    UInt64 packSize = 0;  // Decoder-visible packed size, without AES padding.
+    C7zAesLook* aesStream = nullptr;
+    ILookInStreamPtr decodedPackStream = nullptr;
+    bool encrypted = false;
+    Byte lzma2Property = 0;
+    unsigned deltaDistance = 0;
+    Byte deltaState[DELTA_STATE_SIZE]{};
     uint64_t size = 0;
     uint64_t position = 0;
 
@@ -622,7 +629,12 @@ static void CloseArchiveForStream(SevenZipNonSolidStreamState* state)
         return;
 
     FreeLzma2State(state);
-
+    if (state->aesStream)
+    {
+        Sz7zAes_Clear(state->aesStream);
+        delete state->aesStream;
+        state->aesStream = nullptr;
+    }
     if (state->dbOpen)
     {
         SzArEx_Free(&state->db, &g_StreamAlloc);
@@ -839,7 +851,11 @@ static bool SeekToPackedStart(SevenZipNonSolidStreamState* state, std::string& e
         return false;
     }
 
-    SRes seekRes = LookInStream_SeekTo(&state->lookStream.vt, state->packStart);
+    // AES-CBC cannot seek to an arbitrary cipher offset; rewinding the AES
+    // look stream resets the CBC IV and keeps the expanded key in memory.
+    SRes seekRes = state->encrypted
+        ? LookInStream_SeekTo(&state->aesStream->vt, 0)
+        : LookInStream_SeekTo(&state->lookStream.vt, state->packStart);
 
     if (seekRes != SZ_OK)
     {
@@ -909,7 +925,7 @@ static size_t ReadCopyBytes(SevenZipNonSolidStreamState* state, void* buffer, si
         if (want > (1 << 18))
             want = 1 << 18;
 
-        SRes res = ILookInStream_Look(&state->lookStream.vt, &inBuf, &want);
+        SRes res = ILookInStream_Look(state->decodedPackStream, &inBuf, &want);
 
         if (res != SZ_OK || want == 0 || !inBuf)
         {
@@ -920,7 +936,7 @@ static size_t ReadCopyBytes(SevenZipNonSolidStreamState* state, void* buffer, si
 
         std::memcpy(out + totalRead, inBuf, want);
 
-        res = ILookInStream_Skip(&state->lookStream.vt, want);
+        res = ILookInStream_Skip(state->decodedPackStream, want);
 
         if (res != SZ_OK)
         {
@@ -1001,6 +1017,8 @@ static size_t ReadLzma2Bytes(SevenZipNonSolidStreamState* state, void* buffer, s
 
         if (copied > 0)
         {
+            if (state->deltaDistance != 0)
+                Delta_Decode(state->deltaState, state->deltaDistance, out + totalOut, copied);
             totalOut += copied;
             continue;
         }
@@ -1021,7 +1039,7 @@ static size_t ReadLzma2Bytes(SevenZipNonSolidStreamState* state, void* buffer, s
         UInt64 packedRemaining64 = state->packSize - state->packBytesRead;
         size_t srcLen = packedRemaining64 > (UInt64)(1 << 18) ? (1 << 18) : static_cast<size_t>(packedRemaining64);
 
-        SRes lookRes = ILookInStream_Look(&state->lookStream.vt, &inBuf, &srcLen);
+        SRes lookRes = ILookInStream_Look(state->decodedPackStream, &inBuf, &srcLen);
 
         if (lookRes != SZ_OK || srcLen == 0 || !inBuf)
         {
@@ -1038,7 +1056,7 @@ static size_t ReadLzma2Bytes(SevenZipNonSolidStreamState* state, void* buffer, s
 
         if (srcProcessed > 0)
         {
-            SRes skipRes = ILookInStream_Skip(&state->lookStream.vt, srcProcessed);
+            SRes skipRes = ILookInStream_Skip(state->decodedPackStream, srcProcessed);
 
             if (skipRes != SZ_OK)
             {
@@ -1090,48 +1108,14 @@ static bool ResetStreamToBeginning(SevenZipNonSolidStreamState* state, std::stri
 
     state->position = 0;
     state->packBytesRead = 0;
+    if (state->deltaDistance != 0)
+        Delta_Init(state->deltaState);
 
     if (state->mode == SEVENZIP_STREAM_MODE_LZMA2)
     {
-        Byte prop = 0;
-
-        /*
-            The prop is already known at open time, but not stored separately.
-            Re-read the folder metadata and get it again for a clean reset.
-        */
-        CSzFolder folder;
-
-        if (!ReadFolderForStream(&state->db, state->folderIndex, &folder, error))
-        {
-            DebugLogWrite("WARN", "7Z", "STREAM_RESET_FAIL", "index=%u | folder=%u | error=%s | reason=read_folder_failed", (unsigned int)state->index, (unsigned int)state->folderIndex, error.c_str());
+        if (!InitLzma2Decoder(state, state->lzma2Property, error))
             return false;
-        }
-
-        SevenZipStreamMode mode = SEVENZIP_STREAM_MODE_NONE;
-        const Byte* coderPropsBase = state->db.db.CodersData + state->db.db.FoCodersOffsets[state->folderIndex];
-
-        size_t coderPropsSize = state->db.db.FoCodersOffsets[(size_t)state->folderIndex + 1] - state->db.db.FoCodersOffsets[state->folderIndex];
-
-        if (!ValidateSimpleFolderForStream(&state->db, state->folderIndex, &folder, coderPropsBase, coderPropsSize, &mode, &prop, error))
-        {
-            DebugLogWrite("WARN", "7Z", "STREAM_RESET_FAIL", "index=%u | folder=%u | error=%s | reason=validate_folder_failed", (unsigned int)state->index, (unsigned int)state->folderIndex, error.c_str());
-            return false;
-        }
-
-        if (mode != SEVENZIP_STREAM_MODE_LZMA2)
-        {
-            error = "7z stream reset failed: entry is no longer LZMA2";
-            DebugLogWrite("WARN", "7Z", "STREAM_RESET_FAIL", "index=%u | folder=%u | mode=%s | reason=mode_changed", (unsigned int)state->index, (unsigned int)state->folderIndex, SevenZipStreamModeName(mode));
-            return false;
-        }
-
-        if (!InitLzma2Decoder(state, prop, error))
-        {
-            DebugLogWrite("WARN", "7Z", "STREAM_RESET_FAIL", "index=%u | folder=%u | error=%s | reason=lzma2_reinit_failed", (unsigned int)state->index, (unsigned int)state->folderIndex, error.c_str());
-            return false;
-        }
     }
-
     return true;
 }
 
@@ -1228,7 +1212,59 @@ bool SevenZipOpenNonSolidEntryStreamImpl(const wchar_t* archivePath, uint32_t in
 
     size_t coderPropsSize = state->db.db.FoCodersOffsets[(size_t)state->folderIndex + 1] - state->db.db.FoCodersOffsets[state->folderIndex];
 
-    if (!ValidateSimpleFolderForStream(&state->db, state->folderIndex, &folder, coderPropsBase, coderPropsSize, &mode, &lzma2Prop, error))
+    CSzFolder plainFolder = folder;
+    if (folder.NumCoders > 0 && folder.Coders[0].MethodID == 0x06F10701)
+    {
+        DebugLogWrite("INFO", "7Z", "AES_STREAM_LAYOUT", "folder=%u | coders=%u | bonds=%u | packs=%u | unpack=%u | method1=0x%llx | bond0_in=%u | bond0_out=%u", (unsigned)state->folderIndex, (unsigned)folder.NumCoders, (unsigned)folder.NumBonds, (unsigned)folder.NumPackStreams, (unsigned)folder.UnpackStream, folder.NumCoders > 1 ? (unsigned long long)folder.Coders[1].MethodID : 0ULL, folder.NumBonds ? (unsigned)folder.Bonds[0].InIndex : 0U, folder.NumBonds ? (unsigned)folder.Bonds[0].OutIndex : 0U);
+        if ((folder.NumCoders != 2 && folder.NumCoders != 3) ||
+            folder.NumBonds != folder.NumCoders - 1 ||
+            folder.Bonds[0].InIndex != 1 || folder.Bonds[0].OutIndex != 0 ||
+            folder.NumPackStreams != 1 || folder.PackStreams[0] != 0 ||
+            folder.UnpackStream != folder.NumCoders - 1 ||
+            folder.Coders[0].NumStreams != 1 || folder.Coders[1].NumStreams != 1 ||
+            folder.Coders[1].MethodID != STREAM_7Z_METHOD_LZMA2 ||
+            (folder.NumCoders == 3 &&
+                (folder.Bonds[1].InIndex != 2 || folder.Bonds[1].OutIndex != 1 ||
+                 folder.Coders[2].MethodID != 0x03 || folder.Coders[2].NumStreams != 1 ||
+                 folder.Coders[2].PropsSize != 1 ||
+                 folder.Coders[2].PropsOffset >= coderPropsSize)))
+        {
+            std::ostringstream details;
+            details << "7z AES stream unsupported coder graph: coders=" << folder.NumCoders << " bonds=" << folder.NumBonds << " packs=" << folder.NumPackStreams << " unpack=" << folder.UnpackStream << " method1=0x" << std::hex << (folder.NumCoders > 1 ? folder.Coders[1].MethodID : 0ULL);
+            error = details.str();
+            CloseArchiveForStream(state);
+            delete state;
+            return false;
+        }
+        state->encrypted = true;
+        if (folder.NumCoders == 3)
+        {
+            state->deltaDistance = static_cast<unsigned>(coderPropsBase[folder.Coders[2].PropsOffset]) + 1;
+            Delta_Init(state->deltaState);
+        }
+        plainFolder.NumCoders = 1;
+        plainFolder.Coders[0] = folder.Coders[1];
+        plainFolder.NumBonds = 0;
+        plainFolder.UnpackStream = 0;
+    }
+    else if (folder.NumCoders == 2 && folder.NumBonds == 1 &&
+        folder.Coders[0].MethodID == STREAM_7Z_METHOD_LZMA2 &&
+        folder.Coders[1].MethodID == 0x03 &&
+        folder.Coders[0].NumStreams == 1 && folder.Coders[1].NumStreams == 1 &&
+        folder.NumPackStreams == 1 && folder.PackStreams[0] == 0 &&
+        folder.Bonds[0].InIndex == 1 && folder.Bonds[0].OutIndex == 0 &&
+        folder.UnpackStream == 1 && folder.Coders[1].PropsSize == 1 &&
+        folder.Coders[1].PropsOffset < coderPropsSize)
+    {
+        // The Delta filter is applied after incremental LZMA2 decoding.
+        // The same stateful filter also handles the AES -> LZMA2 -> Delta graph.
+        state->deltaDistance = static_cast<unsigned>(coderPropsBase[folder.Coders[1].PropsOffset]) + 1;
+        Delta_Init(state->deltaState);
+        plainFolder.NumCoders = 1;
+        plainFolder.NumBonds = 0;
+        plainFolder.UnpackStream = 0;
+    }
+    if (!ValidateSimpleFolderForStream(&state->db, state->folderIndex, &plainFolder, coderPropsBase, coderPropsSize, &mode, &lzma2Prop, error))
     {
         DebugLogWrite("WARN", "7Z", "STREAM_OPEN_FAIL", "index=%u | folder=%u | reason=validate_folder_failed | error=%s", (unsigned int)index, (unsigned int)state->folderIndex, error.c_str());
         CloseArchiveForStream(state);
@@ -1251,7 +1287,50 @@ bool SevenZipOpenNonSolidEntryStreamImpl(const wchar_t* archivePath, uint32_t in
     UInt32 packStartIndex = state->db.db.FoStartPackStreamIndex[state->folderIndex];
 
     state->packStart = state->db.dataPos + state->db.db.PackPositions[packStartIndex];
-    state->packSize = state->db.db.PackPositions[(size_t)packStartIndex + 1] - state->db.db.PackPositions[packStartIndex];
+    const UInt64 physicalPackSize = state->db.db.PackPositions[(size_t)packStartIndex + 1] - state->db.db.PackPositions[packStartIndex];
+    state->packSize = physicalPackSize;
+    state->decodedPackStream = &state->lookStream.vt;
+    state->lzma2Property = lzma2Prop;
+
+    if (state->encrypted)
+    {
+        const CSzCoderInfo& aesCoder = folder.Coders[0];
+        const UInt16* password = Sz7z_GetPassword();
+        if (!password || aesCoder.PropsOffset > coderPropsSize ||
+            aesCoder.PropsSize > coderPropsSize - aesCoder.PropsOffset)
+        {
+            error = "7z AES stream requires a valid password and coder properties";
+            CloseArchiveForStream(state);
+            delete state;
+            return false;
+        }
+        state->packSize = state->db.db.CoderUnpackSizes[state->db.db.FoToCoderUnpackSizes[state->folderIndex]];
+        if (state->packSize > physicalPackSize)
+        {
+            error = "7z AES stream has an invalid decrypted packed size";
+            CloseArchiveForStream(state);
+            delete state;
+            return false;
+        }
+        state->aesStream = new (std::nothrow) C7zAesLook();
+        if (!state->aesStream)
+        {
+            error = "7z AES stream could not allocate the decryption window";
+            CloseArchiveForStream(state);
+            delete state;
+            return false;
+        }
+        const SRes aesRes = Sz7zAes_Init(state->aesStream, &state->lookStream.vt, state->packStart,
+            physicalPackSize, coderPropsBase + aesCoder.PropsOffset, static_cast<unsigned>(aesCoder.PropsSize), password);
+        if (aesRes != SZ_OK)
+        {
+            error = StreamMakeError("7z AES stream initialization failed", aesRes);
+            CloseArchiveForStream(state);
+            delete state;
+            return false;
+        }
+        state->decodedPackStream = &state->aesStream->vt;
+    }
 
     state->mode = mode;
     state->size = static_cast<uint64_t>(unpackSize);

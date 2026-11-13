@@ -2342,7 +2342,7 @@ static int Play(const char* fn)
     char cachePath[MAX_PATH * 4];
     cachePath[0] = '\0';
 
-    bool existingCacheHit = ArchiveFindExistingCacheFile(actualZipPath, mp3Index, firstAudio, cachePath, sizeof(cachePath));
+    // Cache lookup is last: a previously extracted file must not bypass a viable stream or memory route.
 
     /*
         Use shared archive-path detection here instead of final-extension checks.
@@ -2371,21 +2371,11 @@ static int Play(const char* fn)
     mz_uint32 selectedSolidFilesInFolder = 0;
     bool queueSolidCacheWarmAfterPlaybackStart = false;
 
-    /*
-        Solid 7z route probe.
-
-        Solid 7z entries should not use BUFFER as the normal playback route.
-        Even when the file fits the configured memory buffer, extracting to memory
-        wastes the decompression work because the next play/skip/metadata lookup may
-        need to walk the same solid block again. For solid 7z, a cache miss should
-        build a managed cache file and playback should use CACHE.
-
-        Non-solid 7z behaviour is left unchanged.
-    */
+    // A solid folder cannot be streamed independently. It can still be held
+    // in the configured playback buffer when the selected entry fits.
     if (archiveIs7z || archiveIsRar)
     {
         const char* solidArchiveType = archiveIsRar ? "RAR" : "7Z";
-
         if (ArchiveGetEntrySolidInfo(actualZipPath, mp3Index, &selectedIsSolid, &selectedSolidFolderIndex, &selectedSolidFilesInFolder))
         {
             selectedSolidKnown = true;
@@ -2393,242 +2383,104 @@ static int Play(const char* fn)
         }
         else
         {
-            DebugLogWrite("WARN", "ROUTE", "SOLID_CHECK_FAIL", "archive=%s | archive_type=%s | index=%u | entry=%s | reason=get_entry_solid_info_failed", actualZipPath, solidArchiveType, (unsigned int)mp3Index, firstAudio);
+            DebugLogWrite("WARN", "ROUTE", "SOLID_CHECK_FAIL", "archive=%s | archive_type=%s | index=%u | reason=get_entry_solid_info_failed", actualZipPath, solidArchiveType, (unsigned int)mp3Index);
         }
     }
 
-    if (existingCacheHit)
+    // Strict priority: direct stream, configured memory buffer, managed cache.
+    // Media Foundation's native decoder currently accepts a stream or file,
+    // not an in-memory source. It skips the memory route until implemented.
+    const bool nativeMediaFoundation = MfIsNativeMediaFormat(selectedFormat);
+    const bool solidCannotStream = (archiveIs7z || archiveIsRar) && selectedSolidKnown && selectedIsSolid;
+    std::vector<unsigned char> bufferedEntry;
+    bool streamReady = false;
+
+    if (!solidCannotStream && (archiveIsZip || archiveIs7z || archiveIsRar))
     {
-        playbackMode = ARCHIVE_PLAYBACK_CACHE_FILE;
-        DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | route=CACHE | reason=existing_cache_hit | cache=%s | entry_size=%llu | buffer_size=%zu", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), cachePath, (unsigned long long)uncompSize, g_audioBufferSize);
-
-        if (archiveIs7z && selectedSolidKnown && selectedIsSolid)
-        {
-            queueSolidCacheWarmAfterPlaybackStart = true;
-        }
-        else if (archiveIsRar && selectedSolidKnown && selectedIsSolid)
-        {
-            queueSolidCacheWarmAfterPlaybackStart = true;
-            DebugLogWrite("INFO", "SOLID_CACHE_WARM", "QUEUE_DEFER", "archive=%s | index=%u | reason=rar_existing_cache_hit_warm_rest_after_playback_start", actualZipPath, (unsigned int)mp3Index);
-        }
-    }
-    else if ((archiveIs7z || archiveIsRar) && selectedSolidKnown && selectedIsSolid)
-    {
-        const char* solidArchiveType = archiveIsRar ? "RAR" : "7Z";
-        const char* solidReason = archiveIsRar ? "solid_rar_cache_required" : "solid_7z_cache_required";
-
-        ClearPrevalidatedStream();
-
-        if (!ExtractEntryToPlaybackCache(actualZipPath, mp3Index, firstAudio, selectedFormat, uncompSize, solidReason, cachePath, sizeof(cachePath)))
-        {
-            DebugLogWrite("ERROR", "CACHE", "SOLID_ARCHIVE_CACHE_ROUTE_FAIL", "archive=%s | archive_type=%s | index=%u | entry=%s | size=%llu", actualZipPath, solidArchiveType, (unsigned int)mp3Index, firstAudio, (unsigned long long)uncompSize);
-
-            return 1;
-        }
-
-        playbackMode = ARCHIVE_PLAYBACK_CACHE_FILE;
-        DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | route=CACHE | reason=%s | cache=%s | entry_size=%llu | buffer_size=%zu | folder_index=%u | files_in_folder=%u", actualZipPath, solidArchiveType, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), solidReason, cachePath, (unsigned long long)uncompSize, g_audioBufferSize, (unsigned int)selectedSolidFolderIndex, (unsigned int)selectedSolidFilesInFolder);
-
-        if (archiveIs7z)
-        {
-            queueSolidCacheWarmAfterPlaybackStart = true;
-            DebugLogWrite("INFO", "SOLID_CACHE_WARM", "QUEUE_DEFER", "archive=%s | index=%u | reason=playback_cache_ready_start_playback_first", actualZipPath, (unsigned int)mp3Index);
-        }
-        else
-        {
-            queueSolidCacheWarmAfterPlaybackStart = true;
-            DebugLogWrite("INFO", "SOLID_CACHE_WARM", "QUEUE_DEFER", "archive=%s | index=%u | reason=rar_selected_cache_ready_warm_rest_after_playback_start", actualZipPath, (unsigned int)mp3Index);
-        }
-    }
-    else if (uncompSize > g_audioBufferSize)
-    {
-        if (archiveIsZip)
-        {
-            bool isSplitZipFirstVolume = false;
-            size_t archivePathLen = strlen(actualZipPath);
-
-            if (archivePathLen >= 8 && _stricmp(actualZipPath + archivePathLen - 8, ".zip.001") == 0)
-            {
-                isSplitZipFirstVolume = true;
-            }
-
-            if (isSplitZipFirstVolume)
-            {
-                playbackMode = ARCHIVE_PLAYBACK_STREAM;
-                DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=ZIP | index=%u | entry=%s | audio_type=%s | route=STREAM | reason=libarchive_zip_stream_path | entry_size=%llu | buffer_size=%zu", actualZipPath, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompSize, g_audioBufferSize);
-            }
-            else
-            {
-                playbackMode = ARCHIVE_PLAYBACK_STREAM;
-                DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=ZIP | index=%u | entry=%s | audio_type=%s | route=STREAM | reason=zip_entry_larger_than_buffer | entry_size=%llu | buffer_size=%zu", actualZipPath, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompSize, g_audioBufferSize);
-            }
-        }
-        else if (archiveIs7z)
-        {
-            bool canUse7zStream = false;
-
-            /*
-                Preflight the backend stream open.
-
-                Non-solid 7z is stream-eligible, but the backend currently supports
-                only simple stream layouts. If the validated open fails, fall back
-                to managed cache so playback still works.
-            */
-            if (ArchiveEntryCanStream(actualZipPath, mp3Index))
-            {
-                std::string streamPreflightError;
-
-                if (ArchiveOpenValidatedEntryStream(&g_prevalidatedStream, actualZipPath, mp3Index, 16384, &streamPreflightError))
-                {
-                    InterlockedExchange(&g_prevalidatedStreamReady, 1);
-                    canUse7zStream = true;
-                }
-                else
-                {
-                    DebugLogWrite("WARN", "PLAY", "STREAM_PREFLIGHT_FAIL", "archive_type=7Z | archive=%s | index=%u | reason=open_validated_stream_failed | error=%s", actualZipPath, (unsigned int)mp3Index, streamPreflightError.c_str());
-                }
-            }
-            else
-            {
-                DebugLogWrite("INFO", "STREAM", "PREFLIGHT_SKIP", "archive_type=7Z | archive=%s | index=%u | reason=entry_not_stream_capable", actualZipPath, (unsigned int)mp3Index);
-            }
-
-            if (canUse7zStream)
-            {
-                playbackMode = ARCHIVE_PLAYBACK_STREAM;
-                DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=7Z | index=%u | entry=%s | audio_type=%s | route=STREAM | reason=7z_open_validated_stream_ok | entry_size=%llu | buffer_size=%zu", actualZipPath, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompSize, g_audioBufferSize);
-            }
-            else
-            {
-                ClearPrevalidatedStream();
-
-                if (!ExtractEntryToPlaybackCache(actualZipPath, mp3Index, firstAudio, selectedFormat, uncompSize, "7z_stream_not_available_or_preflight_failed", cachePath, sizeof(cachePath)))
-                {
-                    char msg[1400];
-                    sprintf_s(msg, sizeof(msg), "This 7z entry is larger than the current archive buffer and could not be streamed or extracted to the managed cache.\n\nTrack:\n%s\n\nTrack size: %.2f MB\nCurrent buffer size: %zu MB", firstAudio, (double)uncompSize / 1024.0 / 1024.0, g_configuredBufferSizeMb);
-                    MessageBoxA(g_mod.hMainWindow, msg, "Archive Stream - 7z Stream/Cache Error", MB_OK | MB_ICONERROR);
-                    return 1;
-                }
-
-                playbackMode = ARCHIVE_PLAYBACK_CACHE_FILE;
-                DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=7Z | index=%u | entry=%s | audio_type=%s | route=CACHE | reason=7z_stream_not_available_or_preflight_failed | cache=%s | entry_size=%llu | buffer_size=%zu", actualZipPath, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), cachePath, (unsigned long long)uncompSize, g_audioBufferSize);
-            }
-        }
-        else if (archiveIsRar)
-        {
-            bool canUseRarStream = false;
-
-            if (ArchiveEntryCanStream(actualZipPath, mp3Index))
-            {
-                std::string streamPreflightError;
-
-                if (ArchiveOpenValidatedEntryStream(&g_prevalidatedStream, actualZipPath, mp3Index, 16384, &streamPreflightError))
-                {
-                    InterlockedExchange(&g_prevalidatedStreamReady, 1);
-                    canUseRarStream = true;
-                }
-                else
-                {
-                    DebugLogWrite("WARN", "PLAY", "STREAM_PREFLIGHT_FAIL", "archive_type=RAR | archive=%s | index=%u | reason=open_validated_stream_failed | error=%s", actualZipPath, (unsigned int)mp3Index, streamPreflightError.c_str());
-                }
-            }
-            else
-            {
-                DebugLogWrite("INFO", "STREAM", "PREFLIGHT_SKIP", "archive_type=RAR | archive=%s | index=%u | reason=entry_not_stream_capable", actualZipPath, (unsigned int)mp3Index);
-            }
-
-            if (canUseRarStream)
-            {
-                playbackMode = ARCHIVE_PLAYBACK_STREAM;
-                DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=RAR | index=%u | entry=%s | audio_type=%s | route=STREAM | reason=rar_open_validated_stream_ok | entry_size=%llu | buffer_size=%zu", actualZipPath, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompSize, g_audioBufferSize);
-            }
-            else
-            {
-                ClearPrevalidatedStream();
-
-                if (!ExtractEntryToPlaybackCache(actualZipPath, mp3Index, firstAudio, selectedFormat, uncompSize, "rar_stream_not_available_or_preflight_failed", cachePath, sizeof(cachePath)))
-                {
-                    char msg[1400];
-                    sprintf_s(msg, sizeof(msg), "This RAR entry is larger than the current archive buffer and could not be streamed or extracted to the managed cache.\n\nTrack:\n%s\n\nTrack size: %.2f MB\nCurrent buffer size: %zu MB", firstAudio, (double)uncompSize / 1024.0 / 1024.0, g_configuredBufferSizeMb);
-                    MessageBoxA(g_mod.hMainWindow, msg, "Archive Stream - RAR Stream/Cache Error", MB_OK | MB_ICONERROR);
-                    return 1;
-                }
-
-                playbackMode = ARCHIVE_PLAYBACK_CACHE_FILE;
-                DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=RAR | index=%u | entry=%s | audio_type=%s | route=CACHE | reason=rar_stream_not_available_or_preflight_failed | cache=%s | entry_size=%llu | buffer_size=%zu", actualZipPath, (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), cachePath, (unsigned long long)uncompSize, g_audioBufferSize);
-            }
-        }
-        else
-        {
-            DebugLogWrite("ERROR", "PLAY", "ENTRY_TOO_LARGE", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | size=%llu | buffer_bytes=%zu | zip=%d | sevenzip=%d | rar=%d | reason=no_stream_or_cache_path", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompSize, g_audioBufferSize, archiveIsZip ? 1 : 0, archiveIs7z ? 1 : 0, archiveIsRar ? 1 : 0);
-            MessageBoxA(g_mod.hMainWindow, "This archive entry is larger than the configured memory buffer, and this archive type has no stream/cache path.", "Archive Stream - Entry Too Large", MB_OK | MB_ICONWARNING);
-            return 1;
-        }
-    }
-    else
-    {
-        DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | route=BUFFER | reason=entry_fits_configured_buffer | entry_size=%llu | buffer_size=%zu", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompSize, g_audioBufferSize);
-    }
-
-    /*
-        Media Foundation override.
-
-        Only run this when the route has not already been forced to CACHE.
-        Solid 7z cache misses are deliberately cached above, so MF must not reopen
-        the archive stream or perform a second cache extraction decision here.
-    */
-    if (playbackMode != ARCHIVE_PLAYBACK_CACHE_FILE && MfIsNativeMediaFormat(selectedFormat))
-    {
-        DebugLogWrite("INFO", "ROUTE", "MF_ROUTE_CHECK", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | current_route=%s | reason=native_media_format_requires_mf", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), PlaybackModeToLogName(playbackMode));
-
-        bool canUseArchiveStream = false;
-
         if (ArchiveEntryCanStream(actualZipPath, mp3Index))
         {
             std::string streamPreflightError;
-
-            if (ArchiveValidateEntryStreamRead(actualZipPath, mp3Index, 16384, &streamPreflightError))
+            if (ArchiveOpenValidatedEntryStream(&g_prevalidatedStream, actualZipPath, mp3Index, 16384, &streamPreflightError))
             {
-                canUseArchiveStream = true;
+                InterlockedExchange(&g_prevalidatedStreamReady, 1);
+                streamReady = true;
             }
             else
             {
-                DebugLogWrite("WARN", "PLAY", "STREAM_PREFLIGHT_FAIL", "archive_type=MF | archive=%s | index=%u | reason=read_preflight_failed | error=%s", actualZipPath, (unsigned int)mp3Index, streamPreflightError.c_str());
+                ClearPrevalidatedStream();
+                DebugLogWrite("WARN", "PLAY", "STREAM_PREFLIGHT_FAIL", "archive=%s | archive_type=%s | index=%u | error=%s", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, streamPreflightError.c_str());
             }
         }
         else
         {
-            DebugLogWrite("INFO", "STREAM", "PREFLIGHT_SKIP", "archive_type=MF | archive=%s | index=%u | reason=entry_not_stream_capable", actualZipPath, (unsigned int)mp3Index);
+            DebugLogWrite("INFO", "STREAM", "PREFLIGHT_SKIP", "archive=%s | archive_type=%s | index=%u | reason=entry_not_stream_capable", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index);
+        }
+    }
+    else if (solidCannotStream)
+    {
+        DebugLogWrite("INFO", "STREAM", "PREFLIGHT_SKIP", "archive=%s | archive_type=%s | index=%u | reason=solid_not_streamable", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index);
+    }
+
+    if (streamReady)
+    {
+        playbackMode = ARCHIVE_PLAYBACK_STREAM;
+        DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | route=STREAM | reason=validated_stream_first | size=%llu", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, (unsigned long long)uncompSize);
+    }
+    else
+    {
+        bool memoryReady = false;
+        if (!nativeMediaFoundation && uncompSize <= g_audioBufferSize)
+        {
+            std::string memoryError;
+            if (ArchiveExtractEntryToMemory(actualZipPath, mp3Index, bufferedEntry, memoryError) &&
+                !bufferedEntry.empty() && bufferedEntry.size() <= g_audioBufferSize)
+            {
+                memoryReady = true;
+            }
+            else
+            {
+                DebugLogWrite("WARN", "ROUTE", "MEMORY_FALLBACK_FAIL", "archive=%s | index=%u | expected=%llu | extracted=%zu | error=%s", actualZipPath, (unsigned int)mp3Index, (unsigned long long)uncompSize, bufferedEntry.size(), memoryError.c_str());
+                bufferedEntry.clear();
+            }
         }
 
-        if (canUseArchiveStream)
+        if (memoryReady)
         {
-            playbackMode = ARCHIVE_PLAYBACK_STREAM;
-            DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | route=STREAM | decoder=MF | reason=mf_archive_stream_read_preflight_ok", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat));
+            playbackMode = ARCHIVE_PLAYBACK_MEMORY;
+            DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | route=BUFFER | reason=stream_unavailable_memory_fits | size=%llu | buffer_size=%zu", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, (unsigned long long)uncompSize, g_audioBufferSize);
         }
         else
         {
-            if (!ExtractEntryToPlaybackCache(actualZipPath, mp3Index, firstAudio, selectedFormat, uncompSize, "mf_archive_stream_not_available", cachePath, sizeof(cachePath)))
+            const char* cacheReason = solidCannotStream ? (archiveIsRar ? "solid_rar_memory_unavailable" : "solid_7z_memory_unavailable") :
+                nativeMediaFoundation ? "mf_memory_decoder_unavailable" :
+                uncompSize > g_audioBufferSize ? "entry_exceeds_memory_buffer" : "stream_and_memory_failed";
+            ClearPrevalidatedStream();
+
+            const bool existingCacheHit = ArchiveFindExistingCacheFile(actualZipPath, mp3Index, firstAudio, cachePath, sizeof(cachePath));
+            if (!existingCacheHit &&
+                !ExtractEntryToPlaybackCache(actualZipPath, mp3Index, firstAudio, selectedFormat, uncompSize, cacheReason, cachePath, sizeof(cachePath)))
             {
-                char msg[1400];
-                sprintf_s(msg, sizeof(msg), "This archive entry could not be streamed or extracted to the managed cache for Media Foundation playback.\n\nTrack:\n%s\n\nTrack size: %.2f MB", firstAudio, (double)uncompSize / 1024.0 / 1024.0);
-                MessageBoxA(g_mod.hMainWindow, msg, "Archive Stream - Media Foundation Cache Error", MB_OK | MB_ICONERROR);
+                DebugLogWrite("ERROR", "ROUTE", "CACHE_FALLBACK_FAIL", "archive=%s | archive_type=%s | index=%u | entry=%s | reason=%s", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, cacheReason);
+                MessageBoxA(g_mod.hMainWindow, "Unable to stream the selected track, buffer it in memory, or extract it to the managed cache.", "Archive Stream - Playback Route Error", MB_OK | MB_ICONERROR);
                 return 1;
             }
 
             playbackMode = ARCHIVE_PLAYBACK_CACHE_FILE;
-            DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | route=CACHE | decoder=MF | reason=mf_archive_stream_not_available | cache=%s", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, AudioFormatToLogName(selectedFormat), cachePath);
+            DebugLogWrite("INFO", "ROUTE", "ROUTE_DECISION", "archive=%s | archive_type=%s | index=%u | entry=%s | route=CACHE | reason=%s | existing=%d | cache=%s | size=%llu", actualZipPath, ArchiveTypeToLogName(actualZipPath), (unsigned int)mp3Index, firstAudio, cacheReason, existingCacheHit ? 1 : 0, cachePath, (unsigned long long)uncompSize);
+
+            // Warm the rest of a solid folder only if cache was actually chosen.
+            if (solidCannotStream)
+                queueSolidCacheWarmAfterPlaybackStart = true;
         }
     }
-
     size_t extractedSize = 0;
 
     if (playbackMode == ARCHIVE_PLAYBACK_MEMORY)
     {
-        std::vector<unsigned char> extractedAudio;
+        std::vector<unsigned char> extractedAudio = std::move(bufferedEntry);
         std::string extractError;
 
-        if (!ArchiveExtractEntryToMemory(actualZipPath, mp3Index, extractedAudio, extractError))
+        if (extractedAudio.empty())
         {
             DebugLogWrite("ERROR", "PLAY", "EXTRACT_FAIL", "archive=%s | index=%u | error=%s", actualZipPath, (unsigned int)mp3Index, extractError.c_str());
             MessageBoxA(g_mod.hMainWindow, "Could not extract archive entry to memory.", "Archive Stream - Extract Error", MB_OK | MB_ICONERROR);
