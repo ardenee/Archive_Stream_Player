@@ -94,6 +94,7 @@
     <ClCompile Include="foobar_decode_test.cpp" />
     <ClCompile Include="foobar_settings.cpp" />
     <ClCompile Include="foobar_preferences.cpp" />
+    <ClCompile Include="foobar_title_provider.cpp" />
     <ClCompile Include="..\shared\debug_log.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -104,6 +105,7 @@
     <ClInclude Include="foobar_decode_test.h" />
     <ClInclude Include="foobar_resource.h" />
     <ClInclude Include="foobar_settings.h" />
+    <ClInclude Include="foobar_title_provider.h" />
   </ItemGroup>
   <ItemGroup Condition="'$(ArchiveFoobarFaultTestDefinitions)'==''">
     <ProjectReference Include="..\archive_backend\archive_backend.vcxproj" />

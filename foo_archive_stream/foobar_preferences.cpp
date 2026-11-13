@@ -1,6 +1,7 @@
 #include <foobar2000/SDK/foobar2000.h>
 #include "foobar_resource.h"
 #include "foobar_settings.h"
+#include "foobar_title_provider.h"
 #include "../shared/archive_adapter_preferences.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_adapter_logging.h"
@@ -166,6 +167,8 @@ namespace
                 return;
             }
 
+            if (display_)
+                FoobarArchiveTitlesRefresh(false);
             changed_ = false;
             callback_->on_state_changed();
         }

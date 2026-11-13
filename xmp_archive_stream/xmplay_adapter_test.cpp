@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#pragma comment(lib, "advapi32.lib")
 
 namespace
 {
@@ -51,6 +52,53 @@ namespace
     BOOL WINAPI Cancel() {return FALSE;}
     HWND WINAPI Window() {return nullptr;}
 
+    struct TestRegistryScope
+    {
+        HKEY root = nullptr;
+        HKEY preferences = nullptr;
+        std::wstring keyPath;
+        bool configured = false;
+
+        explicit TestRegistryScope(bool enabled)
+        {
+            if (!enabled)
+                return;
+            keyPath = L"Software\\ArchiveStreamPlayer\\TitleTests-" + std::to_wstring(GetCurrentProcessId());
+            if (RegCreateKeyExW(HKEY_CURRENT_USER, keyPath.c_str(), 0, nullptr,
+                REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &root, nullptr) != ERROR_SUCCESS)
+                return;
+            if (RegOverridePredefKey(HKEY_CURRENT_USER, root) != ERROR_SUCCESS)
+                return;
+            if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\ArchiveStreamPlayer\\Adapters", 0, nullptr,
+                REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &preferences, nullptr) != ERROR_SUCCESS)
+                return;
+            const DWORD memory = 50;
+            RegSetValueExW(preferences, L"MemoryMB", 0, REG_DWORD,
+                reinterpret_cast<const BYTE*>(&memory), sizeof(memory));
+            configured = SetTitle(L"<archivetype>: <#> - <filename>");
+        }
+
+        bool SetTitle(const wchar_t* value)
+        {
+            if (!preferences || !value)
+                return false;
+            return RegSetValueExW(preferences, L"TitleTemplate", 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(value),
+                static_cast<DWORD>((wcslen(value) + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+        }
+
+        ~TestRegistryScope()
+        {
+            if (preferences)
+                RegCloseKey(preferences);
+            RegOverridePredefKey(HKEY_CURRENT_USER, nullptr);
+            if (root)
+                RegCloseKey(root);
+            if (!keyPath.empty())
+                RegDeleteTreeW(HKEY_CURRENT_USER, keyPath.c_str());
+        }
+    };
+
     XMPFUNC_FILE files{};
     XMPFUNC_MISC misc{};
 
@@ -64,11 +112,19 @@ namespace
 
 int wmain(int argc,wchar_t** argv)
 {
-    if(argc!=3)
+    const bool titleTest = argc==4 && wcscmp(argv[3], L"--test-title-parity")==0;
+    if(argc!=3 && !titleTest)
     {
-        puts("Usage: xmplay_adapter_test xmp-archive-stream.dll archive.7z|zip|rar");
+        puts("Usage: xmplay_adapter_test xmp-archive-stream.dll archive.7z|zip|rar [--test-title-parity]");
         return 2;
     }
+    TestRegistryScope registry(titleTest);
+    if (titleTest && !registry.configured)
+    {
+        puts("FAIL unable to isolate title preferences from the real user profile");
+        return 1;
+    }
+
     TestFile file;
     file.path=argv[2];
     const int utf8Len=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,file.path.c_str(),-1,nullptr,0,nullptr,nullptr);
@@ -135,6 +191,26 @@ int wmain(int argc,wchar_t** argv)
     }
     misc.Free(list);
     printf("PASS XMPlay archive list=%zu\n",names.size());
+    if (titleTest)
+    {
+        for (const auto& name : names)
+        {
+            const char* slash = strchr(name.c_str(), '/');
+            if (!slash || slash == name.c_str() || !slash[1] ||
+                name.find("_ ") == std::string::npos)
+            {
+                printf("FAIL XMPlay formatted title: %s\n", name.c_str());
+                return 1;
+            }
+        }
+        if (!registry.SetTitle(L"<filename>"))
+        {
+            puts("FAIL resetting isolated title template");
+            return 1;
+        }
+        // Revisit playlist aliases after the title format changes.
+        printf("PASS XMPlay reversible title aliases=%zu\n", names.size());
+    }
     int checked=0;
     for(const auto& name:names)
     {
@@ -171,6 +247,26 @@ int wmain(int argc,wchar_t** argv)
         misc.Free(partialBuffer);
         ++checked;
     }
+    if (titleTest)
+    {
+        char* oldList = api->GetFileList(&file);
+        if (!oldList || !*oldList)
+        {
+            puts("FAIL default preset list");
+            return 1;
+        }
+        DWORD partial = 64;
+        void* bytes = api->DecompressFile(&file, oldList, &partial);
+        if (!bytes || partial != 64 || memcmp(bytes, "RIFF", 4) != 0)
+        {
+            puts("FAIL default preset backward compatibility");
+            return 1;
+        }
+        misc.Free(bytes);
+        misc.Free(oldList);
+        puts("PASS XMPlay default preset legacy archive names");
+    }
+
     fclose(file.handle);
     FreeLibrary(module);
     printf("PASS XMPlay archive callback entries=%d\n",checked);

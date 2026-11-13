@@ -16,6 +16,7 @@
 #include "archive_passwords.h"
 #include "debug_log.h"
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -91,6 +92,65 @@ namespace
             ? entry.path : std::to_string(entry.index) + "/" + entry.path;
     }
 
+    // The default filename preset retains existing archive entry names.
+    // Other presets produce a reversible index/name alias. XMPlay uses this
+    // string as both its displayed filename and its extraction key, so an
+    // old playlist must remain readable after the title template changes.
+    std::string DisplayEntryName(const ArchiveEntry& entry, const std::set<std::string>& duplicates,
+        const std::wstring& archive, const ArchiveAdapterPreferences& prefs)
+    {
+        if (prefs.titleTemplate == L"<filename>" || prefs.titleTemplate.empty())
+            return EntryName(entry, duplicates);
+
+        const std::wstring wide = ArchiveAdapterFormatTitle(archive, ArchiveAdapterUtf8ToWide(entry.path),
+            entry.index + 1, prefs.titleTemplate);
+        std::wstring label = wide;
+        for (wchar_t& c : label)
+        {
+            if (c == L'/' || c == L'\\' || c == L':' || c == L'*' || c == L'?' ||
+                c == L'"' || c == L'<' || c == L'>' || c == L'|' || c == L'\r' || c == L'\n')
+                c = L'_';
+        }
+
+        const auto dot = entry.path.find_last_of('.');
+        const auto slash = entry.path.find_last_of("/\\");
+        if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+        {
+            const std::wstring extension = ArchiveAdapterUtf8ToWide(entry.path.substr(dot));
+            if (label.size() < extension.size() ||
+                _wcsicmp(label.c_str() + label.size() - extension.size(), extension.c_str()) != 0)
+                label += extension;
+        }
+
+        const std::string converted = ArchiveAdapterWideToUtf8(label);
+        if (converted.empty() || converted.size() > 1024)
+            return EntryName(entry, duplicates);
+        return std::to_string(entry.index) + "/" + converted;
+    }
+
+    bool AliasMatches(const ArchiveEntry& entry, const char* requested)
+    {
+        if (!requested || !*requested)
+            return false;
+        const char* slash = std::strchr(requested, '/');
+        if (!slash || slash == requested || !slash[1] || std::strchr(slash + 1, '/') ||
+            std::strchr(slash + 1, '\\'))
+            return false;
+
+        uint32_t index = 0;
+        const auto parsed = std::from_chars(requested, slash, index);
+        if (parsed.ec != std::errc() || parsed.ptr != slash || index != entry.index)
+            return false;
+        const auto dot = entry.path.find_last_of('.');
+        if (dot == std::string::npos)
+            return false;
+        const std::string extension = entry.path.substr(dot);
+        const std::string alias = slash + 1;
+        if (alias.size() < extension.size())
+            return false;
+        return _stricmp(alias.c_str() + alias.size() - extension.size(), extension.c_str()) == 0;
+    }
+
     bool Collect(const std::wstring& path, std::vector<ArchiveEntry>& entries, std::set<std::string>& duplicates)
     {
         std::string error;
@@ -119,13 +179,14 @@ namespace
             std::set<std::string> duplicates;
             if (!Collect(path, entries, duplicates))
                 return nullptr;
+            const auto preferences = ArchiveAdapterPreferencesLoad();
             size_t bytes = 1;
             unsigned count = 0;
             for (const auto& entry : entries)
             {
                 if (entry.isFolder || !entry.isSupportedAudio)
                     continue;
-                const std::string name = EntryName(entry, duplicates);
+                const std::string name = DisplayEntryName(entry, duplicates, path, preferences);
                 if (name.empty() || name.size() > 32767 || bytes > UINT32_MAX - name.size() - 1)
                     return nullptr;
                 bytes += name.size() + 1;
@@ -141,7 +202,7 @@ namespace
             {
                 if (entry.isFolder || !entry.isSupportedAudio)
                     continue;
-                const std::string name = EntryName(entry, duplicates);
+                const std::string name = DisplayEntryName(entry, duplicates, path, preferences);
                 memcpy(output + offset, name.c_str(), name.size() + 1);
                 offset += name.size() + 1;
             }
@@ -228,7 +289,8 @@ namespace
                 return nullptr;
             const auto entry = std::find_if(entries.begin(), entries.end(), [&](const ArchiveEntry& e)
             {
-                return !e.isFolder && e.isSupportedAudio && EntryName(e, duplicates) == name;
+                return !e.isFolder && e.isSupportedAudio &&
+                    (EntryName(e, duplicates) == name || AliasMatches(e, name));
             });
             if (entry == entries.end() || entry->size == 0)
                 return nullptr;

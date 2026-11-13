@@ -7,6 +7,7 @@
 #include "foobar_settings.h"
 #include "foobar_archive_reader.h"
 #include "foobar_decode_test.h"
+#include "foobar_title_provider.h"
 #include "debug_log.h"
 #include <commdlg.h>
 #include <wincred.h>
@@ -101,6 +102,7 @@ namespace
             else
             {
                 FoobarArchiveSettingsApplyBackend(FoobarArchiveSettingsLoad());
+                FoobarArchiveTitlesInitialize();
                 if (!ArchiveUnifiedCache::Maintain(ArchiveAdapterPreferencesLoad()))
                     DebugLogWrite("WARN", "FOOBAR", "CACHE_MAINTENANCE_PARTIAL", "reason=cache_file_in_use");
                 ArchivePasswordSetPromptCallback(FoobarPromptArchivePassword);
@@ -125,6 +127,7 @@ namespace
         }
         void on_quit() override
         {
+            FoobarArchiveTitlesShutdown();
             ArchivePasswordSetPromptCallback(nullptr);
             DebugLogShutdown();
         }
