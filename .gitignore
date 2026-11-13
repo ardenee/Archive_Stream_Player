@@ -22,6 +22,8 @@
 !/.gitignore
 !/README.md
 !/PLAYER-ADAPTERS.md
+!/LICENSE
+!/LICENSING.md
 
 # Visual Studio / build junk
 .vs/

@@ -20,4 +20,6 @@ The official AIMP, foobar2000, XMPlay and MusicBee SDKs are downloaded separatel
 
 ## Redistribution
 
+The repository's root [MIT License](../LICENSE) covers original Archive Stream Player code **only**. All imported code in `third_party` retains the licensing established by its original authors; the project's MIT file **does not** relicense those sources. See [the precise licence scope](../LICENSING.md).
+
 These READMEs are summaries, **not replacement licences**. Preserve upstream copyright and licences in every file and supply applicable notices with binary releases, notably libarchive's `COPYING` and UnRAR's `license.txt`. UnRAR's conditions explicitly prohibit using its source to recreate a RAR-compatible compressor. Libarchive includes differently licensed portions; its individual file notices prevail. The Winamp SDK's precise original distribution version is not recorded; review terms before distributing SDK headers. See each linked folder README for detailed requirements and local changes.

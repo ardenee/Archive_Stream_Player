@@ -57,8 +57,12 @@ The following have passed tests in at least one supported player or in the share
 - [ ] Bring password prompts, settings, cache controls and track titles to comparable quality across player adapters.
 - [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup.
 - [ ] Improve installer/distribution packages and include the required third-party licence notices.
-- [ ] Choose and publish a clear project-level licence for the original Archive Stream Player code; the third-party licences remain separate.
+- [x] Publish MIT licensing for the original Archive Stream Player code while retaining separate licences for third-party components.
 - [ ] Finish archive-header metadata checks and remaining performance/reliability testing.
+
+## Licence
+
+Original Archive Stream Player code is available under the **[MIT License](LICENSE)**, copyright 2026 arden. The included archive libraries, audio codecs and player SDK headers **keep their own licences**; they are **not relicensed as MIT**. See [licence scope and distribution requirements](LICENSING.md) and the [third-party component notices](third_party/README.md).
 
 ## Downloads, development and credits
 
