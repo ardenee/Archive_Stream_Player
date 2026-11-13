@@ -16,6 +16,7 @@
 #define IDC_LOG_FOLDER             2213
 #define IDC_CACHE_VIEW            2211
 #define IDC_CACHE_CLEAR           2212
+#define IDC_SHARED_SETTINGS       2214
 
 #define IDC_DISPLAY_PREFIX         2301
 #define IDC_DISPLAY_POSTFIX        2302

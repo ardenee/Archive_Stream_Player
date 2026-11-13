@@ -25,6 +25,8 @@
 #include <windows.h>
 #include <wincred.h>
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
+#include "../shared/archive_unified_warmer.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -262,43 +264,24 @@ std::wstring Cache(const ArchiveEntry &e)
     std::lock_guard<std::mutex> lock(g_fileMutex);
     if (auto it = g_fileCache.find(e.index); it != g_fileCache.end())
         return it->second;
-    // Session-scoped cache budget, including files already extracted.
-    uint64_t used = 0;
-    for (const auto& item : g_fileCache)
-    {
-        WIN32_FILE_ATTRIBUTE_DATA attrs{};
-        if (GetFileAttributesExW(item.second.c_str(), GetFileExInfoStandard, &attrs))
-            used += (static_cast<uint64_t>(attrs.nFileSizeHigh) << 32) | attrs.nFileSizeLow;
-    }
-    if (g_settings.cacheLimit == 0 || e.size > g_settings.cacheLimit ||
-        used > g_settings.cacheLimit - e.size)
+
+    // Command-line limits remain authoritative for bridge test/session overrides.
+    if (g_settings.cacheLimit == 0 || e.size > g_settings.cacheLimit)
     {
         std::fprintf(stderr, "CACHE_LIMIT index=%u\r\n", e.index);
         return {};
     }
-    std::wstring path = g_work + L"\\" + std::to_wstring(e.index) + L".cache";
+    auto options = ArchiveAdapterPreferencesLoad();
+    options.cacheLimitMb = static_cast<unsigned>(g_settings.cacheLimit / ArchiveUnifiedCache::kMb);
+    std::wstring path;
     std::string error;
-    if (!ArchiveExtractEntryToFile(g_settings.archive.c_str(), e.index, path.c_str(), error))
+    if (!ArchiveUnifiedCache::Prepare(g_settings.archive, e, options, path, error))
     {
-        DeleteFileW(path.c_str());
-        std::fprintf(stderr, "CACHE_FAIL entry=%u\r\n", e.index);
-        return {};
-    }
-    WIN32_FILE_ATTRIBUTE_DATA info{};
-    ULARGE_INTEGER length{};
-    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info))
-    {
-        DeleteFileW(path.c_str());
-        return {};
-    }
-    length.LowPart = info.nFileSizeLow;
-    length.HighPart = info.nFileSizeHigh;
-    if (length.QuadPart != e.size)
-    {
-        DeleteFileW(path.c_str());
+        std::fprintf(stderr, "CACHE_FAIL entry=%u reason=%s\r\n", e.index, error.c_str());
         return {};
     }
     g_fileCache[e.index] = path;
+    ArchiveUnifiedWarmer::Queue(g_settings.archive, e, options);
     return path;
 }
 // The HTTP status and Content-Length have already been sent. Recover only

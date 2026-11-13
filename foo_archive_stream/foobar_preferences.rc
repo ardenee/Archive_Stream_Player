@@ -1,18 +1,18 @@
 #include <windows.h>
 #include "foobar_resource.h"
 
-IDD_ARCHIVE_GENERAL DIALOGEX 0, 0, 450, 280
+IDD_ARCHIVE_GENERAL DIALOGEX 0, 0, 450, 305
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
 FONT 9, "Segoe UI"
 BEGIN
     GROUPBOX      "Playback and cache", -1, 8, 5, 434, 101
-    LTEXT         "Playback buffer (MB, 10-200):", -1, 18, 21, 180, 12
+    LTEXT         "Playback buffer (MB, 1-512):", -1, 18, 21, 180, 12
     EDITTEXT      IDC_BUFFER_MB, 208, 19, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
     LTEXT         "Maximum cache size (MB, 0-20480):", -1, 18, 42, 190, 12
     EDITTEXT      IDC_CACHE_MB, 208, 40, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
-    AUTOCHECKBOX  "Clean cache by size", IDC_CACHE_SIZE_CLEANUP, 18, 63, 170, 12
-    AUTOCHECKBOX  "Clean cache by age", IDC_CACHE_AGE_CLEANUP, 208, 63, 130, 12
-    LTEXT         "Maximum age (days, 1-99):", -1, 208, 83, 155, 12
+    AUTOCHECKBOX  "Clean legacy cache by size", IDC_CACHE_SIZE_CLEANUP, 18, 63, 170, 12
+    AUTOCHECKBOX  "Clean legacy cache by age", IDC_CACHE_AGE_CLEANUP, 208, 63, 160, 12
+    LTEXT         "Maximum age (days, 1-365):", -1, 208, 83, 155, 12
     EDITTEXT      IDC_CACHE_AGE_DAYS, 363, 81, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
 
     GROUPBOX      "Archive passwords", -1, 8, 112, 434, 53
@@ -29,7 +29,8 @@ BEGIN
     PUSHBUTTON    "Open cache folder", IDC_CACHE_VIEW, 12, 250, 122, 18
     PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 144, 250, 104, 18
     PUSHBUTTON    "Open log folder", IDC_LOG_FOLDER, 258, 250, 125, 18
-    LTEXT         "Buffer and title-format options are reserved for later playback integration.", -1, 12, 271, 424, 9
+    PUSHBUTTON    "Shared settings (all players)...", IDC_SHARED_SETTINGS, 12, 275, 175, 19
+    LTEXT         "Shared playback options also control password prompts, cache warming and title formats.", -1, 195, 280, 239, 20
 END
 
 IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 450, 200

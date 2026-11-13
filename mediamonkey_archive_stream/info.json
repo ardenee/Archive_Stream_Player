@@ -14,6 +14,10 @@
     {
       "src": "gen_archive_stream.dll",
       "tgt": "gen_archive_stream.dll"
+    },
+    {
+      "src": "configure-adapters.ps1",
+      "tgt": "configure-adapters.ps1"
     }
   ],
   "showRestartPrompt": "true"

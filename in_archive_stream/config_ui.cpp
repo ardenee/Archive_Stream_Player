@@ -11,6 +11,9 @@
 #include "archive_cache.h"
 #include "archive_rar_reader.h"
 #include "debug_log.h"
+#include "archive_passwords.h"
+#include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comdlg32.lib")
@@ -520,13 +523,32 @@ void LoadConfig()
     }
 
     g_debugLoggingEnabled = debugLoggingEnabled ? true : false;
-    RarSetPasswordListPath(g_rarPasswordListPath);
     g_configuredBufferSizeMb = ClampBufferMb((size_t)bufferMb);
     g_audioBufferSize = g_configuredBufferSizeMb * 1024 * 1024;
     g_configuredCacheSizeMb = ClampCacheMb((size_t)cacheMb);
     g_cacheSizeCleanupEnabled = cacheSizeCleanupEnabled ? true : false;
     g_cacheAgeCleanupEnabled = cacheAgeCleanupEnabled ? true : false;
     g_cacheMaxAgeDays = ClampCacheAgeDays((unsigned int)cacheMaxAgeDays);
+
+    if (ArchiveAdapterPreferencesConfigured())
+    {
+        const auto shared = ArchiveAdapterPreferencesLoad();
+        g_configuredBufferSizeMb = ClampBufferMb(shared.memoryMb);
+        g_audioBufferSize = g_configuredBufferSizeMb * 1024 * 1024;
+        g_configuredCacheSizeMb = ClampCacheMb(shared.cacheLimitMb);
+        g_cacheMaxAgeDays = ClampCacheAgeDays(shared.cacheAgeDays);
+
+        const std::string passwordUtf8 = ArchiveAdapterWideToUtf8(shared.passwordListPath);
+        if (!passwordUtf8.empty() && passwordUtf8.size() < sizeof(g_rarPasswordListPath))
+            strcpy_s(g_rarPasswordListPath, sizeof(g_rarPasswordListPath), passwordUtf8.c_str());
+
+        const std::string titleUtf8 = ArchiveAdapterWideToUtf8(shared.titleTemplate);
+        if (!titleUtf8.empty() && titleUtf8.size() < sizeof(g_displayTemplate))
+            strcpy_s(g_displayTemplate, sizeof(g_displayTemplate), titleUtf8.c_str());
+    }
+
+    RarSetPasswordListPath(g_rarPasswordListPath);
+    ArchivePasswordSetListPath(g_rarPasswordListPath);
 }
 
 void SaveConfig()
@@ -638,6 +660,15 @@ void SaveConfig()
     }
 
     RarSetPasswordListPath(g_rarPasswordListPath);
+    ArchivePasswordSetListPath(g_rarPasswordListPath);
+
+    auto common = ArchiveAdapterPreferencesLoad();
+    common.memoryMb = static_cast<unsigned>(g_configuredBufferSizeMb);
+    common.cacheLimitMb = static_cast<unsigned>(g_configuredCacheSizeMb);
+    common.cacheAgeDays = g_cacheMaxAgeDays;
+    common.passwordListPath = ArchiveAdapterUtf8ToWide(g_rarPasswordListPath);
+    if (!ArchiveAdapterPreferencesSave(common))
+        DebugLogWrite("WARN", "CONFIG", "SHARED_SAVE_FAIL", "source=winamp");
 }
 
 void ReallocateAudioBuffer(size_t newSizeMb)
@@ -718,7 +749,7 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             sprintf_s(value, sizeof(value), "%zu", g_configuredBufferSizeMb);
             SetWindowTextA(g_bufferEdit, value);
 
-            HWND hBufferRange = CreateWindowExA(0, "STATIC", "Allowed range: 10 MB to 200 MB", WS_CHILD | WS_VISIBLE, 16, 78, 300, 20, hwnd, NULL, g_hInstance, NULL);
+            HWND hBufferRange = CreateWindowExA(0, "STATIC", "Allowed range: 1 MB to 512 MB", WS_CHILD | WS_VISIBLE, 16, 78, 300, 20, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hBufferRange, WM_SETFONT, (WPARAM)hFont, TRUE);
 
             HWND hCacheSection = CreateWindowExA(0, "STATIC", "Managed cache", WS_CHILD | WS_VISIBLE, 16, 110, 170, 20, hwnd, NULL, g_hInstance, NULL);
@@ -750,7 +781,7 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             sprintf_s(value, sizeof(value), "%u", g_cacheMaxAgeDays);
             SetWindowTextA(g_cacheAgeEdit, value);
 
-            HWND hDaysLabel = CreateWindowExA(0, "STATIC", "days (1 to 99)", WS_CHILD | WS_VISIBLE, 330, 197, 120, 20, hwnd, NULL, g_hInstance, NULL);
+            HWND hDaysLabel = CreateWindowExA(0, "STATIC", "days (1 to 365)", WS_CHILD | WS_VISIBLE, 330, 197, 120, 20, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hDaysLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
 
             HWND hViewCache = CreateWindowExA(0, "BUTTON", "View Cache", WS_CHILD | WS_VISIBLE, 16, 245, 105, 28, hwnd, (HMENU)IDC_VIEW_CACHE_BUTTON, g_hInstance, NULL);
@@ -834,8 +865,11 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HWND hOpenLogFolder = CreateWindowExA(0, "BUTTON", "Open Log Folder", WS_CHILD | WS_VISIBLE, 430, 518, 110, 28, hwnd, (HMENU)IDC_OPEN_LOG_FOLDER_BUTTON, g_hInstance, NULL);
             SendMessage(hOpenLogFolder, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-            HWND hAboutNote = CreateWindowExA(0, "STATIC", "Archive, codec, library, and dependency details are shown in the About window.", WS_CHILD | WS_VISIBLE, 16, 560, 520, 20, hwnd, NULL, g_hInstance, NULL);
+            HWND hAboutNote = CreateWindowExA(0, "STATIC", "Advanced settings and diagnostics are also available in this player.", WS_CHILD | WS_VISIBLE, 16, 560, 520, 20, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hAboutNote, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+            HWND hShared = CreateWindowExA(0, "BUTTON", "Shared settings (all players)...", WS_CHILD | WS_VISIBLE, 16, 592, 225, 28, hwnd, (HMENU)4501, g_hInstance, NULL);
+            SendMessage(hShared, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
 
             HWND hSave = CreateWindowExA(0, "BUTTON", "Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 260, 600, 90, 28, hwnd, (HMENU)IDC_SAVE_BUTTON, g_hInstance, NULL);
             SendMessage(hSave, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -867,6 +901,12 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     }
                 }
 
+                return 0;
+            }
+
+            case 4501:
+            {
+                ArchiveAdapterOpenSettings(g_hInstance, hwnd);
                 return 0;
             }
 
@@ -1031,14 +1071,16 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             case IDC_CLEAR_CACHE_BUTTON:
             {
-                int answer = MessageBoxA(hwnd, "Clear all files from the Archive Stream cache?", "Archive Stream - Clear Cache", MB_YESNO | MB_ICONQUESTION);
+                int answer = MessageBoxA(hwnd, "Clear the shared managed cache (all players) and Winamp's older cache files? Active tracks may remain locked.", "Archive Stream - Clear Cache", MB_YESNO | MB_ICONQUESTION);
 
                 if (answer != IDYES)
                     return 0;
 
-                if (ArchiveCacheClear())
+                const bool sharedCleared = ArchiveUnifiedCache::Cleanup(0);
+                const bool legacyCleared = ArchiveCacheClear();
+                if (sharedCleared && legacyCleared)
                 {
-                    MessageBoxA(hwnd, "Archive cache cleared.", "Archive Stream", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxA(hwnd, "Shared and Winamp legacy caches cleared.", "Archive Stream", MB_OK | MB_ICONINFORMATION);
                 }
                 else
                 {
@@ -1051,21 +1093,19 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             case IDC_VIEW_CACHE_BUTTON:
             {
-                char folder[MAX_PATH];
-
-                if (!ArchiveCacheGetFolder(folder, sizeof(folder)))
+                const std::wstring folder = ArchiveUnifiedCache::Folder();
+                if (folder.empty())
                 {
-                    DebugLogWrite("ERROR", "UI", "VIEW_CACHE_FAIL", "reason=get_folder_failed");
-                    MessageBoxA(hwnd, "Could not locate or create the cache folder.", "Archive Stream", MB_OK | MB_ICONERROR);
+                    DebugLogWrite("ERROR", "UI", "VIEW_CACHE_FAIL", "reason=shared_cache_folder_failed");
+                    MessageBoxA(hwnd, "Could not open the shared cache directory.", "Archive Stream", MB_OK | MB_ICONERROR);
                     return 0;
                 }
 
-                HINSTANCE result = ShellExecuteA(hwnd, "open", folder, NULL, NULL, SW_SHOWNORMAL);
-
+                HINSTANCE result = ShellExecuteW(hwnd, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 if ((INT_PTR)result <= 32)
                 {
-                    DebugLogWrite("ERROR", "UI", "VIEW_CACHE_FAIL", "folder=%s | result=%ld", folder, (long)(INT_PTR)result);
-                    MessageBoxA(hwnd, "Could not open the cache folder in Windows Explorer.", "Archive Stream", MB_OK | MB_ICONERROR);
+                    DebugLogWrite("ERROR", "UI", "VIEW_CACHE_FAIL", "result=%ld", (long)(INT_PTR)result);
+                    MessageBoxA(hwnd, "Could not open the shared cache folder in Explorer.", "Archive Stream", MB_OK | MB_ICONERROR);
                 }
 
                 return 0;

@@ -6,6 +6,7 @@
 #include "archive_passwords.h"
 #include "archive_rar_reader.h"
 #include "debug_log.h"
+#include "../shared/archive_adapter_preferences.h"
 
 #include <algorithm>
 #include <string>
@@ -63,6 +64,18 @@ FoobarArchiveSettings FoobarArchiveSettingsLoad()
     settings.passwordListPath = ReadString(cfgPasswords);
     settings.debugLogging = cfgDebugEnabled.get() != 0;
     settings.debugLogPath = ReadString(cfgDebugPath);
+
+    // The first shared settings save becomes authoritative for every player;
+    // native cfg_vars remain in place for legacy profiles and host-only fields.
+    if (ArchiveAdapterPreferencesConfigured())
+    {
+        const auto common = ArchiveAdapterPreferencesLoad();
+        settings.bufferSizeMb = static_cast<int>(common.memoryMb);
+        settings.cacheSizeMb = static_cast<int>(common.cacheLimitMb);
+        settings.cacheAgeDays = static_cast<int>(common.cacheAgeDays);
+        settings.passwordListPath = ArchiveAdapterWideToUtf8(common.passwordListPath);
+        settings.displayTemplate = ArchiveAdapterWideToUtf8(common.titleTemplate);
+    }
 
     settings.bufferSizeMb = std::clamp(settings.bufferSizeMb, static_cast<int>(MIN_BUFFER_SIZE_MB), static_cast<int>(MAX_BUFFER_SIZE_MB));
     settings.cacheSizeMb = std::clamp(settings.cacheSizeMb, static_cast<int>(MIN_CACHE_SIZE_MB), static_cast<int>(MAX_CACHE_SIZE_MB));
@@ -125,6 +138,19 @@ bool FoobarArchiveSettingsSave(const FoobarArchiveSettings& requested, std::stri
     cfgPasswords = settings.passwordListPath.c_str();
     cfgDebugEnabled = settings.debugLogging ? 1 : 0;
     cfgDebugPath = settings.debugLogPath.c_str();
+
+    auto common = ArchiveAdapterPreferencesLoad();
+    common.memoryMb = static_cast<unsigned>(settings.bufferSizeMb);
+    common.cacheLimitMb = static_cast<unsigned>(settings.cacheSizeMb);
+    common.cacheAgeDays = static_cast<unsigned>(settings.cacheAgeDays);
+    common.passwordListPath = ArchiveAdapterUtf8ToWide(settings.passwordListPath);
+    if (!settings.displayTemplate.empty())
+        common.titleTemplate = ArchiveAdapterUtf8ToWide(settings.displayTemplate);
+    if (!ArchiveAdapterPreferencesSave(common))
+    {
+        error = "Unable to save shared Archive Stream Player preferences";
+        return false;
+    }
 
     FoobarArchiveSettingsApplyBackend(settings);
     return true;

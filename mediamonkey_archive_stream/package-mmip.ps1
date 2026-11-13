@@ -9,7 +9,8 @@ if ([string]::IsNullOrEmpty($OutputFolder)) {
 }
 $inputPlugin = Join-Path $root "in_archive_stream\$Configuration\in_archive_stream.dll"
 $generalPlugin = Join-Path $root "gen_archive_stream\$Configuration\gen_archive_stream.dll"
-foreach ($file in @($inputPlugin, $generalPlugin)) {
+$settings = Join-Path $root 'archive_player_bridge\configure-adapters.ps1'
+foreach ($file in @($inputPlugin, $generalPlugin, $settings)) {
     if (!(Test-Path $file)) {
         throw "Missing Winamp-compatible plugin: $file"
     }
@@ -20,6 +21,7 @@ try {
     Copy-Item "$PSScriptRoot\info.json" "$stage\info.json"
     Copy-Item $inputPlugin "$stage\in_archive_stream.dll"
     Copy-Item $generalPlugin "$stage\gen_archive_stream.dll"
+    Copy-Item $settings "$stage\configure-adapters.ps1"
     New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
     $file = Join-Path $OutputFolder 'ArchiveStreamPlayer-MediaMonkey5.mmip'
     $zip = Join-Path $OutputFolder 'ArchiveStreamPlayer-MediaMonkey5.zip'

@@ -35,7 +35,7 @@ try {
         $install = "Copy xmp-archive-stream.dll and configure-adapters.ps1 to the XMPlay application root, then restart XMPlay. Open XMPlay's Archive Stream plugin Config button to edit shared preferences."
     }
     $install += " Shared settings location: HKCU\Software\ArchiveStreamPlayer\Adapters."
-    $install += " Winamp and foobar2000 have separate, independent preference pages."
+    $install += " Winamp and foobar2000 offer native preference pages as well as this shared settings UI."
     $install | Set-Content -Path (Join-Path $stage 'INSTALL.txt') -Encoding UTF8
     New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
     $out = Join-Path $OutputFolder "ArchiveStreamPlayer-$Player-$Platform.zip"

@@ -134,4 +134,7 @@
     <Error Condition="!Exists('$(FoobarSdkRoot)\foobar2000\SDK\foobar2000_SDK.vcxproj')" Text="Foobar2000 SDK is missing. Set FOOBAR_SDK_ROOT or /p:FoobarSdkRoot=... to the extracted official SDK directory." />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="StageArchiveStreamSharedSettings" AfterTargets="Build" Condition="'$(Configuration)'=='Release'">
+    <Copy SourceFiles="$(ProjectDir)..\archive_player_bridge\configure-adapters.ps1" DestinationFiles="$(TargetDir)configure-adapters.ps1" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

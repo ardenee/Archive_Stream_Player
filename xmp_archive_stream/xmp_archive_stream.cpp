@@ -8,6 +8,8 @@
 #include <xmparc.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
+#include "../shared/archive_unified_warmer.h"
 #include "archive_common.h"
 #include "archive_format.h"
 #include "archive_passwords.h"
@@ -193,24 +195,17 @@ namespace
         return valid ? TRUE : FALSE;
     }
 
-    struct TemporaryExtraction
+    bool ReadCachedBytes(const std::wstring& path, unsigned char* output, DWORD wanted)
     {
-        wchar_t path[MAX_PATH]{};
-
-        ~TemporaryExtraction()
-        {
-            if (path[0])
-                DeleteFileW(path);
-        }
-
-        bool Create()
-        {
-            wchar_t folder[MAX_PATH]{};
-            if (!GetTempPathW(MAX_PATH, folder))
-                return false;
-            return GetTempFileNameW(folder, L"XMP", 0, path) != 0;
-        }
-    };
+        HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return false;
+        DWORD read = 0;
+        const bool ok = ReadFile(handle, output, wanted, &read, nullptr) && read == wanted;
+        CloseHandle(handle);
+        return ok;
+    }
 
     void* WINAPI DecompressFile(XMPFILE file, const char* name, DWORD* length)
     {
@@ -268,6 +263,7 @@ namespace
             }
 
             const auto preferences = ArchiveAdapterPreferencesLoad();
+            std::wstring cachePath;
             if (!extracted && !g_misc->CheckCancel() && entry->size <= static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024)
             {
                 std::vector<unsigned char> decoded;
@@ -280,23 +276,14 @@ namespace
                 }
             }
 
-            if (!extracted && !g_misc->CheckCancel() && preferences.cacheLimitMb > 0 &&
-                entry->size <= static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024)
+            if (!extracted && !g_misc->CheckCancel() &&
+                ArchiveUnifiedCache::Prepare(path, *entry, preferences, cachePath, error))
             {
-                TemporaryExtraction temp;
-                if (temp.Create() && ArchiveExtractEntryToFile(path.c_str(), entry->index, temp.path, error))
+                extracted = ReadCachedBytes(cachePath, result, wanted);
+                if (extracted)
                 {
-                    HANDLE handle = CreateFileW(temp.path, GENERIC_READ, FILE_SHARE_READ, nullptr,
-                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-                    if (handle != INVALID_HANDLE_VALUE)
-                    {
-                        DWORD transferred = 0;
-                        extracted = ReadFile(handle, result, wanted, &transferred, nullptr) &&
-                            transferred == wanted;
-                        CloseHandle(handle);
-                        if (extracted)
-                            DebugLogWrite("INFO", "XMPLAY", "CACHE_OK", "index=%u | bytes=%u", entry->index, wanted);
-                    }
+                    DebugLogWrite("INFO", "XMPLAY", "CACHE_OK", "index=%u | bytes=%u", entry->index, wanted);
+                    ArchiveUnifiedWarmer::Queue(path, *entry, preferences);
                 }
             }
 
@@ -325,7 +312,7 @@ namespace
     void WINAPI About(HWND window)
     {
         MessageBoxW(window, L"Archive Stream Player for XMPlay.\nZIP, 7z, RAR, encryption and multipart archives.\n"
-            L"Static shared backend; streaming, memory, then temp-cache fallback.\n"
+            L"Static shared backend; streaming, memory, then reusable shared cache fallback.\n"
             L"XMPlay receives the requested decoded bytes in memory; partial reads are supported.",
             L"Archive Stream Player", MB_OK | MB_ICONINFORMATION);
     }

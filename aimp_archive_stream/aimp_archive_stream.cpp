@@ -9,6 +9,8 @@
 #include <apiOptions.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
+#include "../shared/archive_unified_warmer.h"
 #include "archive_format.h"
 #include "archive_common.h"
 #include "archive_passwords.h"
@@ -144,7 +146,7 @@ namespace
                 ArchiveCloseEntryStream(backend_);
             if (cache_ != INVALID_HANDLE_VALUE)
                 CloseHandle(cache_);
-            if (!cachePath_.empty())
+            if (!cachePath_.empty() && !cachePersistent_)
                 DeleteFileW(cachePath_.c_str());
         }
 
@@ -330,37 +332,62 @@ namespace
                 memory_.clear();
             }
 
-            if (preferences.cacheLimitMb == 0 || entry_.size > static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024)
-                return false;
+            std::wstring reusable;
+            if (ArchiveUnifiedCache::Find(archive_, entry_, preferences, reusable))
+            {
+                cachePath_ = reusable;
+                cachePersistent_ = true;
+                if (OpenCacheHandle())
+                {
+                    DebugLogWrite("INFO", "AIMP", "ROUTE_CACHE_HIT", "index=%u | size=%llu", entry_.index, (unsigned long long)entry_.size);
+                    ArchiveUnifiedWarmer::Queue(archive_, entry_, preferences);
+                    return true;
+                }
+                cachePath_.clear();
+                cachePersistent_ = false;
+            }
 
-            wchar_t folder[MAX_PATH]{};
-            wchar_t tempFile[MAX_PATH]{};
-            if (!GetTempPathW(MAX_PATH, folder) || !GetTempFileNameW(folder, L"ASP", 0, tempFile))
-                return false;
-            cachePath_ = tempFile;
-            if (!ArchiveExtractEntryToFile(archive_.c_str(), entry_.index, cachePath_.c_str(), error))
+            if (!ArchiveUnifiedCache::Prepare(archive_, entry_, preferences, cachePath_, error))
             {
                 DebugLogWrite("WARN", "AIMP", "CACHE_FAIL", "index=%u | error=%s", entry_.index, error.c_str());
                 return false;
             }
 
+            cachePersistent_ = true;
+            if (!OpenCacheHandle())
+                return false;
+
+            DebugLogWrite("INFO", "AIMP", "ROUTE_CACHE", "index=%u | size=%llu", entry_.index, (unsigned long long)entry_.size);
+            ArchiveUnifiedWarmer::Queue(archive_, entry_, preferences);
+            return true;
+        }
+
+        bool OpenCacheHandle()
+        {
+            if (cache_ != INVALID_HANDLE_VALUE)
+            {
+                CloseHandle(cache_);
+                cache_ = INVALID_HANDLE_VALUE;
+            }
+
             cache_ = CreateFileW(cachePath_.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_RANDOM_ACCESS, nullptr);
+                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
             if (cache_ == INVALID_HANDLE_VALUE)
                 return false;
 
-            LARGE_INTEGER actual{};
-            if (!GetFileSizeEx(cache_, &actual) || actual.QuadPart < 0 ||
-                static_cast<uint64_t>(actual.QuadPart) != entry_.size)
+            LARGE_INTEGER size{};
+            LARGE_INTEGER position{};
+            position.QuadPart = static_cast<LONGLONG>(position_);
+            if (!GetFileSizeEx(cache_, &size) || size.QuadPart < 0 ||
+                static_cast<uint64_t>(size.QuadPart) != entry_.size ||
+                !SetFilePointerEx(cache_, position, nullptr, FILE_BEGIN))
+            {
+                CloseHandle(cache_);
+                cache_ = INVALID_HANDLE_VALUE;
                 return false;
-
-            LARGE_INTEGER offset{};
-            offset.QuadPart = static_cast<LONGLONG>(position_);
-            if (!SetFilePointerEx(cache_, offset, nullptr, FILE_BEGIN))
-                return false;
+            }
 
             mode_ = Mode::Cache;
-            DebugLogWrite("INFO", "AIMP", "ROUTE_CACHE", "index=%u | size=%llu", entry_.index, (unsigned long long)entry_.size);
             return true;
         }
 
@@ -390,6 +417,7 @@ namespace
         std::vector<unsigned char> memory_;
         std::wstring cachePath_;
         HANDLE cache_ = INVALID_HANDLE_VALUE;
+        bool cachePersistent_ = false;
         uint64_t position_ = 0;
 #ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
         bool faultInjected_ = false;

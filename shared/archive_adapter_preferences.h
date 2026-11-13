@@ -1,7 +1,7 @@
 #pragma once
 
-// Shared user preferences for XMPlay, AIMP and local playback-bridge adapters.
-// Winamp/foobar2000 keep their own existing player-specific settings.
+// One playback and cache policy for every Archive Stream Player adapter.
+// Host-specific display/logging options remain in each player's native UI.
 // Settings are ordinary values in HKCU\Software\ArchiveStreamPlayer\Adapters.
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -23,11 +23,51 @@ struct ArchiveAdapterPreferences
 {
     unsigned memoryMb = 50;
     unsigned cacheLimitMb = 2048;
+    unsigned cacheAgeDays = 30;
+    bool cacheAutoCleanup = true;
+    bool warmSolidArchives = true;
     bool promptPasswords = true;
     bool askToSavePassword = true;
     std::wstring passwordListPath = ArchiveAdapterDefaultPasswordList();
     std::wstring titleTemplate = L"<filename>";
 };
+
+inline bool ArchiveAdapterPreferencesConfigured()
+{
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\ArchiveStreamPlayer\\Adapters", 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+        return false;
+    DWORD kind = 0;
+    DWORD length = 0;
+    const LONG result = RegQueryValueExW(key, L"MemoryMB", nullptr, &kind, nullptr, &length);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS && kind == REG_DWORD && length == sizeof(DWORD);
+}
+
+inline std::string ArchiveAdapterWideToUtf8(const std::wstring& wide)
+{
+    if (wide.empty())
+        return {};
+    const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0)
+        return {};
+    std::string utf8(static_cast<size_t>(bytes), '\0');
+    return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.c_str(), static_cast<int>(wide.size()), utf8.data(), bytes, nullptr, nullptr) == bytes ? utf8 : std::string{};
+}
+
+inline std::wstring ArchiveAdapterUtf8ToWide(const std::string& utf8)
+{
+    if (utf8.empty())
+        return {};
+    int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+    const UINT codePage = chars > 0 ? CP_UTF8 : CP_ACP;
+    if (chars <= 0)
+        chars = MultiByteToWideChar(codePage, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (chars <= 0)
+        return {};
+    std::wstring wide(static_cast<size_t>(chars), L'\0');
+    return MultiByteToWideChar(codePage, 0, utf8.c_str(), static_cast<int>(utf8.size()), wide.data(), chars) == chars ? wide : std::wstring{};
+}
 
 inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
 {
@@ -61,6 +101,9 @@ inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
 
     settings.memoryMb = number(L"MemoryMB", 50, 1, 512);
     settings.cacheLimitMb = number(L"CacheLimitMB", 2048, 0, 20480);
+    settings.cacheAgeDays = number(L"CacheAgeDays", 30, 1, 365);
+    settings.cacheAutoCleanup = number(L"CacheAutoCleanup", 1, 0, 1) != 0;
+    settings.warmSolidArchives = number(L"WarmSolidArchives", 1, 0, 1) != 0;
     settings.promptPasswords = number(L"PromptPasswords", 1, 0, 1) != 0;
     settings.askToSavePassword = number(L"AskToSavePassword", 1, 0, 1) != 0;
     const std::wstring configuredList = string(L"PasswordList");
@@ -74,6 +117,39 @@ inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
         settings.titleTemplate = format;
     RegCloseKey(key);
     return settings;
+}
+
+// Save shared values when any player settings page changes them.  Keep the
+// registry key stable so legacy plugins can adopt the same preferences.
+inline bool ArchiveAdapterPreferencesSave(const ArchiveAdapterPreferences& settings)
+{
+    if (settings.memoryMb < 1 || settings.memoryMb > 512 || settings.cacheLimitMb > 20480 ||
+        settings.cacheAgeDays < 1 || settings.cacheAgeDays > 365 || settings.passwordListPath.size() >= 4096)
+        return false;
+
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\ArchiveStreamPlayer\\Adapters", 0, nullptr,
+            REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+        return false;
+
+    const auto number = [&](const wchar_t* name, DWORD value)
+    {
+        return RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value)) == ERROR_SUCCESS;
+    };
+    const auto string = [&](const wchar_t* name, const std::wstring& value)
+    {
+        return RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+            static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+    };
+    const bool saved = number(L"MemoryMB", settings.memoryMb) &&
+        number(L"CacheLimitMB", settings.cacheLimitMb) && number(L"CacheAgeDays", settings.cacheAgeDays) &&
+        number(L"CacheAutoCleanup", settings.cacheAutoCleanup ? 1 : 0) &&
+        number(L"WarmSolidArchives", settings.warmSolidArchives ? 1 : 0) &&
+        number(L"PromptPasswords", settings.promptPasswords ? 1 : 0) &&
+        number(L"AskToSavePassword", settings.askToSavePassword ? 1 : 0) &&
+        string(L"PasswordList", settings.passwordListPath) && string(L"TitleTemplate", settings.titleTemplate);
+    RegCloseKey(key);
+    return saved;
 }
 
 // Keep the format placeholders compatible with the six Winamp/foobar presets.

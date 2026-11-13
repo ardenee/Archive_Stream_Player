@@ -198,4 +198,8 @@ unrar_static.lib
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="StageArchiveStreamSharedSettings" AfterTargets="Build" Condition="'$(Configuration)'=='Release'">
+    <Copy SourceFiles="$(ProjectDir)..\archive_player_bridge\configure-adapters.ps1" DestinationFiles="$(TargetDir)configure-adapters.ps1" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)..\archive_player_bridge\configure-adapters.ps1" DestinationFiles="C:\Program Files (x86)\Winamp\Plugins\configure-adapters.ps1" SkipUnchangedFiles="true" Condition="'$(Platform)'=='Win32' and Exists('C:\Program Files (x86)\Winamp\Plugins')" />
+  </Target>
 </Project>

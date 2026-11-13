@@ -1,6 +1,6 @@
 // Player-neutral decoded archive streams presented as foobar2000 virtual files.
 // The player's existing audio input decoders handle MP3/FLAC/OGG/WAV/etc.
-// Unsupported direct stream layouts can use an entry-scoped temporary file.
+// Unsupported direct stream layouts use the shared persistent managed-cache fallback.
 // Archive content CRCs are never calculated; metadata comes from headers.
 #include <foobar2000/SDK/foobar2000.h>
 #include "archive_backend.h"
@@ -10,6 +10,8 @@
 #include "archive_stream_owner.h"
 #include "foobar_archive_reader.h"
 #include "foobar_settings.h"
+#include "../shared/archive_unified_cache.h"
+#include "../shared/archive_unified_warmer.h"
 #include "debug_log.h"
 
 #include <algorithm>
@@ -370,8 +372,10 @@ namespace
 
             if (!tempPath_.empty())
             {
-                DeleteFileW(tempPath_.c_str());
+                if (!cachePersistent_)
+                    DeleteFileW(tempPath_.c_str());
                 tempPath_.clear();
+                cachePersistent_ = false;
             }
         }
 
@@ -424,36 +428,17 @@ namespace
         void OpenExtractedFallback(const std::string& streamError, abort_callback& abort)
         {
             abort.check();
-            char temporaryFolder[MAX_PATH * 4] = {};
-            if (!ArchiveBuildPluginDataSubdirPath("Temp", temporaryFolder, sizeof(temporaryFolder)))
-                throw exception_io_denied();
-
-            wchar_t wideFolder[MAX_PATH * 4] = {};
-            if (!MultiByteToWideChar(CP_ACP, 0, temporaryFolder, -1, wideFolder, _countof(wideFolder)))
-                throw exception_io_denied();
-
-            wchar_t temporaryName[MAX_PATH * 4] = {};
-            if (!GetTempFileNameW(wideFolder, L"AST", 0, temporaryName))
-                exception_io_from_win32(GetLastError());
-
-            tempPath_ = temporaryName;
             try
             {
                 std::string error;
-                // Native UnRAR can decrypt RAR5 directly. Calling libarchive
-                // first for an entry known encrypted is unnecessary, and can
-                // destabilize repeated Unicode RAR entry opens in foobar.
-                const bool nativeEncryptedRar = entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar;
-                const bool extracted = nativeEncryptedRar
-                    ? RarNativeExtractEncryptedEntryToFile(path_.c_str(), entry_.index, tempPath_.c_str(), error)
-                    : ArchiveExtractEntryToFile(path_.c_str(), entry_.index, tempPath_.c_str(), error);
-                if (!extracted)
+                const auto preferences = ArchiveAdapterPreferencesLoad();
+                if (!ArchiveUnifiedCache::Prepare(path_, entry_, preferences, tempPath_, error))
                 {
                     abort.check();
-                    error = "Cannot stream: " + streamError + "; extraction fallback failed: " + error;
+                    error = "Cannot stream: " + streamError + "; shared cache fallback failed: " + error;
                     pfc::throw_exception_with_message<exception_io_data>(error.c_str());
                 }
-
+                cachePersistent_ = true;
                 abort.check();
                 tempFile_ = CreateFileW(tempPath_.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (tempFile_ == INVALID_HANDLE_VALUE)
@@ -468,6 +453,7 @@ namespace
 
                 abort.check();
                 DebugLogWrite("INFO", "FOOBAR", "FALLBACK_READY", "index=%u | size=%llu", (unsigned)entry_.index, (unsigned long long)entry_.size);
+                ArchiveUnifiedWarmer::Queue(path_, entry_, preferences);
             }
             catch (...)
             {
@@ -484,6 +470,7 @@ namespace
         size_t memoryPosition_ = 0;
         HANDLE tempFile_ = INVALID_HANDLE_VALUE;
         std::wstring tempPath_;
+        bool cachePersistent_ = false;
 #ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
         bool faultInjected_ = false;
 #endif

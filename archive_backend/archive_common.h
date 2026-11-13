@@ -33,15 +33,15 @@ std::string ArchiveZipNameToUtf8BestEffort(const char* zipName);
 ////--------------------
 
 static const char* VIRTUAL_PREFIX = "archive_stream:";
-static const size_t MIN_BUFFER_SIZE_MB = 10;
+static const size_t MIN_BUFFER_SIZE_MB = 1;
 static const size_t DEFAULT_BUFFER_SIZE_MB = 50;
-static const size_t MAX_BUFFER_SIZE_MB = 200;
+static const size_t MAX_BUFFER_SIZE_MB = 512;
 static const size_t MIN_CACHE_SIZE_MB = 0;        // 0 = no size cleanup
 static const size_t DEFAULT_CACHE_SIZE_MB = 2048; // 2 GiB
 static const size_t MAX_CACHE_SIZE_MB = 20480;    // 20 GiB
 static const unsigned int MIN_CACHE_AGE_DAYS = 1;
 static const unsigned int DEFAULT_CACHE_AGE_DAYS = 30;
-static const unsigned int MAX_CACHE_AGE_DAYS = 99;
+static const unsigned int MAX_CACHE_AGE_DAYS = 365;
 static const size_t MAX_METADATA_SCAN_MB = 250;
 
 enum ArchivePlaybackMode

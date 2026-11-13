@@ -1,6 +1,8 @@
 #include <foobar2000/SDK/foobar2000.h>
 #include "foobar_resource.h"
 #include "foobar_settings.h"
+#include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
 
 #include "archive_cache.h"
 #include "archive_common.h"
@@ -252,21 +254,26 @@ namespace
                             }
                             return TRUE;
                         }
+                        if (id == IDC_SHARED_SETTINGS)
+                        {
+                            ArchiveAdapterOpenSettings(GetModuleHandleW(L"foo_archive_stream.dll"), hwnd);
+                            return TRUE;
+                        }
                         if (id == IDC_CACHE_VIEW)
                         {
-                            char folder[MAX_PATH * 4] = {};
-                            if (ArchiveCacheGetFolder(folder, sizeof(folder)))
-                                ShellExecuteA(hwnd, "open", folder, nullptr, nullptr, SW_SHOWNORMAL);
+                            const std::wstring folder = ArchiveUnifiedCache::Folder();
+                            if (!folder.empty())
+                                ShellExecuteW(hwnd, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                             return TRUE;
                         }
                         if (id == IDC_CACHE_CLEAR)
                         {
-                            // This clears only the selected FoobarArchiveStream
-                            // cache, never Winamp's own cache directory.
-                            if (MessageBoxW(hwnd, L"Delete all cached archive entries for this foobar2000 component?", L"Archive Stream - Clear Cache", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES)
+                            if (MessageBoxW(hwnd, L"Clear reusable archive tracks shared by all players, as well as older foobar2000 cache entries? Files being used by another player may remain locked.", L"Archive Stream - Clear Cache", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES)
                             {
-                                if (!ArchiveCacheClear())
-                                    popup_message::g_show("Unable to clear the Archive Stream cache.", "Archive Stream");
+                                const bool shared = ArchiveUnifiedCache::Cleanup(0);
+                                const bool legacy = ArchiveCacheClear();
+                                if (!shared || !legacy)
+                                    popup_message::g_show("Some cached tracks could not be removed. Close any other players and try again.", "Archive Stream");
                             }
                             return TRUE;
                         }

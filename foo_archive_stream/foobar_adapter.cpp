@@ -9,6 +9,10 @@
 #include "foobar_decode_test.h"
 #include "debug_log.h"
 #include <commdlg.h>
+#include <wincred.h>
+#include "archive_passwords.h"
+#include "../shared/archive_adapter_preferences.h"
+#pragma comment(lib, "credui.lib")
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -41,6 +45,51 @@ namespace
         return result;
     }
 
+    bool FoobarPromptArchivePassword(const char* archivePath, const char*, char* output, size_t capacity, bool* save)
+    {
+        if (!output || capacity == 0)
+            return false;
+        output[0] = '\0';
+        if (save)
+            *save = false;
+
+        const auto options = ArchiveAdapterPreferencesLoad();
+        if (!options.promptPasswords)
+            return false;
+
+        CREDUI_INFOW ui{};
+        ui.cbSize = sizeof(ui);
+        ui.hwndParent = core_api::get_main_window();
+        ui.pszCaptionText = L"Archive Stream Player - Password";
+        ui.pszMessageText = L"Enter the archive password. Username is unused; Windows does not store these credentials.";
+        std::wstring target = ArchiveAdapterUtf8ToWide(archivePath ? archivePath : "");
+        if (target.empty())
+            target = L"foobar2000 Archive Stream Player";
+
+        wchar_t username[CREDUI_MAX_USERNAME_LENGTH + 1]{};
+        wchar_t password[CREDUI_MAX_PASSWORD_LENGTH + 1]{};
+        BOOL persist = FALSE;
+        const DWORD flags = CREDUI_FLAGS_GENERIC_CREDENTIALS | CREDUI_FLAGS_ALWAYS_SHOW_UI | CREDUI_FLAGS_DO_NOT_PERSIST;
+        const DWORD rc = CredUIPromptForCredentialsW(&ui, target.c_str(), nullptr, 0, username,
+            CREDUI_MAX_USERNAME_LENGTH + 1, password, CREDUI_MAX_PASSWORD_LENGTH + 1, &persist, flags);
+        if (rc != NO_ERROR)
+        {
+            SecureZeroMemory(password, sizeof(password));
+            return false;
+        }
+
+        const std::string candidate = ArchiveAdapterWideToUtf8(password);
+        SecureZeroMemory(password, sizeof(password));
+        if (candidate.empty() || candidate.size() + 1 > capacity)
+            return false;
+
+        memcpy(output, candidate.c_str(), candidate.size() + 1);
+        if (save && options.askToSavePassword)
+            *save = MessageBoxW(ui.hwndParent, L"Save this password to the shared plaintext password list after verification?",
+                L"Archive Stream Player", MB_YESNO | MB_ICONQUESTION) == IDYES;
+        return true;
+    }
+
     class ArchiveStreamInit : public initquit
     {
     public:
@@ -51,6 +100,7 @@ namespace
             else
             {
                 FoobarArchiveSettingsApplyBackend(FoobarArchiveSettingsLoad());
+                ArchivePasswordSetPromptCallback(FoobarPromptArchivePassword);
                 console::print("Archive Stream: foobar2000 archive virtual-file adapter initialized");
 #ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
                 // Runs only in an isolated, test-compiled foobar component and
@@ -72,6 +122,7 @@ namespace
         }
         void on_quit() override
         {
+            ArchivePasswordSetPromptCallback(nullptr);
             DebugLogShutdown();
         }
     };

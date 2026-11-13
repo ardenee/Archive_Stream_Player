@@ -11,6 +11,9 @@
 #include "archive_cache.h"
 #include "archive_metadata.h"
 #include "plugin_state.h"
+#include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_unified_cache.h"
+#include "../shared/archive_unified_warmer.h"
 #include "config_ui.h"
 #include "winamp_playlist_bridge.h"
 #include "winamp_bridge_protocol.h"
@@ -266,6 +269,14 @@ static bool PromptForArchivePassword(const char* archivePath, const char* entryN
     outPassword[0] = '\0';
     *outSavePassword = false;
 
+    const auto sharedPreferences = ArchiveAdapterPreferencesLoad();
+    if (!sharedPreferences.promptPasswords)
+    {
+        DebugLogWrite("INFO", "PASSWORD", "PROMPT_DISABLED", "reason=shared_user_preferences");
+        RequestStopAfterPasswordPromptFailure();
+        return false;
+    }
+
     const char* className = "ArchiveStreamPasswordPrompt";
 
     WNDCLASSA wc;
@@ -318,6 +329,8 @@ static bool PromptForArchivePassword(const char* archivePath, const char* entryN
     {
         RequestStopAfterPasswordPromptFailure();
     }
+    if (!sharedPreferences.askToSavePassword)
+        *outSavePassword = false;
 
     return state.accepted;
 }
@@ -2115,6 +2128,29 @@ static bool ExtractEntryToPlaybackCache(const char* archivePath, mz_uint index, 
 
     DebugLogWrite("INFO", "CACHE", "BUILD_START", "archive=%s | archive_type=%s | index=%u | entry=%s | audio_type=%s | size=%llu | route_reason=%s", archivePath, ArchiveTypeToLogName(archivePath), (unsigned int)index, internalName, AudioFormatToLogName(selectedFormat), (unsigned long long)uncompressedSize, routeReason ? routeReason : "");
 
+    const std::wstring archiveWide = ArchiveAdapterUtf8ToWide(archivePath);
+    ArchiveEntry selected;
+    std::string error;
+    const auto preferences = ArchiveAdapterPreferencesLoad();
+    std::wstring unifiedPath;
+    if (!archiveWide.empty() && ArchiveUnifiedCache::LookupEntry(archiveWide, index, selected, error) &&
+        ArchiveUnifiedCache::Prepare(archiveWide, selected, preferences, unifiedPath, error))
+    {
+        const std::string outputUtf8 = ArchiveAdapterWideToUtf8(unifiedPath);
+        if (!outputUtf8.empty() && outputUtf8.size() + 1 <= outCachePathSize)
+        {
+            strcpy_s(outCachePath, outCachePathSize, outputUtf8.c_str());
+            DebugLogWrite("INFO", "CACHE", "SHARED_BUILD_DONE", "archive=%s | index=%u | path=%s", archivePath, (unsigned)index, outCachePath);
+            return true;
+        }
+        DebugLogWrite("ERROR", "CACHE", "SHARED_PATH_FAIL", "archive=%s | index=%u | reason=unicode_path_or_buffer_overflow", archivePath, (unsigned)index);
+        return false;
+    }
+
+    DebugLogWrite("WARN", "CACHE", "SHARED_BUILD_FAIL", "archive=%s | index=%u | error=%s", archivePath, (unsigned)index, error.c_str());
+    return false;
+
+    // Legacy per-player cache extraction remains below for reference only.
     bool extractedToCache = false;
 
     if (IsSevenZipArchivePath(archivePath))
@@ -2456,7 +2492,24 @@ static int Play(const char* fn)
                 uncompSize > g_audioBufferSize ? "entry_exceeds_memory_buffer" : "stream_and_memory_failed";
             ClearPrevalidatedStream();
 
-            const bool existingCacheHit = ArchiveFindExistingCacheFile(actualZipPath, mp3Index, firstAudio, cachePath, sizeof(cachePath));
+            bool existingCacheHit = false;
+            const std::wstring sharedArchiveWide = ArchiveAdapterUtf8ToWide(actualZipPath);
+            ArchiveEntry sharedEntry;
+            std::string cacheLookupError;
+            std::wstring sharedCachePath;
+            if (!sharedArchiveWide.empty() &&
+                ArchiveUnifiedCache::LookupEntry(sharedArchiveWide, mp3Index, sharedEntry, cacheLookupError) &&
+                ArchiveUnifiedCache::Find(sharedArchiveWide, sharedEntry, ArchiveAdapterPreferencesLoad(), sharedCachePath))
+            {
+                const std::string sharedUtf8 = ArchiveAdapterWideToUtf8(sharedCachePath);
+                if (!sharedUtf8.empty() && sharedUtf8.size() < sizeof(cachePath))
+                {
+                    strcpy_s(cachePath, sizeof(cachePath), sharedUtf8.c_str());
+                    existingCacheHit = true;
+                }
+            }
+            if (!existingCacheHit)
+                existingCacheHit = ArchiveFindExistingCacheFile(actualZipPath, mp3Index, firstAudio, cachePath, sizeof(cachePath));
             if (!existingCacheHit &&
                 !ExtractEntryToPlaybackCache(actualZipPath, mp3Index, firstAudio, selectedFormat, uncompSize, cacheReason, cachePath, sizeof(cachePath)))
             {
@@ -2677,7 +2730,12 @@ static int Play(const char* fn)
     if (queueSolidCacheWarmAfterPlaybackStart)
     {
         DebugLogWrite("INFO", "SOLID_CACHE_WARM", "QUEUE_AFTER_PLAYBACK_START", "archive=%s | index=%u", actualZipPath, (unsigned int)mp3Index);
-        QueueSolid7zCacheWarm(actualZipPath, mp3Index);
+        const auto common = ArchiveAdapterPreferencesLoad();
+        const std::wstring nativeArchive = ArchiveAdapterUtf8ToWide(actualZipPath);
+        ArchiveEntry selected;
+        std::string error;
+        if (!nativeArchive.empty() && ArchiveUnifiedCache::LookupEntry(nativeArchive, mp3Index, selected, error))
+            ArchiveUnifiedWarmer::Queue(nativeArchive, selected, common);
     }
 
     return 0;
