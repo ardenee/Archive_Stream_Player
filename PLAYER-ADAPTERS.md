@@ -60,6 +60,84 @@ The Winamp plugin Visual Studio projects now also build Release|x64 against the 
 
 Do **not** replace the installed 64-bit WACUP's plugins with the x64 builds or assume they are accepted. WACUP x86 is the supported compatibility path at this stage.
 
+## MediaMonkey, MusicBee, VLC, and Windows Media Player (13 November 2026)
+
+These integrations reuse the **existing statically linked** ZIP/7z/RAR/AES backend. The main addition is an x86/x64 seekable loopback HTTP bridge, plus a native MusicBee C# plugin and a MediaMonkey MMIP packaging project. **VLC and Windows Media Player use supported playlist and HTTP media interfaces; they do not have native archive-format plugins.**
+
+### Seekable localhost playback bridge (Windows x86/x64)
+
+`archive_player_bridge/archive_player_bridge.vcxproj` builds against the existing static archive libraries. The standalone executable binds to **127.0.0.1 only**, uses an unpredictable 128-bit URL token, and serves decoded archive-entry bytes (not decoded PCM) as ordinary audio URLs. It supports GET, HEAD and HTTP Range (206), MIME types and per-entry extensions, M3U8 and ASX playlists, a token-authenticated POST /shutdown, and automatic cleanup of its temporary cache. It does not need any external archive DLL or extraction process.
+
+Entry priority: **direct decoded-byte archive stream -> in-memory extract (default 50 MiB) -> temporary disk-cache file**. Solid 7z/RAR bypass direct stream. The decoder/codec remains the player's responsibility. This is **not a persistent background service**; URLs work only while their bridge process is running and cannot be used as permanent library references.
+
+~~~powershell
+$msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe'
+& $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=Win32
+& $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=x64
+
+# Choose a player: VLC, WMP, MusicBee, or MediaMonkey
+& '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player VLC
+~~~
+
+The launcher starts its own temporary bridge, passes the corresponding M3U8 or ASX playlist to the player, and stays alive until the user closes the launcher. Do not close it during playback. `archive_player_bridge.exe --archive "C:\audiotest\Archives\7Z_NonSolid.7z"` also works on its own and prints the generated playlist paths and URLs; optional flags are `--port`, `--playlist-dir`, `--memory-mb`, `--lifetime` and `--password-list`.
+
+**Testing:** The self-contained `archive_player_bridge/test_bridge.py` builds small ZIP and solid 7z fixtures from `C:\audiotest\01.MP3File.mp3` and `C:\audiotest\02.OGGFile.ogg`, using installed 7z.exe **for generating test data only**. DEV Win32/x64 tests passed every mid-track 2,000-byte HTTP range/byte-parity read, HEAD size, rejected unknown endpoint, and clean shutdown. Both ZIP cases used 2/2 streams; solid 7z cases used 2/2 memory extractions with the default buffer, and **2/2 file-cache reads with the memory limit forced to 1 MiB**. All three routes passed byte-for-byte parity on both architectures. Run after building the executables:
+
+~~~powershell
+py -3.13 '.\archive_player_bridge\test_bridge.py'
+py -3.13 '.\archive_player_bridge\test_passwords.py' --audiotest-generator-key
+~~~
+
+The encrypted test successfully enumerated **21 audio entries** and fetched the first 256 decoded bytes from both `C:\audiotest\Archives\7Z_Password_NonSolid.7z` and `7Z_Password_Solid.7z` on **Win32 and x64**. Nonsolid used AES streaming; solid used memory. The runtime defaults to the user's existing `%LOCALAPPDATA%\WinampArchiveStream\keeps.txt`, or accepts an explicit `--password-list`. **The three saved candidates in that existing file do not contain the password configured by `C:\audiotest\make_test_archives.cmd`**. The passing encrypted test used an **automatically removed temporary test-only password list** from the fixture-generator script (normal file removal, not a secure disk erase). The original Winamp keeps.txt was not changed, read out to logs, or committed.
+
+### MusicBee 3.7.9796 — native C# menu adapter plus bridge
+
+DEV installed player: `C:\Program Files (x86)\MusicBee`. Download the official SDK source `MusicBeeInterface.cs` from https://getmusicbee.com/download/plugins/MusicBeeInterface.cs and store it outside Git (DEV: `D:\Temp\ArchiveStreamNewPlayers`).
+
+~~~powershell
+& $msbuild 'musicbee_archive_stream\musicbee_archive_stream.csproj' /p:Configuration=Release /p:Platform=AnyCPU /p:MusicBeeSdkRoot='D:\Temp\ArchiveStreamNewPlayers'
+~~~
+
+Run `musicbee_archive_stream/package-musicbee.ps1` to make a self-contained x86 plugin ZIP, or copy **both** `musicbee_archive_stream\Release\MB_ArchiveStream.dll` and the **Win32** `archive_player_bridge\Release\archive_player_bridge.exe` into MusicBee's `Plugins` folder, then restart MusicBee. The native .NET 4.8 plugin registers **Tools > Archive Stream: Add Archive Audio...**. The command selects an archive, starts a loopback bridge, and queues its individually playable track URLs via MusicBee's official Now Playing API. MusicBee handles decoding and DSP. Sessions are closed when the plugin unloads, with a 24-hour maximum lifetime.
+
+**Verified:** x86 SDK build passed, real MusicBee initialized the plugin and reported menu registration, and a managed test opened a bridge session, obtained two track URLs, requested 16 valid bytes from each and performed cleanup. **An actual GUI menu action, successful Now Playing queue insertion and audible playback in MusicBee still require a manual live test.** Set `ARCHIVE_STREAM_ADAPTER_DEBUG=1` before launching MusicBee to enable `%LOCALAPPDATA%\MusicBeeArchiveStream\adapter.log`.
+
+### MediaMonkey 2024 — Winamp DLL compatibility and playlist bridge
+
+DEV installed player: `C:\Program Files (x86)\MediaMonkey 5` (2024.2.2). Its documented MMIP native plugin packaging format supports Winamp 2.x DLLs: https://www.mediamonkey.com/wiki/Getting_Started_(Addons).
+
+~~~powershell
+& '.\mediamonkey_archive_stream\package-mmip.ps1'
+# In MediaMonkey: Tools > Addons > Add
+# Select mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5.mmip
+~~~
+
+The MMIP packages the Release/Win32 `in_archive_stream.dll` and `gen_archive_stream.dll`. In the DEV MediaMonkey playback-engine process, **both DLLs loaded** without a process crash during the stability test. That is **binary-load confirmation, not proof that MediaMonkey invokes the Winamp general-purpose expansion callback**. The in-player list-expansion UI still requires validation, and the standard Winamp `.archive_stream|index|entry` playlist format must not be presumed fully supported in MediaMonkey.
+
+The verified playback alternative is the bridge and MediaMonkey's official `/NoSplash /Add` playlist command:
+
+~~~powershell
+& '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player MediaMonkey
+~~~
+
+MediaMonkey successfully accepted `/Add` and `/Play` in the DEV test, and the bridge recorded an actual direct-stream request (stream=1). Audible output and the native playlist expander remain to be certified separately.
+
+### VLC — M3U8/HTTP playback
+
+Use `launch-archive.ps1 -Player VLC`. VLC receives the archive's per-track URLs through an M3U8 playlist; byte-range seeking is serviced by the same static backend. **It is not a VLC access-module plugin** and VLC does not open the original ZIP/7z/RAR file directly.
+
+A real DEV VLC headless run with dummy audio output successfully consumed the two-track ZIP playlist, exited normally, and the bridge recorded **two live direct-stream requests**. HTTP seeking and byte parity passed in independent tests; audible device output was intentionally bypassed.
+
+### Windows Media Player Legacy 12 — ASX/HTTP playback
+
+Use `launch-archive.ps1 -Player WMP`. The launcher passes a Windows Media Player compatible **ASX playlist** of localhost per-track audio URLs. **This is not a decoder/input-source plugin** for WMP.
+
+The DEV WMP COM control is available (12.0.26100.9818), and an individual bridge track URL generated a live audio request. **Playback was not confirmed**: the COM control stayed in play state **9 (transitioning)** even with the original MP3 opened directly from `C:\audiotest`. A live WMP GUI/output-device test is required before certifying playback.
+
+### Runtime and security notes
+
+The bridge does not expose any network interface other than loopback. The session token protects individual tracks and its shutdown endpoint from blind connections; local users who can access the tokenized playlist can access those tracks during the session. Bridge URLs are ephemeral, not permanent library addresses; the bridge never stores password values in its logs or source. Its temporary files are removed on normal shutdown; forced process termination may leave temporary files and should be followed by a cleanup. Audio codec compatibility remains determined by each player.
+
 ## Diagnostics and runtime separation
 
 Set the environment variable ARCHIVE_STREAM_ADAPTER_DEBUG=1 **before launching** AIMP or XMPlay to enable trace logs under:

@@ -1,8 +1,8 @@
 # Archive Stream Player
 
-**Archive Stream Player** is a shared Windows archive-audio backend with native player adapters for Winamp, foobar2000, XMPlay and AIMP, plus verified 32-bit WACUP compatibility. It browses and plays audio stored inside ZIP, 7z and RAR archives without manually extracting a full archive. Archive entries become individual player tracks; each adapter chooses streaming, memory or file-cache access according to the host API and archive layout.
+**Archive Stream Player** is a shared Windows ZIP/7z/RAR audio backend for Winamp, foobar2000, XMPlay, AIMP, MusicBee and Winamp-compatible hosts such as WACUP and MediaMonkey. A standalone local HTTP bridge also exposes seekable archive tracks to VLC, Windows Media Player and players that accept M3U/ASX stream URLs. Native adapters use each player's supported interfaces; the HTTP-based adapters do not pretend to implement native archive-decoder APIs. Data routing prefers **stream -> memory -> temporary-file cache** according to the archive layout and host limitations.
 
-This repository contains the native C/C++ Winamp plugins, archive backends, Visual Studio projects and bundled third-party source.
+This repository contains native C/C++ player adapters and archive backends, the MusicBee C# adapter, MediaMonkey add-on packaging, Visual Studio projects and bundled third-party archive source. Official MusicBee, AIMP and XMPlay SDK files are fetched separately and never committed.
 
 ## Components
 
@@ -13,6 +13,9 @@ This repository contains the native C/C++ Winamp plugins, archive backends, Visu
 | `foo_archive_stream` | `foo_archive_stream.dll` | Native foobar2000 ZIP/7z/RAR virtual archive files, playlist integration and Preferences (x86/x64) |
 | `xmp_archive_stream` | `xmp-archive-stream.dll` | XMPlay 4.1 x86 native archive plugin (XMPARC); stream/memory/cache extraction to player-owned audio bytes |
 | `aimp_archive_stream` | `aimp_archive_stream.dll` | AIMP 5.40 x86/x64 native FileExpander, FileFormat and seekable virtual-file streams |
+| `musicbee_archive_stream` | `MB_ArchiveStream.dll` | MusicBee 3.7 native C# plugin with an Add Archive Audio Tools-menu action; uses local bridge for playable entry URLs |
+| `mediamonkey_archive_stream` | `.mmip` build package | MediaMonkey 2024 Winamp-compatible plugin installer (DLLs load); bridge playlist is the verified playback route |
+| `archive_player_bridge` | `archive_player_bridge.exe` | Native x86/x64 localhost-only HTTP Range audio adapter for VLC, Windows Media Player, MediaMonkey and other URL/playlist consumers |
 | `archive_backend` | `archive_backend.lib` | Shared archive listing, metadata, memory/file extraction, streaming and cache logic |
 | `archive_backend_test` | `archive_backend_test.exe` | Command-line listing, extraction and stream diagnostics |
 | `libarchive_static` | `libarchive_static.lib` | Static libarchive build used by archive backends |
@@ -21,11 +24,11 @@ This repository contains the native C/C++ Winamp plugins, archive backends, Visu
 | `shared` | Source files | Shared logging and Winamp adapter protocol definitions |
 | `third_party` | Source files | Bundled upstream libraries, Winamp headers and codec components |
 
-The Winamp/backend multi-project solution is `in_archive_stream/in_archive_stream.slnx`. The AIMP, XMPlay and foobar2000 adapters are built separately against their respective official SDKs. For AIMP/XMPlay build commands, installation, validation and WACUP x86/x64 limitations, see [Player adapters: AIMP, XMPlay and WACUP](PLAYER-ADAPTERS.md).
+The Winamp/backend multi-project solution is `in_archive_stream/in_archive_stream.slnx`. The foobar2000, AIMP, XMPlay, MusicBee and local bridge adapters are built separately; MediaMonkey uses an `.mmip` installer built from the Winamp plugins. For per-player build, installation, routing, tests and limitations, see [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md).
 
 ## Player-independent core and adapters (refactor in progress)
 
-The design is a reusable archive-audio core with independently built player adapters for Winamp, foobar2000, XMPlay and AIMP. WACUP x86 reuses the Winamp plugins after host-specific playlist compatibility adjustments. Winamp retains its own playback adapter. The foobar2000 component now exposes native ZIP/7z/RAR virtual archive files and adds their audio entries to playlists, delegating decoding to foobar2000's installed codecs. Decoded PCM and seeking were validated without an audio output device. Winamp binaries cannot be loaded by foobar2000.
+The design is a reusable archive-audio core with independently built player adapters for Winamp, foobar2000, XMPlay, AIMP and MusicBee. The standalone loopback HTTP Range bridge serves archive-backed audio to MediaMonkey, VLC and Windows Media Player through M3U/ASX playlists. WACUP x86 reuses the Winamp plugins after host-specific playlist compatibility adjustments. Winamp retains its own playback adapter. The foobar2000 component now exposes native ZIP/7z/RAR virtual archive files and adds their audio entries to playlists, delegating decoding to foobar2000's installed codecs. Decoded PCM and seeking were validated without an audio output device. Winamp binaries cannot be loaded by foobar2000.
 
 The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
 

@@ -1,0 +1,20 @@
+{
+  "title": "Archive Stream Player – Winamp-compatible ZIP/7z/RAR",
+  "id": "archiveStreamPlayerWinamp",
+  "description": "ZIP, 7z and RAR audio entry playback and playlist expansion via the static Archive Stream backend.",
+  "version": "1.0.0",
+  "minAppVersion": "5.0.0",
+  "type": "plugin",
+  "author": "Archive Stream Player",
+  "files": [
+    {
+      "src": "in_archive_stream.dll",
+      "tgt": "in_archive_stream.dll"
+    },
+    {
+      "src": "gen_archive_stream.dll",
+      "tgt": "gen_archive_stream.dll"
+    }
+  ],
+  "showRestartPrompt": "true"
+}

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{8E66CB9A-9EB1-4C0E-B9CB-942FBDF41533}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>MusicBeePlugin</RootNamespace>
+    <AssemblyName>MB_ArchiveStream</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <MusicBeeSdkRoot Condition="'$(MusicBeeSdkRoot)'==''">$(MUSICBEE_SDK_ROOT)</MusicBeeSdkRoot>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>x86</PlatformTarget><OutputPath>Release\</OutputPath>
+    <DebugType>pdbonly</DebugType><Optimize>true</Optimize><DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System"/>
+    <Reference Include="System.Core"/>
+    <Reference Include="System.Windows.Forms"/>
+    <Reference Include="System.Drawing"/>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Plugin.cs"/>
+    <Compile Include="$(MusicBeeSdkRoot)\MusicBeeInterface.cs" Link="MusicBeeInterface.cs"/>
+  </ItemGroup>
+  <Target Name="RequireMusicBeeSdk" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MusicBeeSdkRoot)\MusicBeeInterface.cs')" Text="MusicBee SDK is required at MUSICBEE_SDK_ROOT (official MusicBeeInterface.cs)."/>
+  </Target>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+</Project>

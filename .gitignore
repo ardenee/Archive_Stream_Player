@@ -5,6 +5,9 @@
 !/archive_backend/
 !/archive_backend_test/
 !/aimp_archive_stream/
+!/archive_player_bridge/
+!/musicbee_archive_stream/
+!/mediamonkey_archive_stream/
 !/xmp_archive_stream/
 !/foo_archive_stream/
 !/gen_archive_stream/
