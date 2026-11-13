@@ -941,6 +941,60 @@ static int RunPasswordedArchiveStreamRegression(const wchar_t* archivePath, cons
     return 0;
 }
 
+// Uses an isolated throwaway Unicode filename. Never opens the user's keeps.txt.
+static int RunUnicodePasswordListSelftest()
+{
+    wchar_t base[MAX_PATH]{};
+    if (!GetTempPathW(MAX_PATH, base))
+        return 1;
+    const std::wstring folder = std::wstring(base) + L"ArchiveStreamPwdTest-" + std::to_wstring(GetCurrentProcessId()) + L"-日本語";
+    if (!CreateDirectoryW(folder.c_str(), nullptr))
+        return 1;
+    const std::wstring file = folder + L"\\Café-秘密.txt";
+    int failures = 0;
+    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, file.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 1)
+        failures++;
+    else
+    {
+        std::string utf8(static_cast<size_t>(required), '\0');
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, file.c_str(), -1, utf8.data(), required, nullptr, nullptr) != required)
+            failures++;
+        else
+        {
+            FILE* seed = nullptr;
+            if (_wfopen_s(&seed, file.c_str(), L"wb") != 0 || !seed)
+                failures++;
+            else
+            {
+                const char comments[] = "# ignored comment\r\n\r\n";
+                if (fwrite(comments, 1, sizeof(comments) - 1, seed) != sizeof(comments) - 1)
+                    failures++;
+                fclose(seed);
+            }
+            ArchivePasswordSetListPath(utf8.c_str());
+            std::string error;
+            ArchivePasswordList list;
+            if (!ArchivePasswordLoadList(list, error) || !list.passwords.empty())
+                failures++;
+            if (!ArchivePasswordAppendIfMissing("archive-stream-test-password", error))
+                failures++;
+            if (!ArchivePasswordAppendIfMissing("archive-stream-test-password", error))
+                failures++;
+            if (!ArchivePasswordLoadList(list, error) || list.passwords.size() != 1 ||
+                list.passwords[0] != "archive-stream-test-password")
+                failures++;
+        }
+    }
+    ArchivePasswordSetListPath("");
+    if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES && !DeleteFileW(file.c_str()))
+        failures++;
+    if (!RemoveDirectoryW(folder.c_str()))
+        failures++;
+    std::printf("UNICODE_PASSWORD_LIST_SELFTEST_%s\n", failures ? "FAIL" : "PASS");
+    return failures ? 1 : 0;
+}
+
 int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
@@ -948,6 +1002,9 @@ int wmain(int argc, wchar_t* argv[])
 
     if (argc >= 2 && _wcsicmp(argv[1], L"selftest") == 0)
         return RunApiValidationTests();
+
+    if (argc >= 2 && _wcsicmp(argv[1], L"pwlistselftest") == 0)
+        return RunUnicodePasswordListSelftest();
 
     if (argc >= 2 && _wcsicmp(argv[1], L"pwfiletest") == 0)
     {
@@ -995,6 +1052,7 @@ int wmain(int argc, wchar_t* argv[])
     {
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
+        std::printf("  archive_backend_test.exe pwlistselftest (isolated Unicode password list)\n");
         std::printf("  archive_backend_test.exe pwfiletest archive.rar-or-7z passwords.txt index extracted.file\n");
         std::printf("  archive_backend_test.exe pwstreamtest archive.7z passwords.txt index\n");
         std::printf("  archive_backend_test.exe ziptest archive.zip\n");

@@ -28,14 +28,15 @@ def make_fixtures(folder):
         check=True, capture_output=True)
     return [zip_path, solid_path]
 
-def check(platform, archive, folder, memory_mb=50):
+def check(platform, archive, folder, memory_mb=50, title_template="<filename>", sample_id=0):
     location = ROOT / ("x64/Release" if platform == "x64" else "Release")
     binary = location / "archive_player_bridge.exe"
     assert binary.is_file(), "Build Release|{} first: {}".format(platform, binary)
-    playlist_folder = folder / ("playlist-" + platform + "-" + archive.stem + "-" + str(memory_mb))
+    playlist_folder = folder / ("playlist-" + platform + "-" + archive.stem + "-" + str(memory_mb) + "-" + str(sample_id))
     playlist_folder.mkdir()
     process = subprocess.Popen([str(binary), "--archive", str(archive),
-        "--playlist-dir", str(playlist_folder), "--lifetime", "20", "--memory-mb", str(memory_mb)],
+        "--playlist-dir", str(playlist_folder), "--lifetime", "20", "--memory-mb", str(memory_mb),
+        "--title-template", title_template],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
     try:
         startup = {}
@@ -53,7 +54,16 @@ def check(platform, archive, folder, memory_mb=50):
         playlist = Path(startup["PLAYLIST_M3U8"]).read_text(encoding="utf-8-sig")
         tracks = [line.strip() for line in playlist.splitlines() if line.startswith("http://127.0.0.1:")]
         assert len(tracks) == len(ORIGINALS)
-        assert "<asx version=\"3.0\">" in Path(startup["PLAYLIST_ASX"]).read_text(encoding="utf-8-sig")
+        asx_text = Path(startup["PLAYLIST_ASX"]).read_text(encoding="utf-8-sig")
+        assert "<asx version=\"3.0\">" in asx_text
+        for index, original in enumerate(ORIGINALS):
+            title = title_template.replace("<filename>", original.name)
+            title = title.replace("<archivetype>", archive.suffix.lstrip(".").upper())
+            title = title.replace("<filetype>", original.suffix.lstrip("."))
+            title = title.replace("<archive>", archive.stem)
+            title = title.replace("<#>", str(index + 1))
+            assert "#EXTINF:-1," + title in playlist, (title, playlist)
+            assert "<title>" + title + "</title>" in asx_text, (title, asx_text)
         for index, (track, original) in enumerate(zip(tracks, ORIGINALS)):
             start = 1111
             size = 2000
@@ -101,4 +111,9 @@ if __name__ == "__main__":
             for archive in fixtures:
                 check(arch, archive, workspace)
             check(arch, fixtures[1], workspace, memory_mb=1)
+        for number, format_text in enumerate((
+            "<archivetype>: <filename>", "<#>. <filename>",
+            "<filename> [<filetype>]", "<archivetype>: <#> - <filename>",
+            "[<archive>] <#> - <filename>"), start=1):
+            check("x64", fixtures[0], workspace, title_template=format_text, sample_id=number)
     print("ALL_ARCHIVE_BRIDGE_REGRESSIONS_PASS", flush=True)

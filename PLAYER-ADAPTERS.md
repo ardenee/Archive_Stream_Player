@@ -1,5 +1,54 @@
 # Additional player adapters: XMPlay, AIMP, and WACUP
 
+## Shared preferences and password / cache / title parity (13 November 2026)
+
+The newer adapters use a **common settings window**, implemented by [`archive_player_bridge/configure-adapters.ps1`](archive_player_bridge/configure-adapters.ps1). Settings are stored per-user at `HKCU\Software\ArchiveStreamPlayer\Adapters`, and apply to **AIMP x86/x64, XMPlay x86, MusicBee and the playlist/HTTP bridge**. The existing Winamp and foobar2000 native preferences remain separate and unchanged. A settings change applies to newly opened tracks/sessions; restart native plugins after changing the password-list path.
+
+~~~powershell
+# Open the shared graphical preferences window
+& '.\archive_player_bridge\launch-archive.ps1' -Configure
+
+# Non-GUI status for verification or automation
+& '.\archive_player_bridge\launch-archive.ps1' -Configure -NoLaunch
+~~~
+
+| Setting | Behavior |
+| --- | --- |
+| **Memory threshold** | 1–512 MiB (default 50): choose direct stream first; use RAM only for eligible entries within this threshold |
+| **Temporary-cache budget** | 0–20,480 MiB (default 2,048): 0 disables temporary-file fallback; AIMP/XMPlay restrict each entry, while the bridge tracks total files in its session |
+| **Password file** | Optional Unicode path to a plaintext list; blank uses `%LOCALAPPDATA%\WinampArchiveStream\keeps.txt` for AIMP, XMPlay, MusicBee and bridge clients |
+| **Prompt for missing password** | On by default, using native Windows credentials UI; disabled for unattended tests or where dialogs are unwanted |
+| **Offer to save password** | On by default; prompts for explicit consent, then the backend appends a **verified** password to the configured plaintext list |
+| **Track-title format** | Six familiar presets: filename, archive type + filename, numbered filename, filename with audio type, archive type + numbered filename, or archive name + numbered filename |
+| **Temporary-cache controls** | Display current temporary-session count/size, open the temp folder, and **clear folders older than 24 hours** after confirming MusicBee and the bridge are not running |
+
+**Password security:** Saved passwords are **plain text**, not Windows Credential Manager secrets. Do not select a shared/public file or include it in a package; the credentials UI itself does not persist them. A failed password or cancellation is handled by the backend; worker-thread prompts are serialized by the bridge to avoid simultaneous dialogs. There is **no archive-wide decoding preflight**, so opening a large encrypted album is not delayed by processing every track first. The HTTP player may time out if password entry is left unanswered for a long time. Prompt windows require an interactive Windows session and have not yet been manually certified in every player.
+
+**Unicode password paths:** The shared backend now opens password-list files through native Unicode Windows file APIs (with fallback for legacy ANSI Winamp paths). A synthetic encrypted LZMA2 7z was read and sought successfully using a non-ASCII password-file path on both architectures. The repeatable regression is `archive_backend_test/test_unicode_passwords.py` and the temporary-file read/append self-test is `archive_backend_test.exe pwlistselftest`. No saved user password was copied into or committed to the tests. **Known encryption gaps:** a separate synthetic 7z with encrypted file headers could not be enumerated (`SZ_ERROR_UNSUPPORTED`), and an AES+stored coder-layout fixture failed the direct stream graph check. These layouts need their own backend investigation; the new password-path behavior does not establish support for them.
+
+**Cache scope:** AIMP and XMPlay delete their per-track extracted files when the reader is released; the bridge deletes its per-session files at shutdown. These are **not the persistent Winamp/foobar cache**. The shared GUI intentionally does not claim to browse or erase the existing native players' managed caches: use Winamp/foobar's own preferences for that. Stale-file cleanup refuses to run if a bridge or MusicBee process is active, and affects only clearly named temporary session folders older than 24 hours.
+
+**Track-title scope:** AIMP sets its virtual track metadata title, and the bridge formats **M3U8 `#EXTINF` titles and ASX `title` elements** without changing the original audio URLs. The XMPlay archive API uses the internal filename as the extraction key, so its file-list entry names must not be rewritten for presentation. MusicBee currently queues HTTP track URLs; its actual displayed names depend on its URL metadata handling, not solely on the M3U playlist labels. Winamp and foobar2000 continue to use their native title templates.
+
+The settings window is accessible from **AIMP Options > Archive Stream Player**, **XMPlay Archive Stream plugin Config**, and **MusicBee Tools > Archive Stream: Settings...**. For **VLC, WMP, WACUP x64 and MediaMonkey's bridge route**, open `launch-archive.ps1 -Configure`. All these launchers need `configure-adapters.ps1` beside the plugin or launcher as provided by the packages.
+
+### Packaging and verified tests
+
+~~~powershell
+& '.\archive_player_bridge\package-native-adapters.ps1' -Player AIMP -Platform Win32
+& '.\archive_player_bridge\package-native-adapters.ps1' -Player AIMP -Platform x64
+& '.\archive_player_bridge\package-native-adapters.ps1' -Player XMPlay -Platform Win32
+& '.\musicbee_archive_stream\package-musicbee.ps1'
+
+py -3.13 '.\archive_player_bridge\test_bridge.py'
+py -3.13 '.\archive_player_bridge\test_cache_controls.py'
+py -3.13 '.\archive_player_bridge\test_passwords.py' --audiotest-generator-key
+~~~
+
+**DEV confirmed:** AIMP x86/x64 and XMPlay x86 compiled, MusicBee compiled; AIMP x86/x64 registered the Options service in live portable player processes; the XMPlay mock confirmed its non-null Config callback, decoded a WAV file, and performed 64-byte partial probes. The shared Windows Forms settings dialog opened with its expected controls and completed registry-save round trips for both enabled and disabled flags. The bridge passed all six M3U/ASX title presets, byte-for-byte reads in all three routes, cache-budget rejection, disabled-prompt behavior, and encrypted 7z regression on both architectures. GUI clicking through every host's settings and actual incorrect-password recovery in each player remain manual acceptance tasks.
+
+
+
 DEV implementation and verification: 13 November 2026.
 
 These integrations reuse the same statically linked ZIP, 7z, RAR, AES, multipart and extraction backend as Winamp and foobar2000. No new archive-related runtime DLLs or external extraction executables are introduced. The official AIMP and XMPlay SDK files are **not bundled** and are needed only when compiling their respective adapters.
@@ -35,7 +84,7 @@ $sdk = 'D:\Temp\ArchiveStreamPlayerAdapters\aimp-sdk'
 
 Copy the matching-architecture aimp_archive_stream.dll into an AIMP plugin subfolder, for example AIMP\Plugins\aimp_archive_stream\aimp_archive_stream.dll. AIMP registers the archive extensions *.zip, *.7z, *.rar, *.zip.001 and *.7z.001 via its FileFormat service; its FileExpander generates independently seekable virtual tracks. The AIMP virtual URI follows the SDK's archive:index/path format. Audio decoding remains AIMP's job: the adapter returns **decoded archive-entry bytes** through IAIMPStream, not PCM.
 
-Each virtual stream uses **stream first → in-memory extraction (50 MiB) → temporary file cache**. Solid 7z and RAR bypass direct streaming; temp files are automatically removed when the stream is released. The official SDK provides the COM interfaces used by the independent host contract test.
+Each virtual stream uses **stream first → in-memory extraction (default 50 MiB, configurable) → temporary file cache**. Solid 7z and RAR bypass direct streaming; temp files are automatically removed when the stream is released. The official SDK provides the COM interfaces used by the independent host contract test.
 
 AIMP x86 and x64 mock-host tests verified registration of FileFormat and FileExpander, virtual-file URI properties, reads and rewind/end seeking, and a 61 MiB solid 7z cache case. Both actual portable AIMP 5.40 builds accepted archive files in the Add Files dialog and expanded four tracks in a solid 7z. AIMP x64 traced route-to-memory when playback was requested. Audible playback, UI seeking, and interactive encrypted-password prompts are not yet fully verified.
 

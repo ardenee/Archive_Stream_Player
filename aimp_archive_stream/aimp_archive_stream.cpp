@@ -6,7 +6,9 @@
 #include <apiPlugin.h>
 #include <apiFileManager.h>
 #include <apiObjects.h>
+#include <apiOptions.h>
 #include "archive_backend.h"
+#include "archive_adapter_preferences.h"
 #include "archive_format.h"
 #include "archive_common.h"
 #include "archive_passwords.h"
@@ -23,7 +25,7 @@
 namespace
 {
     IAIMPCore* g_core = nullptr;
-    constexpr uint64_t kMemoryLimit = 50ULL * 1024 * 1024;
+    HMODULE g_module = nullptr;
 
     std::wstring Utf8ToWide(const std::string& value)
     {
@@ -74,6 +76,9 @@ namespace
         if (!output || capacity == 0)
             return false;
         output[0] = '\0';
+        const auto preferences = ArchiveAdapterPreferencesLoad();
+        if (!preferences.promptPasswords)
+            return false;
         if (save)
             *save = false;
         CREDUI_INFOW ui{};
@@ -102,6 +107,8 @@ namespace
         SecureZeroMemory(password, sizeof(password));
         if (!valid)
             output[0] = '\0';
+        if (valid && save && preferences.askToSavePassword)
+            *save = MessageBoxW(nullptr, L"Save the password to the configured plaintext password list after it is verified?", L"Archive Stream - AIMP", MB_YESNO | MB_ICONQUESTION) == IDYES;
         return valid;
     }
 
@@ -150,7 +157,8 @@ namespace
                 ArchiveCloseEntryStream(backend_);
             }
 
-            if (entry_.size <= kMemoryLimit)
+            const auto preferences = ArchiveAdapterPreferencesLoad();
+            if (entry_.size <= static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024)
             {
                 if (ArchiveExtractEntryToMemory(archive_.c_str(), entry_.index, memory_, error) &&
                     memory_.size() == entry_.size)
@@ -162,6 +170,8 @@ namespace
                 memory_.clear();
             }
 
+            if (preferences.cacheLimitMb == 0 || entry_.size > static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024)
+                return E_FAIL;
             wchar_t folder[MAX_PATH]{};
             wchar_t tempFile[MAX_PATH]{};
             if (!GetTempPathW(MAX_PATH, folder) || !GetTempFileNameW(folder, L"ASP", 0, tempFile))
@@ -375,7 +385,8 @@ namespace
         {
             if (!info)
                 return E_POINTER;
-            const std::wstring name = Utf8ToWide(entry_.path);
+            const auto preferences = ArchiveAdapterPreferencesLoad();
+            const std::wstring name = ArchiveAdapterFormatTitle(archive_, Utf8ToWide(entry_.path), entry_.index + 1, preferences.titleTemplate);
             IAIMPString* nameValue = nullptr;
             HRESULT result = NewAimpString(name, &nameValue);
             if (FAILED(result))
@@ -544,6 +555,79 @@ namespace
         ComCounter refs_;
     };
 
+    // The AIMP Options panel links to the shared settings UI. Preferences
+    // are per-user and intentionally independent from foobar/Winamp settings.
+    class OptionsFrame final : public IAIMPOptionsDialogFrame
+    {
+    public:
+        HRESULT WINAPI QueryInterface(REFIID iid, void** out) override
+        {
+            if (!out)
+                return E_POINTER;
+            *out = nullptr;
+            if (!IsEqualIID(iid, IID_IUnknown) && !IsEqualIID(iid, IID_IAIMPOptionsDialogFrame))
+                return E_NOINTERFACE;
+            *out = static_cast<IAIMPOptionsDialogFrame*>(this);
+            AddRef();
+            return S_OK;
+        }
+        ULONG WINAPI AddRef() override { return refs_.Add(); }
+        ULONG WINAPI Release() override
+        {
+            const ULONG count = refs_.Sub();
+            if (!count)
+                delete this;
+            return count;
+        }
+        HRESULT WINAPI GetName(IAIMPString** output) override
+        {
+            return NewAimpString(L"Archive Stream Player", output);
+        }
+        HWND WINAPI CreateFrame(HWND parent) override
+        {
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(wc);
+            wc.lpfnWndProc = WindowProc;
+            wc.hInstance = g_module;
+            wc.lpszClassName = L"ArchiveStreamAimpOptionsFrame";
+            wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+            RegisterClassExW(&wc);
+            frame_ = CreateWindowExW(0, wc.lpszClassName, L"", WS_CHILD | WS_VISIBLE,
+                0, 0, 550, 260, parent, nullptr, g_module, nullptr);
+            if (!frame_)
+                return nullptr;
+            CreateWindowExW(0, L"STATIC",
+                L"Archive audio: ZIP / 7z / RAR, streaming and cache fallback.",
+                WS_CHILD | WS_VISIBLE, 18, 22, 515, 24, frame_, nullptr, g_module, nullptr);
+            CreateWindowExW(0, L"STATIC",
+                L"Shared settings apply to AIMP, XMPlay, MusicBee and bridge players.",
+                WS_CHILD | WS_VISIBLE, 18, 54, 515, 24, frame_, nullptr, g_module, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Configure archive settings...",
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 18, 92, 235, 32,
+                frame_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5001)), g_module, nullptr);
+            return frame_;
+        }
+        void WINAPI DestroyFrame() override
+        {
+            if (frame_)
+                DestroyWindow(frame_);
+            frame_ = nullptr;
+        }
+        void WINAPI Notification(int) override {}
+    private:
+        static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
+        {
+            if (msg == WM_COMMAND && LOWORD(w) == 5001 && HIWORD(w) == BN_CLICKED)
+            {
+                ArchiveAdapterOpenSettings(g_module, hwnd);
+                return 0;
+            }
+            return DefWindowProcW(hwnd, msg, w, l);
+        }
+        ComCounter refs_;
+        HWND frame_ = nullptr;
+    };
+
     class Plugin final : public IAIMPPlugin
     {
     public:
@@ -587,6 +671,17 @@ namespace
             if (!core || g_core)
                 return E_INVALIDARG;
             ArchiveSetDataDirectoryName("AIMPArchiveStream");
+            const auto preferences = ArchiveAdapterPreferencesLoad();
+            if (!preferences.passwordListPath.empty())
+            {
+                const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, preferences.passwordListPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+                if (bytes > 1)
+                {
+                    std::string path(static_cast<size_t>(bytes), '\0');
+                    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, preferences.passwordListPath.c_str(), -1, path.data(), bytes, nullptr, nullptr) == bytes)
+                        ArchivePasswordSetListPath(path.c_str());
+                }
+            }
             ArchivePasswordSetPromptCallback(AskPassword);
             char traceSwitch[8]{};
             if (GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", traceSwitch, sizeof(traceSwitch)) > 0 && traceSwitch[0] == '1')
@@ -635,7 +730,20 @@ namespace
                 g_core = nullptr;
                 return status;
             }
-            DebugLogWrite("INFO", "AIMP", "REGISTER_OK", "file_expander=1 | audio_extensions=1");
+            // Options registration is optional for older AIMP hosts; failure
+            // must not disable the fully functional archive decoder.
+            options_ = new (std::nothrow) OptionsFrame();
+            if (options_)
+            {
+                const HRESULT optionResult = core->RegisterExtension(IID_IAIMPServiceOptionsDialog, options_);
+                if (FAILED(optionResult))
+                {
+                    DebugLogWrite("WARN", "AIMP", "OPTIONS_REGISTER_FAIL", "hresult=0x%08X", static_cast<unsigned>(optionResult));
+                    options_->Release();
+                    options_ = nullptr;
+                }
+            }
+            DebugLogWrite("INFO", "AIMP", "REGISTER_OK", "file_expander=1 | audio_extensions=1 | options=%d", options_ ? 1 : 0);
             return S_OK;
         }
         HRESULT WINAPI Finalize() override
@@ -643,6 +751,12 @@ namespace
             if (g_core)
             {
                 DebugLogWrite("INFO", "AIMP", "PLUGIN_FINALIZE", "expander=%p | format=%p", expander_, fileFormat_);
+                if (options_)
+                {
+                    g_core->UnregisterExtension(options_);
+                    options_->Release();
+                    options_ = nullptr;
+                }
                 if (fileFormat_)
                 {
                     g_core->UnregisterExtension(fileFormat_);
@@ -666,6 +780,7 @@ namespace
         ComCounter refs_;
         Expander* expander_ = nullptr;
         ArchiveFileFormat* fileFormat_ = nullptr;
+        OptionsFrame* options_ = nullptr;
     };
 }
 
@@ -680,6 +795,9 @@ extern "C" HRESULT WINAPI AIMPPluginGetHeader(IAIMPPlugin** output)
 BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
+    {
+        g_module = dll;
         DisableThreadLibraryCalls(dll);
+    }
     return TRUE;
 }

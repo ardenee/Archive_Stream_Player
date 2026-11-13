@@ -7,6 +7,7 @@
 #include <wincred.h>
 #include <xmparc.h>
 #include "archive_backend.h"
+#include "archive_adapter_preferences.h"
 #include "archive_common.h"
 #include "archive_format.h"
 #include "archive_passwords.h"
@@ -23,6 +24,7 @@ namespace
 {
     XMPFUNC_FILE* g_files = nullptr;
     XMPFUNC_MISC* g_misc = nullptr;
+    HMODULE g_module = nullptr;
 
     std::wstring ToWide(const char* utf8)
     {
@@ -155,6 +157,9 @@ namespace
         if (!output || !outputSize)
             return FALSE;
         output[0] = '\0';
+        const auto preferences = ArchiveAdapterPreferencesLoad();
+        if (!preferences.promptPasswords)
+            return false;
         if (save)
             *save = false;
         const std::wstring target = ToWide(archive);
@@ -183,6 +188,8 @@ namespace
         SecureZeroMemory(password, sizeof(password));
         if (!valid)
             output[0] = '\0';
+        if (valid && save && preferences.askToSavePassword)
+            *save = MessageBoxW(g_misc ? g_misc->GetWindow() : nullptr, L"Save the password to the configured plaintext password list after verification?", L"Archive Stream - XMPlay", MB_YESNO | MB_ICONQUESTION) == IDYES;
         return valid ? TRUE : FALSE;
     }
 
@@ -260,8 +267,8 @@ namespace
                     DebugLogWrite("INFO", "XMPLAY", "STREAM_OK", "index=%u | bytes=%u", entry->index, wanted);
             }
 
-            constexpr uint64_t kMemoryLimit = 50ULL * 1024 * 1024;
-            if (!extracted && !g_misc->CheckCancel() && entry->size <= kMemoryLimit)
+            const auto preferences = ArchiveAdapterPreferencesLoad();
+            if (!extracted && !g_misc->CheckCancel() && entry->size <= static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024)
             {
                 std::vector<unsigned char> decoded;
                 if (ArchiveExtractEntryToMemory(path.c_str(), entry->index, decoded, error) &&
@@ -273,7 +280,8 @@ namespace
                 }
             }
 
-            if (!extracted && !g_misc->CheckCancel())
+            if (!extracted && !g_misc->CheckCancel() && preferences.cacheLimitMb > 0 &&
+                entry->size <= static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024)
             {
                 TemporaryExtraction temp;
                 if (temp.Create() && ArchiveExtractEntryToFile(path.c_str(), entry->index, temp.path, error))
@@ -309,6 +317,11 @@ namespace
         }
     }
 
+    void WINAPI Configure(HWND window)
+    {
+        ArchiveAdapterOpenSettings(g_module, window);
+    }
+
     void WINAPI About(HWND window)
     {
         MessageBoxW(window, L"Archive Stream Player for XMPlay.\nZIP, 7z, RAR, encryption and multipart archives.\n"
@@ -329,6 +342,17 @@ extern "C" XMPARC* WINAPI XMPARC_GetInterface(DWORD face, InterfaceProc get)
     g_files = files;
     g_misc = misc;
     ArchiveSetDataDirectoryName("XMPlayArchiveStream");
+    const auto preferences = ArchiveAdapterPreferencesLoad();
+    if (!preferences.passwordListPath.empty())
+    {
+        const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, preferences.passwordListPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        if (bytes > 1)
+        {
+            std::string path(static_cast<size_t>(bytes), '\0');
+            if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, preferences.passwordListPath.c_str(), -1, path.data(), bytes, nullptr, nullptr) == bytes)
+                ArchivePasswordSetListPath(path.c_str());
+        }
+    }
     ArchivePasswordSetPromptCallback(AskPassword);
     static const bool traceConfigured = []()
     {
@@ -347,7 +371,7 @@ extern "C" XMPARC* WINAPI XMPARC_GetInterface(DWORD face, InterfaceProc get)
         XMPARC_FLAG_CONFIG,
         "Archive Stream ZIP/7z/RAR\0zip/7z/rar/001",
         CheckFile, GetFileList, DecompressFile,
-        About, nullptr, nullptr
+        About, Configure, nullptr
     };
     return &adapter;
 }
@@ -355,6 +379,9 @@ extern "C" XMPARC* WINAPI XMPARC_GetInterface(DWORD face, InterfaceProc get)
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
+    {
+        g_module = module;
         DisableThreadLibraryCalls(module);
+    }
     return TRUE;
 }

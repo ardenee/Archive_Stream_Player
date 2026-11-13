@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -85,6 +86,32 @@ static bool ArchivePasswordContains(const std::vector<std::string>& passwords, c
     return std::find(passwords.begin(), passwords.end(), password) != passwords.end();
 }
 
+// Settings UIs pass UTF-8 paths; legacy Winamp's ANSI INI path is also
+// accepted for backward compatibility. Windows filesystem operations use
+// native Unicode paths so non-ASCII folders are never lost on conversion.
+static std::wstring ArchivePasswordPathToWide(const char* path)
+{
+    if (!path || !*path)
+        return {};
+
+    UINT codepage = CP_UTF8;
+    DWORD flags = MB_ERR_INVALID_CHARS;
+    int count = MultiByteToWideChar(codepage, flags, path, -1, nullptr, 0);
+    if (count <= 0)
+    {
+        codepage = CP_ACP;
+        flags = 0;
+        count = MultiByteToWideChar(codepage, flags, path, -1, nullptr, 0);
+    }
+    if (count <= 0)
+        return {};
+    std::wstring result(static_cast<size_t>(count), L'\0');
+    if (MultiByteToWideChar(codepage, flags, path, -1, result.data(), count) != count)
+        return {};
+    result.pop_back();
+    return result;
+}
+
 void ArchivePasswordSetListPath(const char* passwordListPath)
 {
     if (!passwordListPath)
@@ -129,7 +156,13 @@ bool ArchivePasswordLoadList(ArchivePasswordList& outList, std::string& error)
         return false;
     }
 
-    DWORD attrs = GetFileAttributesA(path);
+    const std::wstring widePath = ArchivePasswordPathToWide(path);
+    if (widePath.empty())
+    {
+        error = "Password list path cannot be decoded";
+        return false;
+    }
+    DWORD attrs = GetFileAttributesW(widePath.c_str());
 
     if (attrs == INVALID_FILE_ATTRIBUTES)
     {
@@ -152,7 +185,7 @@ bool ArchivePasswordLoadList(ArchivePasswordList& outList, std::string& error)
         return false;
     }
 
-    std::ifstream file(path, std::ios::in | std::ios::binary);
+    std::ifstream file(std::filesystem::path(widePath), std::ios::in | std::ios::binary);
 
     if (!file)
     {
@@ -167,7 +200,7 @@ bool ArchivePasswordLoadList(ArchivePasswordList& outList, std::string& error)
     {
         ArchivePasswordTrimLine(line);
 
-        if (line.empty())
+        if (line.empty() || line[0] == '#')
         {
             continue;
         }
@@ -214,10 +247,16 @@ bool ArchivePasswordAppendIfMissing(const char* password, std::string& error)
         return false;
     }
 
+    const std::wstring widePath = ArchivePasswordPathToWide(path);
+    if (widePath.empty())
+    {
+        error = "Password list path cannot be decoded";
+        return false;
+    }
     bool needsLeadingNewline = false;
 
     FILE* checkFile = nullptr;
-    errno_t checkOpenResult = fopen_s(&checkFile, path, "rb");
+    errno_t checkOpenResult = _wfopen_s(&checkFile, widePath.c_str(), L"rb");
 
     if (checkOpenResult == 0 && checkFile)
     {
@@ -240,7 +279,7 @@ bool ArchivePasswordAppendIfMissing(const char* password, std::string& error)
     }
 
     FILE* file = nullptr;
-    errno_t openResult = fopen_s(&file, path, "ab");
+    errno_t openResult = _wfopen_s(&file, widePath.c_str(), L"ab");
 
     if (openResult != 0 || !file)
     {

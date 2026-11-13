@@ -12,6 +12,7 @@ Archive Stream Player lets supported players browse the audio tracks inside an a
 - **Read encrypted archives** using saved passwords and, where implemented, player-specific password prompts.
 - **Seek within supported tracks**, so playback does not have to start from the beginning.
 - **Choose efficient playback automatically:** stream eligible files directly, use memory when appropriate, and fall back to a managed temporary cache when needed.
+- **Customize supported player adapters:** configure password prompts, memory limits, temporary-cache budgets and playlist track-title styles.
 - **Work without separate archive-extraction programs or runtime archive DLLs.** Archive reading is built into the project's components.
 - **Keep archives intact.** Playing a track does not rewrite or modify the original ZIP, 7z or RAR file.
 
@@ -54,7 +55,8 @@ The following have passed tests in at least one supported player or in the share
 - [ ] Complete MusicBee's interactive queue/playback workflow and MediaMonkey's native playlist-expansion validation.
 - [ ] Confirm Windows Media Player's complete playback path on a system with a working audio output.
 - [x] Investigate WACUP 64-bit: confirm the current native-plugin limitation and provide tested archive playback through the local playlist bridge.
-- [ ] Bring password prompts, settings, cache controls and track titles to comparable quality across player adapters.
+- [x] Add shared password prompts, settings, temporary-cache controls and title templates to the newer AIMP, XMPlay, MusicBee and playlist-bridge adapters.
+- [ ] Finish interactive password-dialog, settings-page and track-title display checks in the actual player interfaces.
 - [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup.
 - [ ] Improve installer/distribution packages and include the required third-party licence notices.
 - [x] Publish MIT licensing for the original Archive Stream Player code while retaining separate licences for third-party components.

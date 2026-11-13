@@ -56,6 +56,8 @@ namespace MusicBeePlugin
                 var item = api.MB_AddMenuItem("mnuTools/Archive Stream: Add Archive Audio...",
                     "Add audio entries from a ZIP, 7z or RAR archive", OnAddArchive);
                 Trace(item == null ? "MENU_ITEM_FAILED" : "MENU_ITEM_REGISTERED");
+                api.MB_AddMenuItem("mnuTools/Archive Stream: Settings...",
+                    "Manage passwords, memory, temporary cache and track-title formats", OnShowSettings);
             }
             return info;
         }
@@ -156,12 +158,24 @@ namespace MusicBeePlugin
             }
         }
 
+        private void OnShowSettings(object sender, EventArgs args)
+        {
+            Configure(IntPtr.Zero);
+        }
+
         public bool Configure(IntPtr panelHandle)
         {
-            MessageBox.Show("Tools > Archive Stream: Add Archive Audio... opens ZIP, 7z or RAR audio.\n" +
-                "The bridge uses the shared Winamp saved-password file under LocalAppData\\WinampArchiveStream\\keeps.txt.\n" +
-                "Streams are available only while MusicBee and the bridge are running.",
-                "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            string script = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "configure-adapters.ps1");
+            if (!File.Exists(script))
+            {
+                MessageBox.Show("The configuration script is missing from the MusicBee Plugins folder.",
+                    "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            var info = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+            info.UseShellExecute = false;
+            info.CreateNoWindow = false;
+            Process.Start(info);
             return true;
         }
 

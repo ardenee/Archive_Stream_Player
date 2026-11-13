@@ -107,7 +107,7 @@ int wmain(int argc,wchar_t** argv)
         return 1;
     }
     XMPARC* api=fn(XMPARC_FACE,GetFace);
-    if(!api || !api->CheckFile || !api->GetFileList || !api->DecompressFile)
+    if(!api || !api->CheckFile || !api->GetFileList || !api->DecompressFile || !api->Config)
     {
         puts("FAIL XMPlay archive interface");
         return 1;

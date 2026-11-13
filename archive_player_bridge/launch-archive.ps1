@@ -1,24 +1,29 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Archive,
+    [string]$Archive = '',
+    [switch]$Configure,
     [ValidateSet('VLC','WMP','MusicBee','MediaMonkey','WACUPx64')]
     [string]$Player = 'VLC',
-    [int]$MemoryMB = 50,
+    [int]$MemoryMB = 0,
+    [int]$CacheLimitMB = -1,
+    [string]$TitleTemplate = '',
     [string]$PasswordList = '',
     [string]$PlayerPath = '',
     [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
-if (!(Test-Path -LiteralPath $Archive -PathType Leaf)) {
+if ($Configure) {
+    $settingsScript = Join-Path $PSScriptRoot 'configure-adapters.ps1'
+    if ($NoLaunch) { & $settingsScript -ShowSettings }
+    else { & $settingsScript }
+    return
+}
+if (!$Archive -or !(Test-Path -LiteralPath $Archive -PathType Leaf)) {
     throw "Archive not found: $Archive"
 }
 $Archive = (Resolve-Path -LiteralPath $Archive).ProviderPath
 $bridge = Join-Path $PSScriptRoot 'x64\Release\archive_player_bridge.exe'
 if (!(Test-Path $bridge)) {
     throw "Bridge not built; compile archive_player_bridge.vcxproj Release|x64."
-}
-if (!$PasswordList) {
-    $PasswordList = Join-Path $env:LOCALAPPDATA 'WinampArchiveStream\keeps.txt'
 }
 $hosts = @{
     VLC = @('C:\Program Files\VideoLAN\VLC\vlc.exe','C:\Program Files (x86)\VideoLAN\VLC\vlc.exe')
@@ -45,8 +50,11 @@ $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $false
 $psi.CreateNoWindow = $true
-$psi.Arguments = '--archive "' + $Archive.Replace('"', '') + '" --memory-mb ' + $MemoryMB +
-    ' --lifetime 7200 --password-list "' + $PasswordList.Replace('"', '') + '"'
+$psi.Arguments = '--archive "' + $Archive.Replace('"', '') + '" --lifetime 7200'
+if ($MemoryMB -gt 0) { $psi.Arguments += ' --memory-mb ' + $MemoryMB }
+if ($CacheLimitMB -ge 0) { $psi.Arguments += ' --cache-limit-mb ' + $CacheLimitMB }
+if ($PasswordList) { $psi.Arguments += ' --password-list "' + $PasswordList.Replace('"', '') + '"' }
+if ($TitleTemplate) { $psi.Arguments += ' --title-template "' + $TitleTemplate.Replace('"', '') + '"' }
 $process = [Diagnostics.Process]::Start($psi)
 if (!$process) { throw 'Could not start Archive Stream bridge.' }
 $playlistM3u = ''

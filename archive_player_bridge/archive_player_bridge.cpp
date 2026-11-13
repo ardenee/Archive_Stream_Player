@@ -23,6 +23,8 @@
 #include <unordered_map>
 #include <vector>
 #include <windows.h>
+#include <wincred.h>
+#include "archive_adapter_preferences.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -35,6 +37,10 @@ struct Settings
     std::wstring archive, playlistDir;
     std::string passwordPath;
     size_t memoryLimit = 50ULL * 1024 * 1024;
+    uint64_t cacheLimit = 2048ULL * 1024 * 1024;
+    bool promptPasswords = true;
+    bool askToSavePassword = true;
+    std::wstring titleTemplate = L"<filename>";
     unsigned short port = 0;
     unsigned lifetime = 0;
 } g_settings;
@@ -45,6 +51,7 @@ unsigned short g_port = 0;
 std::atomic<bool> g_quit{false};
 std::atomic<unsigned> g_clients{0}, g_stream{0}, g_memory{0}, g_cacheCount{0};
 std::mutex g_fileMutex;
+std::mutex g_decryptMutex;
 std::unordered_map<uint32_t, std::wstring> g_fileCache;
 
 std::string Utf8(const std::wstring &w)
@@ -137,6 +144,11 @@ std::string Name(const ArchiveEntry &e)
     }
     return name;
 }
+std::string Title(const ArchiveEntry& e)
+{
+    const auto value = ArchiveAdapterFormatTitle(g_settings.archive, Wide(e.path), e.index + 1, g_settings.titleTemplate);
+    return Utf8(value);
+}
 std::string Link(const ArchiveEntry &e)
 {
     return "http://127.0.0.1:" + std::to_string(g_port) + "/" + g_secret + "/entry/" + std::to_string(e.index) + "." + Extension(e);
@@ -148,8 +160,9 @@ std::string Playlist(bool asx)
     {
         if (e.isFolder || !e.isSupportedAudio)
             continue;
-        text += asx ? "<entry><title>" + Xml(Name(e)) + "</title><ref href=\"" + Link(e) + "\"/></entry>\r\n"
-                    : "#EXTINF:-1," + Name(e) + "\r\n" + Link(e) + "\r\n";
+        const std::string title = Title(e);
+        text += asx ? "<entry><title>" + Xml(title) + "</title><ref href=\"" + Link(e) + "\"/></entry>\r\n"
+                    : "#EXTINF:-1," + title + "\r\n" + Link(e) + "\r\n";
     }
     if (asx)
         text += "</asx>\r\n";
@@ -245,6 +258,20 @@ std::wstring Cache(const ArchiveEntry &e)
     std::lock_guard<std::mutex> lock(g_fileMutex);
     if (auto it = g_fileCache.find(e.index); it != g_fileCache.end())
         return it->second;
+    // Session-scoped cache budget, including files already extracted.
+    uint64_t used = 0;
+    for (const auto& item : g_fileCache)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA attrs{};
+        if (GetFileAttributesExW(item.second.c_str(), GetFileExInfoStandard, &attrs))
+            used += (static_cast<uint64_t>(attrs.nFileSizeHigh) << 32) | attrs.nFileSizeLow;
+    }
+    if (g_settings.cacheLimit == 0 || e.size > g_settings.cacheLimit ||
+        used > g_settings.cacheLimit - e.size)
+    {
+        std::fprintf(stderr, "CACHE_LIMIT index=%u\r\n", e.index);
+        return {};
+    }
     std::wstring path = g_work + L"\\" + std::to_wstring(e.index) + L".cache";
     std::string error;
     if (!ArchiveExtractEntryToFile(g_settings.archive.c_str(), e.index, path.c_str(), error))
@@ -286,7 +313,11 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
     const int status = partial ? 206 : 200;
     if (head)
         return Header(s, status, Type(e), length, rangeHeader);
-    ArchivePasswordSetPromptAllowedForCurrentThread(false);
+    // Serialize archive opening / password resolution across HTTP requests.
+    // Credential UI is allowed on the interactive worker thread, not during
+    // an unbounded archive-wide startup scan.
+    std::unique_lock<std::mutex> passwordLock(g_decryptMutex);
+    ArchivePasswordSetPromptAllowedForCurrentThread(g_settings.promptPasswords);
 
     // Probe decoded data before sending success. Solid 7z/RAR cannot stream.
     // A failed direct stream falls through to RAM, then temporary disk cache.
@@ -309,6 +340,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
     if (streamReady)
     {
         ++g_stream;
+        passwordLock.unlock();
         if (!Header(s, status, Type(e), length, rangeHeader))
             return false;
         uint64_t left = length;
@@ -329,6 +361,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
         if (ArchiveExtractEntryToMemory(g_settings.archive.c_str(), e.index, bytes, error) && bytes.size() == e.size)
         {
             ++g_memory;
+            passwordLock.unlock();
             if (!Header(s, status, Type(e), length, rangeHeader))
                 return false;
             return length == 0 || Send(s, bytes.data() + (size_t)start, (size_t)length);
@@ -356,6 +389,7 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
         return false;
     }
     ++g_cacheCount;
+    passwordLock.unlock();
     bool ok = Header(s, status, Type(e), length, rangeHeader);
     uint64_t left = length;
     std::array<char, 65536> buffer{};
@@ -496,6 +530,28 @@ bool Arguments(int argc, wchar_t **argv)
                 g_settings.playlistDir = val;
             else if (key == L"--password-list")
                 g_settings.passwordPath = Utf8(val);
+            else if (key == L"--prompt-password")
+            {
+                if (val != L"0" && val != L"1")
+                    return false;
+                g_settings.promptPasswords = val == L"1";
+            }
+            else if (key == L"--title-template")
+            {
+                if (val != L"<filename>" && val != L"<archivetype>: <filename>" &&
+                    val != L"<#>. <filename>" && val != L"<filename> [<filetype>]" &&
+                    val != L"<archivetype>: <#> - <filename>" &&
+                    val != L"[<archive>] <#> - <filename>")
+                    return false;
+                g_settings.titleTemplate = val;
+            }
+            else if (key == L"--cache-limit-mb")
+            {
+                const auto limit = std::stoull(val);
+                if (limit > 20480)
+                    return false;
+                g_settings.cacheLimit = limit * 1024 * 1024;
+            }
             else if (key == L"--port")
             {
                 unsigned long p = std::stoul(val);
@@ -527,6 +583,43 @@ bool Arguments(int argc, wchar_t **argv)
     }
     return !g_settings.archive.empty();
 }
+bool PromptPassword(const char* archivePath, const char*, char* output, size_t capacity, bool* save)
+{
+    if (!output || capacity == 0)
+        return false;
+    output[0] = '\0';
+    if (save)
+        *save = false;
+    CREDUI_INFOW ui{};
+    ui.cbSize = sizeof(ui);
+    ui.pszCaptionText = L"Archive Stream Player - Password Required";
+    ui.pszMessageText = L"Enter the archive password. Your password is not saved by Windows.";
+    const std::wstring target = Wide(archivePath ? archivePath : "");
+    wchar_t username[CREDUI_MAX_USERNAME_LENGTH + 1]{};
+    wchar_t password[CREDUI_MAX_PASSWORD_LENGTH + 1]{};
+    BOOL persisted = FALSE;
+    const DWORD flags = CREDUI_FLAGS_GENERIC_CREDENTIALS | CREDUI_FLAGS_ALWAYS_SHOW_UI | CREDUI_FLAGS_DO_NOT_PERSIST;
+    const DWORD response = CredUIPromptForCredentialsW(&ui, target.empty() ? L"Archive Stream" : target.c_str(),
+        nullptr, 0, username, CREDUI_MAX_USERNAME_LENGTH + 1,
+        password, CREDUI_MAX_PASSWORD_LENGTH + 1, &persisted, flags);
+    if (response != NO_ERROR)
+    {
+        SecureZeroMemory(password, sizeof(password));
+        return false;
+    }
+    const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, password, -1, nullptr, 0, nullptr, nullptr);
+    const bool valid = needed > 1 && static_cast<size_t>(needed) <= capacity &&
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, password, -1, output, static_cast<int>(capacity), nullptr, nullptr) == needed;
+    SecureZeroMemory(password, sizeof(password));
+    if (!valid)
+        output[0] = '\0';
+    if (valid && save && g_settings.askToSavePassword)
+        *save = MessageBoxW(nullptr,
+            L"Save this password in the configured plaintext password list after verification?",
+            L"Archive Stream Player", MB_YESNO | MB_ICONQUESTION) == IDYES;
+    return valid;
+}
+
 bool WriteText(const std::filesystem::path &p, const std::string &text)
 {
     std::ofstream output(p, std::ios::binary | std::ios::trunc);
@@ -537,10 +630,19 @@ bool WriteText(const std::filesystem::path &p, const std::string &text)
 
 int wmain(int argc, wchar_t **argv)
 {
+    const auto preferences = ArchiveAdapterPreferencesLoad();
+    g_settings.memoryLimit = static_cast<size_t>(preferences.memoryMb) * 1024 * 1024;
+    g_settings.cacheLimit = static_cast<uint64_t>(preferences.cacheLimitMb) * 1024 * 1024;
+    g_settings.promptPasswords = preferences.promptPasswords;
+    g_settings.askToSavePassword = preferences.askToSavePassword;
+    g_settings.titleTemplate = preferences.titleTemplate;
+    if (!preferences.passwordListPath.empty())
+        g_settings.passwordPath = Utf8(preferences.passwordListPath);
     if (!Arguments(argc, argv))
     {
         std::fputs("Usage: archive_player_bridge.exe --archive FILE.zip|7z|rar [--password-list PATH] [--memory-mb 50] "
-                   "[--playlist-dir DIR] [--lifetime SECONDS] [--port PORT]\r\n",
+                   "[--playlist-dir DIR] [--lifetime SECONDS] [--port PORT] [--cache-limit-mb N] "
+                   "[--title-template TEMPLATE] [--prompt-password 0|1]\r\n",
                    stderr);
         return 2;
     }
@@ -554,7 +656,8 @@ int wmain(int argc, wchar_t **argv)
     }
     if (!g_settings.passwordPath.empty())
         ArchivePasswordSetListPath(g_settings.passwordPath.c_str());
-    ArchivePasswordSetPromptAllowedForCurrentThread(false);
+    ArchivePasswordSetPromptCallback(g_settings.promptPasswords ? PromptPassword : nullptr);
+    ArchivePasswordSetPromptAllowedForCurrentThread(g_settings.promptPasswords);
     std::string error;
     if (!ArchiveListEntries(g_settings.archive.c_str(), g_entries, error))
     {
@@ -570,6 +673,9 @@ int wmain(int argc, wchar_t **argv)
         std::fputs("ARCHIVE_NO_AUDIO\r\n", stderr);
         return 4;
     }
+    // Encrypted entry credentials are resolved only when playback requests
+    // decoded data. Serialized HTTP worker opens avoid duplicate prompts.
+    ArchivePasswordSetPromptAllowedForCurrentThread(false);
     std::array<unsigned char, 16> random{};
     if (BCryptGenRandom(nullptr, random.data(), (ULONG)random.size(), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
         return 5;
