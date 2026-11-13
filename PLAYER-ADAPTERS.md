@@ -54,11 +54,25 @@ WACUP's WM_COPYDATA enqueue call may return zero even when the track was success
 
 An isolated WACUP x86 installation loaded both DLLs and expanded a four-entry solid 7z. Winamp-compatible IPC then confirmed that playback time advanced during the WAV track and the player transitioned to FLAC. Logs confirmed solid 7z was routed to memory.
 
-### WACUP 64-bit — binaries compile; the host does not load them
+### WACUP 64-bit — native third-party plugins blocked; bridge playback verified
 
-The Winamp plugin Visual Studio projects now also build Release|x64 against the matching static backend libraries, without accidentally copying x64 binaries into the installed 32-bit Winamp directory. **However, that does not mean WACUP x64 supports them**. A separate portable test based on installed WACUP x64 1.99.57.25464 did not load either x64 DLL, even after enabling portable third-party plugins. WACUP's published x64 preview documentation warns of limited third-party Winamp plugin compatibility: https://getwacup.com/preview_x64/index_prior_23410.php
+**WACUP x64 does not currently support loading third-party Winamp-compatible plugins.** This is a limitation of the WACUP x64 preview host, **not a failure in our archive backend**. WACUP's official [current x64 preview page](https://getwacup.com/preview_x64/) explicitly says to use WACUP x86 for third-party Winamp plugins. The current preview tested is **1.99.57.25464 (6 November 2026)**. The developer has not promised that the restriction is permanent; it must be reviewed again if WACUP adds a public third-party x64 plugin interface.
 
-Do **not** replace the installed 64-bit WACUP's plugins with the x64 builds or assume they are accepted. WACUP x86 is the supported compatibility path at this stage.
+Both of our Winamp plugins compile as x64, but this **does not make them compatible with WACUP x64's loader**. In a separate, SHA256-verified and extracted 25464 x64 test installation, `in_archive_stream.dll` and `gen_archive_stream.dll` were staged in `Plugins`, but neither appeared in WACUP's loaded module list; its own `in_url.dll` and `in_what.dll` did load. An earlier **1.99.47.23960** isolated x64 test likewise failed to load our DLLs with the portable third-party setting enabled. Do not copy the x64 Winamp DLLs to an installed WACUP as a supposed fix. The **WACUP x86 plugin integration** above remains the native choice.
+
+**WACUP x64 can play audio from archives through our independently built local playback bridge**, which uses WACUP's own M3U8 playlist parser and HTTP/codec support instead of trying to load a plugin. Build the x64 bridge and run:
+
+~~~powershell
+$msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe'
+& $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=x64
+& '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player WACUPx64
+~~~
+
+The launcher opens the temporary archive playlist with WACUP's `/ENQPLAY` command, then keeps the bridge running while WACUP reads its localhost track URLs. Press Enter **after playback finishes** to shut down the bridge and remove temporary files. For a portable or nonstandard WACUP installation, supply `-PlayerPath 'D:\Path\To\WACUP\wacup.exe'`. Password candidates default to `%LOCALAPPDATA%\WinampArchiveStream\keeps.txt`. The original archives remain untouched, and no external archive decoder is required.
+
+**Real-host verification on WACUP x64 25464:** two entries in a ZIP-derived playlist were enqueued; WACUP reported active playback and progressing time beyond four seconds, and the bridge counted a genuine decoded-byte **stream** request. A solid 7z playlist likewise loaded both tracks, advanced through active playback, and used the bridge's **memory** route. The end-to-end `launch-archive.ps1 -Player WACUPx64` path was separately exercised against both archive types: two tracks, active playback and increasing elapsed time, with normal launcher exit. Output-device audibility and player UI seeking across every codec are not fully certified.
+
+**Scope:** WACUP x64 supports **archive-backed playlist/HTTP playback**, **not native ZIP/7z/RAR drag-and-drop expansion or an Archive Stream settings page inside WACUP**. The temporary URLs work only while the bridge runs. For a fully integrated Winamp-style playlist expander, use **WACUP x86** until WACUP's x64 host gains public third-party plugin support.
 
 ## MediaMonkey, MusicBee, VLC, and Windows Media Player (13 November 2026)
 
@@ -75,7 +89,7 @@ $msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=Win32
 & $msbuild 'archive_player_bridge\archive_player_bridge.vcxproj' /m /p:Configuration=Release /p:Platform=x64
 
-# Choose a player: VLC, WMP, MusicBee, or MediaMonkey
+# Choose a player: VLC, WMP, MusicBee, MediaMonkey, or WACUPx64
 & '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player VLC
 ~~~
 

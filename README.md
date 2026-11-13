@@ -23,7 +23,7 @@ Not every feature above has been verified in every player or with every archive.
 | --- | --- | --- |
 | **Winamp** | Native 32-bit input and playlist plugins | Archive playback and expansion implemented; wider live playback regression remains |
 | **foobar2000** | Native 32/64-bit component | Playlist integration, audio decoding and seeking verified |
-| **WACUP** | Winamp-compatible plugins | **32-bit** expansion and playback progression verified; **64-bit** plugin loading is not supported yet |
+| **WACUP** | Native plugins (32-bit); playlist bridge (64-bit) | x86 expansion and playback progression verified; x64 archive playlist and playback progression verified; native x64 plugins unsupported |
 | **AIMP** | Native 32/64-bit plugin | Real-player archive expansion verified; audible playback still to verify |
 | **XMPlay** | Native 32-bit archive plugin | Plugin loads and archive entry reads verified; audible playback still to verify |
 | **MusicBee** | Native 32-bit menu plugin with playback bridge | Plugin registers and serves playable track URLs; complete interactive playback still to verify |
@@ -53,7 +53,7 @@ The following have passed tests in at least one supported player or in the share
 - [ ] Finish **real, audible playback and seeking tests** for every player and supported music format.
 - [ ] Complete MusicBee's interactive queue/playback workflow and MediaMonkey's native playlist-expansion validation.
 - [ ] Confirm Windows Media Player's complete playback path on a system with a working audio output.
-- [ ] Investigate WACUP 64-bit compatibility or document its permanent host limitations.
+- [x] Investigate WACUP 64-bit: confirm the current native-plugin limitation and provide tested archive playback through the local playlist bridge.
 - [ ] Bring password prompts, settings, cache controls and track titles to comparable quality across player adapters.
 - [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup.
 - [ ] Improve installer/distribution packages and include the required third-party licence notices.

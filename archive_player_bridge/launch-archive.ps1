@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Archive,
-    [ValidateSet('VLC','WMP','MusicBee','MediaMonkey')]
+    [ValidateSet('VLC','WMP','MusicBee','MediaMonkey','WACUPx64')]
     [string]$Player = 'VLC',
     [int]$MemoryMB = 50,
     [string]$PasswordList = '',
+    [string]$PlayerPath = '',
     [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
@@ -24,8 +25,17 @@ $hosts = @{
     WMP = @('C:\Program Files\Windows Media Player\wmplayer.exe','C:\Program Files (x86)\Windows Media Player\wmplayer.exe')
     MusicBee = @('C:\Program Files (x86)\MusicBee\MusicBee.exe','C:\Program Files\MusicBee\MusicBee.exe')
     MediaMonkey = @('C:\Program Files (x86)\MediaMonkey 5\MediaMonkey.exe','C:\Program Files\MediaMonkey 5\MediaMonkey.exe')
+    WACUPx64 = @('C:\Program Files\WACUP\wacup.exe')
 }
-$playerExe = $hosts[$Player] | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($PlayerPath) {
+    if (!(Test-Path -LiteralPath $PlayerPath -PathType Leaf)) {
+        throw "Player executable not found: $PlayerPath"
+    }
+    $playerExe = (Resolve-Path -LiteralPath $PlayerPath).ProviderPath
+}
+else {
+    $playerExe = $hosts[$Player] | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
 if (!$NoLaunch -and !$playerExe) {
     throw "$Player is not installed at a supported path. Install it or update the script."
 }
@@ -69,6 +79,11 @@ try {
         elseif ($Player -eq 'MediaMonkey') {
             # MM5+ officially accepts /Add with M3U playlists.
             Start-Process -FilePath $playerExe -ArgumentList @('/NoSplash', '/Add', ('"' + $playlist + '"'))
+        }
+        elseif ($Player -eq 'WACUPx64') {
+            # The WACUP x64 preview does not load third-party Winamp input/general DLLs.
+            # Its own playlist and HTTP playback interfaces accept the archive bridge URLs.
+            Start-Process -FilePath $playerExe -WorkingDirectory (Split-Path -Path $playerExe -Parent) -ArgumentList @('/ENQPLAY', ('"' + $playlist + '"'))
         }
         else {
             Start-Process -FilePath $playerExe -ArgumentList @('"' + $playlist + '"')
