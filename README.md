@@ -1,180 +1,69 @@
 # Archive Stream Player
 
-**Archive Stream Player** is a shared Windows ZIP/7z/RAR audio backend for Winamp, foobar2000, XMPlay, AIMP, MusicBee and Winamp-compatible hosts such as WACUP and MediaMonkey. A standalone local HTTP bridge also exposes seekable archive tracks to VLC, Windows Media Player and players that accept M3U/ASX stream URLs. Native adapters use each player's supported interfaces; the HTTP-based adapters do not pretend to implement native archive-decoder APIs. Data routing prefers **stream -> memory -> temporary-file cache** according to the archive layout and host limitations.
+**Play music directly from ZIP, 7z and RAR archives in your favourite Windows music player.**
 
-This repository contains native C/C++ player adapters and archive backends, the MusicBee C# adapter, MediaMonkey add-on packaging, Visual Studio projects and bundled third-party archive source. Official MusicBee, AIMP and XMPlay SDK files are fetched separately and never committed.
+Archive Stream Player lets supported players browse the audio tracks inside an archive and play them as individual songs. You don't have to manually unpack an entire album first. The source is published here and the project provides a shared archive engine with several player-specific integrations.
 
-## Components
+## What it can do
 
-| Project | Output | Role |
+- **Open ZIP, 7z and RAR archives** containing music, including supported split/multipart and solid archives.
+- **Display and queue individual songs** from archives in players that offer native archive or playlist integration.
+- **Play common music formats**, including MP3, FLAC, WAV and Ogg Vorbis. AAC, M4A and WMA depend on the player's available decoders.
+- **Read encrypted archives** using saved passwords and, where implemented, player-specific password prompts.
+- **Seek within supported tracks**, so playback does not have to start from the beginning.
+- **Choose efficient playback automatically:** stream eligible files directly, use memory when appropriate, and fall back to a managed temporary cache when needed.
+- **Work without separate archive-extraction programs or runtime archive DLLs.** Archive reading is built into the project's components.
+- **Keep archives intact.** Playing a track does not rewrite or modify the original ZIP, 7z or RAR file.
+
+Not every feature above has been verified in every player or with every archive. Availability depends on the player adapter, archive format, codec and encryption method.
+
+## Supported players and current progress
+
+| Player | Integration | Verified so far |
 | --- | --- | --- |
-| `in_archive_stream` | `in_archive_stream.dll` | Winamp input plugin: virtual archive entry playback, metadata and configuration UI |
-| `gen_archive_stream` | `gen_archive_stream.dll` | Winamp general-purpose plugin: archive expansion and playlist integration |
-| `foo_archive_stream` | `foo_archive_stream.dll` | Native foobar2000 ZIP/7z/RAR virtual archive files, playlist integration and Preferences (x86/x64) |
-| `xmp_archive_stream` | `xmp-archive-stream.dll` | XMPlay 4.1 x86 native archive plugin (XMPARC); stream/memory/cache extraction to player-owned audio bytes |
-| `aimp_archive_stream` | `aimp_archive_stream.dll` | AIMP 5.40 x86/x64 native FileExpander, FileFormat and seekable virtual-file streams |
-| `musicbee_archive_stream` | `MB_ArchiveStream.dll` | MusicBee 3.7 native C# plugin with an Add Archive Audio Tools-menu action; uses local bridge for playable entry URLs |
-| `mediamonkey_archive_stream` | `.mmip` build package | MediaMonkey 2024 Winamp-compatible plugin installer (DLLs load); bridge playlist is the verified playback route |
-| `archive_player_bridge` | `archive_player_bridge.exe` | Native x86/x64 localhost-only HTTP Range audio adapter for VLC, Windows Media Player, MediaMonkey and other URL/playlist consumers |
-| `archive_backend` | `archive_backend.lib` | Shared archive listing, metadata, memory/file extraction, streaming and cache logic |
-| `archive_backend_test` | `archive_backend_test.exe` | Command-line listing, extraction and stream diagnostics |
-| `libarchive_static` | `libarchive_static.lib` | Static libarchive build used by archive backends |
-| `unrar_static` | `unrar_static.lib` | Static RARLAB UnRAR integration |
-| `zlib_static` | `zlib_static.lib` | Static zlib dependency |
-| `shared` | Source files | Shared logging and Winamp adapter protocol definitions |
-| `third_party` | Source files | Bundled upstream libraries, Winamp headers and codec components |
+| **Winamp** | Native 32-bit input and playlist plugins | Archive playback and expansion implemented; wider live playback regression remains |
+| **foobar2000** | Native 32/64-bit component | Playlist integration, audio decoding and seeking verified |
+| **WACUP** | Winamp-compatible plugins | **32-bit** expansion and playback progression verified; **64-bit** plugin loading is not supported yet |
+| **AIMP** | Native 32/64-bit plugin | Real-player archive expansion verified; audible playback still to verify |
+| **XMPlay** | Native 32-bit archive plugin | Plugin loads and archive entry reads verified; audible playback still to verify |
+| **MusicBee** | Native 32-bit menu plugin with playback bridge | Plugin registers and serves playable track URLs; complete interactive playback still to verify |
+| **MediaMonkey** | Winamp-compatible DLLs and playlist bridge | DLLs load and playlist playback reaches the archive stream; native expansion still to verify |
+| **VLC** | Local playlist/HTTP playback bridge | Two-track playback verified with a test audio output; audible output still to verify |
+| **Windows Media Player (classic)** | Local ASX/HTTP playback bridge | Stream requests verified; actual player playback remains unverified |
 
-The Winamp/backend multi-project solution is `in_archive_stream/in_archive_stream.slnx`. The foobar2000, AIMP, XMPlay, MusicBee and local bridge adapters are built separately; MediaMonkey uses an `.mmip` installer built from the Winamp plugins. For per-player build, installation, routing, tests and limitations, see [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md).
+**Native plugins** can give their player a more integrated experience. **Bridge-based integrations** open a temporary local playlist and need the Archive Stream bridge to remain running during playback. They are not full native archive browser plugins.
 
-## Player-independent core and adapters (refactor in progress)
+## Working functions
 
-The design is a reusable archive-audio core with independently built player adapters for Winamp, foobar2000, XMPlay, AIMP and MusicBee. The standalone loopback HTTP Range bridge serves archive-backed audio to MediaMonkey, VLC and Windows Media Player through M3U/ASX playlists. WACUP x86 reuses the Winamp plugins after host-specific playlist compatibility adjustments. Winamp retains its own playback adapter. The foobar2000 component now exposes native ZIP/7z/RAR virtual archive files and adds their audio entries to playlists, delegating decoding to foobar2000's installed codecs. Decoded PCM and seeking were validated without an audio output device. Winamp binaries cannot be loaded by foobar2000.
+The following have passed tests in at least one supported player or in the shared archive backend:
 
-The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
+- [x] List audio tracks inside ZIP, 7z and RAR archives.
+- [x] Read ordinary and supported solid/nonsolid archives.
+- [x] Read supported split and multipart archives.
+- [x] Decrypt supported password-protected ZIP, RAR and 7z entries.
+- [x] Stream eligible archive entries without extracting an entire album.
+- [x] Use memory or temporary files for archive entries that cannot stream.
+- [x] Verify decoded audio bytes and seeking.
+- [x] Expand archives into individual playlist tracks in supported hosts.
+- [x] Provide portable, self-contained archive readers without external extraction utilities.
+- [x] Build the shared backend and newer playback bridge for both 32-bit and 64-bit Windows.
 
-The `archive_backend` public functions remain the shared listing, extraction, and ZIP/7z/RAR stream boundary. Host adapters can now call `ArchiveSetDataDirectoryName()` during initialization to select an isolated folder beneath `%LOCALAPPDATA%`. The generic default is `ArchiveStreamPlayer`; **both Winamp plugins explicitly select `WinampArchiveStream` before loading configuration**, preserving existing settings, password lists and cache paths. Only single-component folder names containing letters, digits, underscores or hyphens are accepted. The setter must be called before password/config/cache use, not during playback.
+## To do before the project is complete
 
-Windows Media Foundation startup is now headless and reports HRESULT failure status to the caller. The Winamp input adapter displays user-facing errors; background metadata scanning never opens a startup dialog. Startup and shutdown are serialized to avoid concurrent first-use initialization. Generic ZIP streaming now reuses the libarchive implementation already used by Winamp, without switching Winamp's playback route. The shared stream state distinguishes `Ready`, normal `EndOfEntry`, `Error`, `Cancelled` and `NotOpen`. Premature EOF is reported as a read failure. Optional caller-owned `ArchiveStreamCancellationToken` supports cooperative cancellation of generic ZIP/7z/RAR reads and seeks. The legacy Winamp wrapper now rejects attempts to reopen an active context instead of resetting and leaking its handle. `ArchiveReadEntryStreamDetailed()` returns a typed read result and ZIP/RAR backend error text. `ArchiveOpenEntryStreamDetailed()` and `ArchiveSeekEntryStreamDetailed()` add typed lifecycle/error responses without changing the legacy Winamp functions. The move-only `ArchiveStreamOwner` closes streams and exposes all three detailed operations for new adapters. Active Winamp playback cancellation wiring and further stream lifetime work remain future tasks. Preserve the virtual Winamp playlist format throughout.
+- [ ] Finish **real, audible playback and seeking tests** for every player and supported music format.
+- [ ] Complete MusicBee's interactive queue/playback workflow and MediaMonkey's native playlist-expansion validation.
+- [ ] Confirm Windows Media Player's complete playback path on a system with a working audio output.
+- [ ] Investigate WACUP 64-bit compatibility or document its permanent host limitations.
+- [ ] Bring password prompts, settings, cache controls and track titles to comparable quality across player adapters.
+- [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup.
+- [ ] Improve installer/distribution packages and include the required third-party licence notices.
+- [ ] Choose and publish a clear project-level licence for the original Archive Stream Player code; the third-party licences remain separate.
+- [ ] Finish archive-header metadata checks and remaining performance/reliability testing.
 
+## Downloads, development and credits
 
-## Archive and audio support
+This project is under active development. The source is available in this repository; prebuilt releases for every player are **not yet published as a completed, fully certified package**.
 
-- **ZIP:** ordinary and first-volume `.zip.001` split archives, with libarchive-backed access. The generic backend exposes ZIP decoded-byte streaming, backward/forward seeking and extract-to-file. ZIP archive and split-volume paths are opened through Windows UTF-16 APIs, including when the archive filename contains Unicode characters. The Winamp ZIP playback route remains unchanged during the adapter migration.
-- **7z:** normal and first-volume `.7z.001` split archives using the **statically compiled 7-Zip/LZMA SDK**, including **AES-256/SHA-256 encrypted entries and encrypted filenames/headers**. Non-solid Copy/LZMA2 and LZMA2+Delta entries can stream directly; common AES-256 + LZMA2/Delta non-solid entries now decrypt incrementally through the same stream interface. Solid entries are non-streamable and fall back to the configured memory buffer first, then file cache. No additional archive DLL or external executable is required at runtime.
-- **RAR:** RARLAB UnRAR and libarchive-based routines. Non-solid streaming and fallback paths exist; solid entries may need earlier decompression history. Multipart/header-metadata and password-list code exists, but compatibility depends on the archive and needs regression coverage.
+For setup, development and test instructions, see [Player adapters and installation](PLAYER-ADAPTERS.md). For the libraries and codecs we bundle, their sources, our modifications and redistribution requirements, see [Third-party components and licences](third_party/README.md).
 
-Native audio decoding targets **MP3, WAV, FLAC and OGG/Vorbis**. A Windows **Media Foundation** path is used for **M4A**, and for **AAC/WMA** when Windows provides the required codecs. The plugin does not depend on separate Winamp input plugins for Media Foundation decoding.
-
-A virtual playlist item has the form:
-
-```text
-C:\Music\Album.7z.archive_stream|3|Disc1\Track.flac
-```
-
-The `in_archive_stream` plugin recognizes the virtual entry; the `gen_archive_stream` plugin provides playlist expansion.
-
-## Build on Windows
-
-1. Clone the repository with its `third_party` files, keeping all project directories as siblings.
-2. Install **Visual Studio 2026**, the C++ desktop toolchain (MSVC **v145**) and a Windows 10/11 SDK.
-3. Open `in_archive_stream/in_archive_stream.slnx`.
-4. Select **Release** and **x86** (the 32-bit Winamp target) and build the solution.
-5. Check `in_archive_stream/Release/in_archive_stream.dll` and `gen_archive_stream/Release/gen_archive_stream.dll`.
-
-The existing DLL projects have post-build commands that copy the DLLs to `C:\Program Files (x86)\Winamp\Plugins`. Ensure Winamp is installed at that location, or adjust those post-build paths before building. The project include/library paths are relative to each `.vcxproj` rather than to the original developer's Windows profile.
-
-### foobar2000 archive and playlist component (separate build)
-
-Download the official foobar2000 SDK **2026-10-01** from https://www.foobar2000.org/SDK and extract it outside this repository. The SDK root contains `foobar2000/`, `pfc/`, `libPPUI/` and its license. On DEV it is stored at `D:\Temp\ArchiveStreamFoobarSDK`, not committed to GitHub.
-
-Build **Release|Win32** (32-bit) or **Release|x64** (64-bit, v145) directly from `foo_archive_stream/foo_archive_stream.vcxproj`, independently of the Winamp solution:
-
-```powershell
-$env:FOOBAR_SDK_ROOT = 'D:\Temp\ArchiveStreamFoobarSDK'
-& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' `
-  'foo_archive_stream\foo_archive_stream.vcxproj' /t:Build `
-  /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v145 `
-  /p:FoobarSdkRoot=$env:FOOBAR_SDK_ROOT /m:2 /v:minimal
-```
-
-To build native x64 instead, change the command above to `/p:Platform=x64`. This builds the x64 backend, libarchive, UnRAR and zlib libraries independently of the Winamp/x86 output. The 64-bit component is `foo_archive_stream/x64/Release/foo_archive_stream.dll`; the 64-bit console tests are at `archive_backend_test/x64/Release/archive_backend_test.exe`.
-
-The 32-bit component remains at `foo_archive_stream/Release/foo_archive_stream.dll`. This is an independent **foobar2000 SDK component**, not a Winamp DLL. It registers **File → Archive Stream: Inspect archive...** for ZIP/7z/RAR and adds two native Preferences pages: **Tools → Archive Stream** (buffer, cache size, age/size cleanup, cache-folder view/clear, password-list path, debug-log settings, and Open Log Folder) and **Tools → Archive Stream → Title Display** (prefix, postfix, template, and all six Winamp template presets). Values are stored in foobar2000's own configuration and do not modify Winamp's INI; backend cache/password/log paths use `%LOCALAPPDATA%\FoobarArchiveStream` by default. The buffer setting now limits foobar2000's in-memory extraction fallback (default 50 MiB); title-format options remain stored but are not yet applied to foobar2000's host-managed playlist formatting. The adapter registers read-only seekable archive files through the native foobar2000 archive API; the user's installed codecs decode the supported audio formats, with no separate codec implementation required. The Preferences implementation and backend regressions **pass Windows Release/Win32 CI** against the official foobar2000 SDK 2026-10-01. Runtime validation on 2026-11-12 loaded the DLL in an **isolated 32-bit portable foobar2000 2.26.2** installation on DEV and confirmed both Preferences pages, six title presets, Apply, persistence across a full player restart, Reset-preview and Cancel semantics. Native x64 builds are now supported. On 2026-11-12, the x64 DLL was loaded in a **separate 64-bit portable foobar2000 2.26.2**; its Preferences registration, six presets, Apply, Cancel, Reset, and full restart persistence passed. The normally installed 64-bit foobar2000 remains unmodified; PCM decoding and seeking now pass within the isolated player, while DEV's audio output device cannot be initialized so audible playback remains unverified.
-
-Both Release|Win32 and Release|x64 configurations now compile with independent architecture-specific backend and static libraries. DEV's x64 console regressions passed on ZIP, 7z, RAR, split ZIP, and Unicode ZIP fixtures. The explicit Inspect, Add Archive Audio and Verify Audio commands now run their archive work in foobar2000's native modeless background workers, with progress and Abort controls. Cancellation is cooperative: an individual synchronous backend archive-listing, extraction or decoder-library call may still block until it returns. foobar2000 Preferences use host-native Apply/Reset rather than the Winamp dialog. Native password/log path editing still inherits the backend's legacy ANSI file I/O limitations. The foobar2000 SDK itself remains outside version control.
-
-
-### foobar2000 virtual tracks and decoder validation
-
-The native **File** menu now also offers **Archive Stream: Add archive audio...** and **Archive Stream: Verify archive decoding...**. The former adds native `unpack://astzip`, `unpack://astrar`, and `unpack://ast7z` virtual files to the active playlist. These uniquely namespaced handlers avoid conflicts with foobar2000's or third-party archive handlers, and foobar2000 decodes the media using its existing audio decoders. Entry indexes are encoded in virtual paths to disambiguate duplicate names.
-
-The Verify command fully decodes audio through the foobar2000 input API and checks seeking without using an audio output device. DEV x64 testing of a generated three-second stereo WAV returned **132,300 decoded PCM sample frames and zero failures** for each of ZIP, RAR, 7z, and a Unicode split ZIP, including a mid-file seek. ZIP and RAR use direct archive streams when supported. Unsupported 7z coder chains fall back to an entry-scoped uniquely named temporary file in `%LOCALAPPDATA%\FoobarArchiveStream\Temp`, which is deleted when the virtual file is closed; the test verified no leftover files. No archive CRC values are calculated; metadata is read from headers only.
-
-A wider DEV regression on 2026-11-12 encoded the same generated WAV into **FLAC, MP3, and Ogg Vorbis**. All four codecs (WAV/FLAC/MP3/Ogg Vorbis) then decoded and passed seeking inside **ZIP, RAR, and solid 7z** on both portable foobar2000 2.26.2 **x86 and x64**: **4/4 entries decoded per archive, zero failures** (514,986 decoded PCM frames per four-entry archive, including codec-dependent sample differences). Both architectures also passed the **native Inspect and Add Archive Audio** operations, confirming four discovered audio entries and a four-track playlist insertion request.
-
-An additional DEV test on 2026-11-12 verified **AAC in M4A** and **WMA** using actual codec-encoded files inside **ZIP, RAR, solid 7z, and a five-volume Unicode split ZIP** (the latter containing Unicode audio entry names). In isolated foobar2000 **x86 and x64**, every archive produced **2/2 decoded entries, zero failures, and successful mid-track seeking**: AAC decoded 131,072 stereo PCM frames and WMA decoded 129,024 at 44.1 kHz. This covers **16 codec/archive/architecture combinations** without modifying Winamp or the installed foobar2000 instance. The temporary test fixtures remain outside the source repository under `D:\Temp\ArchiveStreamFoobar64Runtime\audio-test`.
-
-The explicit File-menu Inspect/Add/Verify operations now use foobar2000's `threaded_process::run_modeless` with a progress display and Abort button. Verify passes foobar2000's `abort_callback` to decoders, checks it between chunks, and relays cancellation to the borrowed backend stream token during read/seek using `fb2k::abort_notify`. A 300-entry WAV ZIP cancellation test triggered the native Abort button and confirmed `decoder verification cancelled` on both x86 and x64 without crashing the player. **In the same running player, immediately after aborting**, a fresh four-codec ZIP decoding job succeeded (4 decoded, 0 failed, 514,986 PCM frames) on both architectures, confirming fresh stream ownership and recovery. The verifier now requires a successful seek-and-followup-decode for tracks longer than 0.5 seconds rather than silently skipping it when a decoder declines seeking. **This is cooperative cancellation**, not forced interruption of a single blocking archive listing, extraction, opening, or decoder-library call. The user's normal installed foobar2000 and Winamp configurations were not modified.
-
-Encrypted archive validation (2026-11-12): **ZIP AES-256 and RAR5** can use saved password candidates from foobar2000's independently configured password-list path (one password per line). A new **native UnRAR static-library fallback** is used when libarchive cannot decrypt the selected RAR entry. Native UnRAR also enumerates RAR5 archives with encrypted filenames, with entry identity and optional CRC metadata read exclusively from archive headers; no extracted-content CRC calculation was added. In isolated foobar2000 **x86 and x64**, encrypted ZIP AES, RAR5, **two-track solid RAR5**, encrypted-header RAR5, and encrypted-header RAR5 with a **Japanese filename** all decoded successfully and passed seeking. The fixture password list deliberately placed an incorrect candidate before the correct one. After each test, the player's original password-list setting was restored; fixture files remained outside Git. For encrypted-header RAR5 without a password, listing now reports an explicit error rather than incorrectly reporting zero tracks. Wrong-password-only tests on both architectures also fail cleanly (native UnRAR error code 24), with no decoded frames, rather than falsely recognizing files. 7z AES encryption now uses the existing statically linked SDK with its built-in AES/SHA-256 source, including hidden headers and multipart volumes. The encrypted RAR multipart fallback now accepts **only existing on-disk volumes** through the same non-interactive callback policy as Winamp; missing volumes are rejected. See the dedicated multipart regression results below.
-
-Encrypted multipart RAR follow-up (2026-11-12): The shared native UnRAR fallback now handles **existing-volume transitions** using the same `GetFileAttributesW`/`GetFileAttributesA` checks as the original Winamp code; it never opens an interactive volume prompt. For first volumes named `.part1.rar` or `.rar.001`, native RAR headers supplement libarchive's incomplete `isEncrypted` entry flags, with exact name/size/index checks before applying the mapping. This metadata is **header-only**, with no CRC calculation pass. The new backend command `archive_backend_test.exe pwfiletest <archive.rar> <passwords.txt> <index> <output-file> [second-index second-output]` performs password-list-configured, size-checked extraction. On DEV, **x86 and x64** each extracted both entries of a three-volume encrypted solid RAR in one process, reported `encrypted=1`, and matched the original fixture bytes. Wrong passwords and a missing third volume failed without leaving a partial output file. **Portable foobar2000 x86 and x64** independently decoded a single AAC entry spanning three encrypted RAR volumes (131,072 PCM frames each) and passed mid-track seeking. **Portable foobar2000 x86 and x64 now pass two-audio-entry encrypted multipart RAR verification, including a second entry named `日本語 Encrypted.m4a`**: both tracks decoded (262,144 PCM frames total), seeking passed for both, and the players exited normally. The same two-entry Unicode fixture also passed as a single-volume encrypted RAR. The foobar adapter verifies encrypted entries using native UnRAR headers and extracts directly through native UnRAR rather than attempting libarchive extraction first; unencrypted RAR retains its normal libarchive route. Wrong passwords and a missing third RAR volume still fail safely with no decoded frames. No content CRC calculation was introduced. Diagnostic events were added to the foobar2000 debug log for per-track verifier lifecycle. All fixtures/passwords are outside Git.
-
-**Statically linked 7z AES (2026-11-13):** No external `7z.dll`, `7za.dll`, archive runtime or `7z.exe` process is used by either plugin. After reviewing `third_party/libarchive`, its 7z reader was found to recognise AES codec `0x06F10701` but explicitly rejects it in `archive_read_support_format_7zip.c`; its existing Windows BCrypt archive cryptor implements AES-CTR for ZIP, whereas 7z needs AES-CBC and a 7z-specific SHA-256 key derivation. Rather than introduce another archive engine, **the existing 7-Zip C SDK** was extended with `third_party/lzma-sdk/7zAesDec.c` and `.h`, using upstream public-domain `Aes.c`, `AesOpt.c`, `Sha256.c` and `Sha256Opt.c` statically compiled into `archive_backend.lib`. The SDK now accepts AES plus LZMA/LZMA2 and supported linear Delta/BCJ filter graphs, including encoded/encrypted archive headers. Decryption is performed through a bounded AES-CBC look-stream with securely wiped key/buffer state; password values are never logged. The shared 7z reader tries runtime and per-player saved password candidates before requesting a password from the player callback. The password is cached or saved to `keeps.txt` only after successful SDK decoding. ZIP and RAR encryption paths are unchanged; no new CRC computation pass was introduced, and listing metadata still uses header-supplied CRCs.
-
-**7z AES regression tests:** DEV Release/Win32 and Release/x64 console tests both successfully read two WAV tracks with an incorrect saved-password candidate before the correct one from (1) encrypted 7z with visible headers, (2) solid 7z with encrypted headers, and (3) a three-volume encrypted-header `.7z.001` set. Each extracted file matched the original byte-for-byte by the test harness's SHA-256 hash. Wrong passwords and a missing third volume fail without output. `archive_backend_test/verify-encrypted-7z.ps1` generates and removes its own temporary fixtures with the locally installed `7z.exe` **only in the test harness**, and requires no extra plugin/runtime DLL. Both Winamp x86 plugins compile with the static backend. **Isolated foobar2000 x86 and x64** each decoded both tracks from all three 7z variants (2 decoded, 0 failed, 176,400 PCM frames per run), including Japanese Unicode filenames, and passed seeking; all portable password-list settings were restored after testing. Live Winamp playback of the new encrypted cases and audible foobar playback remain unverified.
-
-**Streaming-first route regression (2026-11-13):** The Winamp input plugin now validates a direct stream before testing the memory limit or any previously cached file; solid 7z and solid RAR skip direct streaming. foobar2000's archive-file adapter now checks a direct stream first, then attempts memory extraction (up to its configured buffer size), and only then creates a temporary-file cache; solid 7z skips the stream attempt entirely. The static 7z SDK additionally supports incremental AES-CBC → LZMA2 and AES-CBC → LZMA2 → Delta for non-solid archives, including encoded headers and multipart `.7z.001` sets. Non-encrypted LZMA2 → Delta can also stream. The new `archive_backend_test.exe pwstreamtest <archive.7z> <passwords.txt> <index>` compares all streamed bytes against SDK memory extraction, checks decoded-byte seeking, and verifies rejection of wrong passwords and solid layouts. The expanded test script covers x86/x64, plain non-solid, AES non-solid, AES solid, AES multipart non-solid and AES multipart solid; source hashes, rejected wrong passwords, and missing-volume cleanup are checked independently. Both isolated foobar2000 x86/x64 portable players decoded **8/8 tracks, zero failures**, across four AES variants including Japanese filenames; their short 4,096-frame test tracks skip the player-level seek check, which is covered separately by the backend stream test. Audible foobar output and interactive Winamp AES playback remain unverified.
-
-Current limitations: foobar2000 could not initialize DEV's audio output device, so audible playback remains unverified. The configured buffer limit now governs foobar2000's in-memory fallback; title-format controls remain stored but not yet applied to native playlist rendering. Explicit archive listing and decoding commands execute on cancellable background workers, but each underlying synchronous archive-list or fallback-extraction operation can still delay cancellation. Additional or unusual 7z coder chains and audible playback/stop transitions still need further implementation or regression testing. Eligible non-solid AES-256 7z entries now use incremental AES-CBC + LZMA2 decoding (optionally with Delta), with reset/re-decode seeking; unsupported coder graphs and all solid entries fall back to bounded memory or a file. Passworded headers, memory extraction and file extraction remain synchronous, so cancellation can be delayed during those operations.
-
-The backend test utility can be used independently of Winamp:
-
-```powershell
-.\archive_backend_test\Release\archive_backend_test.exe "D:\Audio\Album.7z"
-.\archive_backend_test\Release\archive_backend_test.exe "D:\Audio\Album.rar" 0
-.\archive_backend_test\Release\archive_backend_test.exe "D:\Audio\Album.7z" 0 stream
-.\archive_backend_test\Release\archive_backend_test.exe "D:\Audio\Album.rar" 0 file "D:\Temp\extracted-track.flac"
-```
-
-The console tests enumerate entries, test memory extraction, exercise eligible archive streams and can extract ZIP/RAR/7z entries to files. Run `archive_backend_test.exe canceltest "D:\Audio\Album.zip"` and `archive_backend_test.exe legacytest "D:\Audio\Album.zip"` to test cooperative cancellation and legacy handle ownership. Those two commands also accept supported 7z and RAR fixtures. Run `archive_backend_test.exe ziptest "D:\Audio\Album.zip"` to check the generic ZIP reader against byte-for-byte memory extraction and verify seeking, EOF, reopening, and invalid-index handling. The `ziptest` parity command is intended for small test fixtures (maximum 1 MiB per file); this is a test-only limit, not a streaming limit. They **do not** replace a Winamp playback regression test; support depends on the specific entry, compression method and archive layout.
-
-## Stream cancellation and ownership
-
-`ArchiveOpenEntryStream(archivePath, index, stream, error, &token)` accepts an **optional** caller-owned `ArchiveStreamCancellationToken`. A worker or UI thread can call `token.RequestCancellation()`; the read/seek owner detects it via an atomic signal and sets `stream.readStatus` to `Cancelled`. The generic API and the ZIP/RAR/7z decoded-discard seek loops check cancellation between operations. Existing Winamp callers omit the optional parameter, so their playback and stop routing is not changed by this batch.
-
-**Lifetime contract:** The token must outlive the stream, including any in-flight I/O. Do not `Reset()` a token while its stream is open. A cancellation request is not a concurrent close: the owner must wait until I/O returns and then call `ArchiveCloseEntryStream()`. Stream read/seek/close methods are **not reentrant** or safe to use simultaneously on the same stream. Cancellation may not interrupt an individual blocking decoder call, password dialog or archive-open operation immediately. The generic stream handle remains caller-owned; avoid copying its raw handle into another owning instance.
-
-The legacy `ArchiveStreamContext` now also refuses a second open or validated-open while its ZIP or backend handle remains active, protecting Winamp's existing stream ownership. Its existing ZIP path is still in use until live playback regression tests justify retiring it.
-
-New player adapters should use `archive_backend/archive_stream_owner.h`. `ArchiveStreamOwner` is noncopyable, move-only, and closes its handle on destruction. Its `OpenDetailed()`, `ReadDetailed()` and `SeekDetailed()` methods expose typed `ArchiveStreamErrorKind` results and diagnostic messages. ZIP/RAR read errors are preserved where available; backend seek failures currently produce a general category with details in logs. Cooperative cancellation checks occur between decoder operations, not inside blocking library calls. The existing Winamp byte-count/bool API remains compatible. Run `archive_backend_test.exe diagtest path.zip` for open/seek status regressions.
-
-## Cache, metadata and logging
-
-**Playback route priority is strictly streaming → memory → cache**, regardless of a previous cache hit. Winamp first validates an eligible direct entry stream, then attempts full extraction into the configured memory buffer when the entry fits, and only then consults/creates the managed cache. Solid 7z cannot stream, so it uses memory when the track fits and cache otherwise. foobar2000 follows the same order, with its configured buffer size limiting memory extraction and a uniquely named temporary extracted file as the third-stage file cache. Exceptions: Windows Media Foundation native formats in Winamp require stream/file rather than the memory decoder; encrypted RAR in foobar2000 uses its static native UnRAR file fallback. Normal foobar2000 decoding uses the player’s existing codecs. No new runtime archive DLLs are needed. The configuration UI exposes cache controls; runtime diagnostics use shared debug logging.
-
-**CRC policy:** CRC metadata must be read from archive headers only, never computed by reading/decompressing every audio entry during listing. If the header does not provide an applicable CRC, represent it as unavailable. Header CRC reporting, particularly for ZIP and multipart RAR variants, should be verified in regression tests before changing cache identity or deduplication behavior.
-
-## Dependencies and licensing
-
-Bundled sources include **7-Zip LZMA SDK**, **RARLAB UnRAR**, **libarchive**, **zlib**, **dr_libs**, **stb_vorbis** and **Winamp plugin SDK headers**. Media Foundation is supplied by Windows. Review each upstream component's notices before redistributing the DLLs. In particular, **UnRAR is extraction-oriented and has restrictions**; it is not a general-purpose permissive RAR compressor license.
-
-## Development status — 13 November 2026
-
-- GitHub and local `main` were compared before this README refresh.
-- The complete `Release|x86` solution built successfully on DEV using Visual Studio 2026 / MSVC v145.
-- The previously omitted `zlib_static` project was restored to version control, and Visual Studio project references and include/library directories were made independent of the DEV user's absolute checkout path.
-- The backend passed local smoke tests using newly generated ZIP, non-solid 7z, solid 7z and RAR archives containing Unicode filenames. Tests covered listing, memory extraction, eligible streaming/seek, and RAR extract-to-file with a byte-for-byte match.
-- ZIP entries currently display `HasCRC=NO` in the console listing despite being valid ZIP entries. This is a header-metadata reporting gap to investigate, **not** a reason to calculate CRC by decompressing content.
-- Third-party compiler warnings remain; they are not currently treated as evidence of a failed build.
-- Initial adapter cleanup: moved Winamp IPC into a dedicated input-plugin bridge and removed unused ZIP audio helper code without changing the existing expansion protocol.
-- Added null/empty-path validation to the public archive API and reject reopening an already-live opaque stream rather than leaking its handle. New `archive_backend_test.exe selftest` checks these error paths.
-- The stream smoke test now treats a short or oversized read as a failure instead of reporting success with a warning.
-- After the initial adapter refactor, the Release/x86 solution rebuilt and ZIP, solid/non-solid 7z and RAR smoke cases passed (listing, memory extraction and eligible streaming/seek).
-- The shared backend now supports per-host data directory names with adapter-selected legacy Winamp paths. API tests cover folder-name validation and truncated output paths.
-- Media Foundation startup no longer calls Win32 message boxes from the backend; the Winamp playback adapter owns its user-facing error messages, while metadata readers remain headless.
-- Generic ZIP streaming and ZIP extract-to-file now dispatch through the existing libarchive-backed ZIP reader. A new `ziptest` command checks decoded-byte parity and stream lifecycle. ZIP source paths were corrected to use UTF-16 Win32 file APIs, including multipart archives with Unicode paths. Stream reads expose `ArchiveStreamReadStatus` to distinguish EOF from premature termination and errors. To avoid changing Winamp's route-selection decisions, ZIP entries' existing `streamCandidate` listing flag was deliberately left unchanged.
-- This refactor passed 26 API self-tests; 14 ZIP entry-stream checks across normal, three-part, Unicode-path and empty-entry fixtures; 12 byte-parity ZIP extract-to-file checks; and ZIP/7z/RAR stream smoke tests. A deliberately corrupted ZIP entry failed streaming and extraction, and the file-extraction path removed its partial output. Tests use byte comparisons, not CRC recalculation.
-- Added optional cross-thread cancellation tokens to the generic stream API. Tests verified pre-cancelled open rejection, cancelled reads/seeks, cleanup and reopening with a fresh token for ZIP, 7z and RAR. The old Winamp context now refuses double-open and validated double-open, preserves the original stream, supports close/reopen, and safely rejects overlong archive paths.
-- Added a move-only RAII `ArchiveStreamOwner` and a detailed read result (`ArchiveReadEntryStreamDetailed`) without changing the Winamp API. The `ownertest` regression covers valid ZIP, 7z, RAR and corrupt ZIP, including decoder error propagation, invalid reads, moves, cancellation and close/reopen.
-- Created the independent foobar2000 native inspection component `foo_archive_stream` using the official SDK (2026-10-01). Both Release|Win32 and Release|x64 build on DEV, with x86 and x64 output and dependency isolation. The component and its native Preferences pages loaded and passed Apply, Reset, Cancel and restart-persistence tests in separate portable foobar2000 2.26.2 x86 and x64 instances. Native foobar2000 playlist integration and delegated audio decoding now work on the development branch, with audio output device validation pending.
-- Stream API closeout: typed open/read/seek results, cancellation-aware byte accounting, move-only stream ownership, and the `diagtest` regression pass Windows Release/Win32 CI. Native decoder-specific details for some 7z failures still appear in logs; individual blocking decompression calls remain noninterruptible.
-- foobar2000 settings parity: native Preferences pages under Tools, including cache sizing/cleanup, password and debug-log paths, cache folder actions, and all six Winamp title presets. Values persist in foobar's host-native configuration, separated from Winamp. CI and DEV x86 builds passed; page registration, settings Apply, Reset/Cancel and restart persistence were runtime-tested in a clean portable x86 player. The archive inspector was runtime-tested in isolated x64 foobar2000 2.26.2 with ZIP, RAR, non-solid 7z and Unicode split ZIP (3/3 audio entries each). Direct ZIP/RAR streams and a unique temporary extracted-file fallback for unsupported 7z coder layouts passed full PCM decoding and mid-track seeking tests. The explicit Inspect, Add and Verify commands now run on foobar2000's progress workers with Abort controls. WAV, FLAC, MP3 and Ogg Vorbis each decoded successfully through ZIP, RAR and solid 7z in both x86 and x64 portable players (4/4 per archive, zero decoder failures). A 300-track ZIP cancellation test passed on both architectures. Remaining work: interrupt/cancel individual blocking library calls where possible, apply stored title/buffer settings, test encrypted archives and playback transitions, and verify audible playback on an available output device.
-- WACUP **x86** now loads the Winamp adapters and passed four-track solid 7z playlist expansion, WAV playback progression and FLAC transition in an isolated test. The Winamp general plugin handles WACUP's zero-return enqueue semantics and preserves the original archive until replacement entries are appended. Winamp (the original host) still requires separate live playback validation after these compatibility changes.
-- Added XMPlay 4.1 x86 native XMPARC archive adapter, with stream → memory → temporary-file fallback; real-player solid 7z route logs and ZIP/7z/RAR full/partial host-interface parity tests passed.
-- Added AIMP 5.40 x86/x64 native FileExpander, FileFormat and seekable virtual-file adapter; both real-player builds expanded a four-track 7z and the mock host passed seek/reopen/large-cache tests.
-- Repaired x64 Winamp plugin build settings, but isolated WACUP **x64** did not load these third-party plugins. Treat WACUP x64 runtime integration as unsupported/unverified until host API compatibility is resolved. See [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md).
-
-### Next validation and development priorities
-
-1. Run real **Winamp** playback, seeking, playlist expansion and track transitions across MP3/FLAC/OGG/WAV/M4A examples.
-2. Build a repeatable test set for **ZIP/7z/RAR**, including normal, split, solid, non-solid, Unicode-named and password-protected cases.
-3. Verify **archive-header CRC metadata** and cache identities without introducing CRC calculation passes.
-4. Check error handling, concurrency, abort/stop, cache cleanup and recovery across failed or interrupted playback.
-5. Update the in-plugin About/help text as implementation support is confirmed; some descriptions predate newer multipart/password paths.
-
-**Current status is a verified compiling baseline, not a declaration that every archive or playback scenario has passed runtime tests.**
-
-## Development workflow
-
-Make and test source changes locally on the DEV Windows machine, then commit and push to this GitHub repository. Keep source, build configuration, tests and this README in sync. Exclude generated Visual Studio output and local caches from commits.
+Archive Stream Player is independent of the music-player developers and upstream archive libraries. Thanks to the maintainers of libarchive, the 7-Zip LZMA SDK, RARLAB UnRAR, zlib, dr_libs and stb, and to the developers who provide player plugin interfaces.
