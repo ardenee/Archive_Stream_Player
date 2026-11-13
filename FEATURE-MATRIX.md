@@ -1,6 +1,6 @@
 # Archive Stream Player — feature matrix
 
-**Snapshot:** 13 November 2026, after commit `8d8474a`. This is a **verification matrix**, not a claim that every function has passed real-player acceptance tests. The [main README](README.md) describes the project; [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md) contains implementation detail and test evidence.
+**Snapshot:** 13 November 2026, updated after automated native and bridge password-dialog tests. Base feature matrix: commit `96c55b7`. This is a **verification matrix**, not a claim that every function has passed real-player acceptance tests. The [main README](README.md) describes the project; [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md) contains implementation detail and test evidence.
 
 ## Status legend
 
@@ -43,8 +43,8 @@ Every adapter uses the **same static archive backend**, but host formats and rec
 | foobar2000 x86 / x64 native | **T** | **H** | **T** | **H** (encrypted 7z decode/seek); **T** (other backend) | **H** (encrypted multipart 7z); **T** (other cases) | **T** | **T** | **T** | **T** |
 | WACUP x86 native | **I** | **H** | **I** | **I** | **H** (solid 7z); **I** (other) | **T** | **H** (solid 7z) | **T** | **T** |
 | WACUP x64 bridge | **H** | **H** | **T** (shared bridge) | **T** (shared bridge) | **H** (solid 7z); **T** (other) | **H** (ZIP) | **H** (solid 7z) | **T** | **T** |
-| AIMP x86 / x64 native | **T** | **H** | **T** | **I** (backend tested) | **H** (solid 7z); **T** (other) | **T** | **T** | **T** | **T** |
-| XMPlay x86 native | **T** | **H** | **T** | **I** (backend tested) | **H** (solid 7z); **T** (other) | **L** (internal stream, then host memory block) | **T** | **T** | **T** |
+| AIMP x86 / x64 native | **T** | **H** | **T** | **T** (encrypted 7z native COM read/seek + prompt) | **H** (solid 7z); **T** (other) | **T** | **T** | **T** | **T** |
+| XMPlay x86 native | **T** | **H** | **T** | **T** (encrypted 7z XMPARC full/partial reads + prompt) | **H** (solid 7z); **T** (other) | **L** (internal stream, then host memory block) | **T** | **T** | **T** |
 | XMPlay bridge | **H** | **T** | **T** | **T** (shared bridge) | **T** | **H** (HTTP) | **T** | **T** | **T** |
 | MusicBee bridge | **T** | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **T** (transport only) | **T** | **T** | **T** |
 | MediaMonkey bridge | **H** | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **H** (HTTP request) | **T** | **T** | **T** |
@@ -58,20 +58,20 @@ Here **T** in a bridge row can mean **the bridge itself passed a transport/backe
 | Player / mode | Settings entry | Password-list use | Interactive password prompt | Shared cache controls | Per-host diagnostic logs | Title-change behavior |
 | --- | --- | --- | --- | --- | --- | --- |
 | Winamp x86 | **I** (native entry wired; common GUI **H** standalone) | **T** | **I** (dialog not fully accepted) | **H** (common GUI); native controls wired | **I** (shared logging connected) | New titles formatted; `IPC_REFRESHPLCACHE` on save; repaint pending |
-| foobar2000 x86 / x64 | **H** (native Preferences); common GUI **H** standalone | **H** (real encrypted 7z tests) | **I** | **H** (common GUI) | **I** (shared logging connected) | **H** live refresh in existing playlist with `$if2(%archive_stream_title%,%title%)` |
+| foobar2000 x86 / x64 | **H** (native Preferences); common GUI **H** standalone | **H** (real encrypted 7z tests) | **H** (native credential UI: enter/decline-save/cancel, x86/x64) | **H** (common GUI) | **I** (shared logging connected) | **H** live refresh in existing playlist with `$if2(%archive_stream_title%,%title%)` |
 | WACUP x86 | **I** (Winamp-compatible settings) | **T** (backend) | **I** | **H** (common GUI) | **I** | Uses Winamp format/cache path; repaint not certified |
-| WACUP x64 | **T** (launcher `-Configure`) | **T** (bridge) | **I** | **H** (common GUI) | **T** (bridge) | M3U8 reload required |
-| AIMP x86 / x64 | **H** (Options service registered); common GUI **H** standalone | **T** (backend) | **I** | **H** (common GUI) | **T** (native log regression) | **T** title in virtual metadata; host row repaint pending |
-| XMPlay x86 native | **T** (Config callback); common GUI **H** standalone | **T** (backend) | **I** | **H** (common GUI) | **T** (native log regression) | **T** new indexed titles; **L** reimport old rows |
-| XMPlay bridge | **T** (launcher) | **T** (bridge) | **I** | **H** (common GUI) | **T** (bridge) | Reload playlist |
-| MusicBee | **H** (Tools menu registers); dialog launch **I** | **T** (bridge) | **I** | **H** (common GUI) | **T** (x86 adapter logging) | Bridge labels; in-player presentation unverified |
-| MediaMonkey | **T** (launcher) | **T** (bridge) | **I** | **H** (common GUI) | **T** (bridge) | Reload playlist |
-| VLC | **T** (launcher) | **T** (bridge) | **I** | **H** (common GUI) | **T** (bridge) | Reload playlist |
-| WMP | **T** (launcher) | **T** (bridge) | **I** | **H** (common GUI) | **T** (bridge) | Reload ASX |
+| WACUP x64 | **T** (launcher `-Configure`) | **T** (bridge) | **T** (bridge CredUI Win32/x64; WACUP UI not tested) | **H** (common GUI) | **T** (bridge) | M3U8 reload required |
+| AIMP x86 / x64 | **H** (Options service registered); common GUI **H** standalone | **T** (backend) | **T** (Win32/x64 native COM harness + Windows CredUI; in-player UI pending) | **H** (common GUI) | **T** (native log regression) | **T** title in virtual metadata; host row repaint pending |
+| XMPlay x86 native | **T** (Config callback); common GUI **H** standalone | **T** (backend) | **T** (Win32 XMPARC harness + Windows CredUI; in-player UI pending) | **H** (common GUI) | **T** (native log regression) | **T** new indexed titles; **L** reimport old rows |
+| XMPlay bridge | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; XMPlay UI not tested) | **H** (common GUI) | **T** (bridge) | Reload playlist |
+| MusicBee | **H** (Tools menu registers); dialog launch **I** | **T** (bridge) | **T** (bridge CredUI Win32/x64; MusicBee UI not tested) | **H** (common GUI) | **T** (x86 adapter logging) | Bridge labels; in-player presentation unverified |
+| MediaMonkey | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; MediaMonkey UI not tested) | **H** (common GUI) | **T** (bridge) | Reload playlist |
+| VLC | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; VLC UI not tested) | **H** (common GUI) | **T** (bridge) | Reload playlist |
+| WMP | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; WMP UI not tested) | **H** (common GUI) | **T** (bridge) | Reload ASX |
 
 **Shared GUI verification:** `archive_player_bridge/test_shared_settings_ui.py` opened Windows Forms on DEV, checked controls, changed the preview, clicked **Clear managed cache** and **Clear all logs**, confirmed unrelated files were preserved, and confirmed **Cancel** did not modify user registry settings. This validates the **shared GUI**, not the button that launches it in every individual host.
 
-**Password security:** Saved candidate passwords are stored in a plaintext `keeps.txt` list, only after consent and successful verification. Password prompting in each specific player needs interactive acceptance. Decrypted cached audio is stored on disk until managed cleanup; cache behavior is not equivalent to securely erasing extracted content.
+**Password security and verification:** Saved candidate passwords are stored in a plaintext `keeps.txt` list, only after consent and successful verification. **foobar2000 x86/x64 has real-player Windows credential UI tests:** entering a synthetic AES 7z password and declining save decodes successfully; cancelling fails closed without decoding; the configured list remains unchanged. **AIMP Win32/x64 and XMPlay Win32** passed the same password-entry/decline-save checks through their native SDK/COM test harnesses, including actual audio-byte reads and seeking or partial probes. **HTTP bridge Win32/x64** passed a Windows credential prompt followed by an encrypted 7z HTTP range read; its empty test list remained empty. These **T** tests validate the shared bridge path for WACUP x64, MusicBee, MediaMonkey, VLC, WMP and XMPlay bridge consumers, **not** the prompt inside each named player's own UI. **Winamp/WACUP x86 native prompts remain unverified.** Decrypted cached audio may persist on disk until managed cleanup; cache cleanup is not secure erasure.
 
 ## Known host limitations
 
@@ -80,7 +80,7 @@ Here **T** in a bridge row can mean **the bridge itself passed a transport/backe
 - **foobar2000:** The live title field is `%archive_stream_title%`. An existing playlist column must use that field (for example `$if2(%archive_stream_title%,%title%)`); the plugin intentionally does not rewrite `%title%` or file tags.
 - **MusicBee / MediaMonkey:** Native plugin load/menu registration is not the same as an end-to-end in-player queue and playback certification. Their loopback bridge functionality has stronger backend coverage than their native UI workflow.
 - **VLC / WMP:** Both use playlists/HTTP rather than native archive decoder plugins. VLC passed a dummy audio-output test; WMP full playback has not passed.
-- **All players:** Audible-speaker output, all codecs, every encryption layout, GUI seek behavior, password prompt rejection/cancellation and automatic title repaint need per-host verification where marked **?** or **I**.
+- **All players:** Audible-speaker output, all codecs, every encryption layout, GUI seek behavior, native Winamp/WACUP x86 password prompts, bridge-client/player-level prompt handling and automatic title repaint still need per-host verification where marked **?** or **I**. Native foobar2000 password cancellation is now verified; do not extrapolate it to other hosts.
 
 ## Repeatable evidence
 
@@ -88,6 +88,9 @@ Here **T** in a bridge row can mean **the bridge itself passed a transport/backe
 | --- | --- | --- |
 | Shared Win32/x64 HTTP transport and routes | [`archive_player_bridge/test_bridge.py`](archive_player_bridge/test_bridge.py), [`test_stream_priority.py`](archive_player_bridge/test_stream_priority.py) | ZIP/7z/RAR stream, memory/cache fallback, byte-for-byte HTTP ranges |
 | Passwords/encrypted 7z | [`archive_backend_test/test_7z_encrypted_layouts.py`](archive_backend_test/test_7z_encrypted_layouts.py), [`archive_player_bridge/test_passwords.py`](archive_player_bridge/test_passwords.py) | AES 7z layouts, split/solid fallback, wrong passwords and cancellation |
+| Real foobar2000 native password UI | [`foo_archive_stream/test_password_prompt_ui.py`](foo_archive_stream/test_password_prompt_ui.py) | Portable foobar2000 x86/x64: successful synthetic password, declined storage, cancellation and no user password-list changes |
+| AIMP/XMPlay native adapter password UI | [`aimp_archive_stream/test_password_prompt_ui.py`](aimp_archive_stream/test_password_prompt_ui.py), [`xmp_archive_stream/test_password_prompt_ui.py`](xmp_archive_stream/test_password_prompt_ui.py) | Actual Windows CredUI within official native AIMP COM and XMPlay XMPARC test harnesses; encrypted 7z read/seek/partial parity, declined storage |
+| HTTP bridge password UI | [`archive_player_bridge/test_bridge_password_prompt_ui.py`](archive_player_bridge/test_bridge_password_prompt_ui.py) | Win32/x64 CredUI, encrypted 7z byte-range WAV decoding, declined password storage; applies to bridge itself, not each client's GUI |
 | Encrypted RAR memory route | [`archive_backend_test/test_encrypted_rar_memory.py`](archive_backend_test/test_encrypted_rar_memory.py) | RAR5 data/header encryption, Win32/x64 byte parity |
 | Native AIMP recovery | [`aimp_archive_stream/test_native_recovery.py`](aimp_archive_stream/test_native_recovery.py) | Official AIMP stream contract; injected read/seek fallback |
 | Native foobar2000 decoding and recovery | [`foo_archive_stream/test_native_recovery.py`](foo_archive_stream/test_native_recovery.py) and DEV real-player encrypted 7z test | SDK read/seek recovery and real Win32/x64 PCM decoder validation |
