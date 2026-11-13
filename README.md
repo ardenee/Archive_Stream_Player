@@ -1,6 +1,6 @@
 # Archive Stream Player
 
-**Archive Stream Player** is a shared Windows archive-audio backend with Winamp plugins for browsing and playing audio stored inside ZIP, 7z and RAR archives without requiring the user to extract an entire archive manually. An archive can be expanded into individual virtual Winamp playlist entries; playback selects a streaming, memory or managed-cache path depending on the container and entry.
+**Archive Stream Player** is a shared Windows archive-audio backend with native player adapters for Winamp, foobar2000, XMPlay and AIMP, plus verified 32-bit WACUP compatibility. It browses and plays audio stored inside ZIP, 7z and RAR archives without manually extracting a full archive. Archive entries become individual player tracks; each adapter chooses streaming, memory or file-cache access according to the host API and archive layout.
 
 This repository contains the native C/C++ Winamp plugins, archive backends, Visual Studio projects and bundled third-party source.
 
@@ -11,6 +11,8 @@ This repository contains the native C/C++ Winamp plugins, archive backends, Visu
 | `in_archive_stream` | `in_archive_stream.dll` | Winamp input plugin: virtual archive entry playback, metadata and configuration UI |
 | `gen_archive_stream` | `gen_archive_stream.dll` | Winamp general-purpose plugin: archive expansion and playlist integration |
 | `foo_archive_stream` | `foo_archive_stream.dll` | Native foobar2000 ZIP/7z/RAR virtual archive files, playlist integration and Preferences (x86/x64) |
+| `xmp_archive_stream` | `xmp-archive-stream.dll` | XMPlay 4.1 x86 native archive plugin (XMPARC); stream/memory/cache extraction to player-owned audio bytes |
+| `aimp_archive_stream` | `aimp_archive_stream.dll` | AIMP 5.40 x86/x64 native FileExpander, FileFormat and seekable virtual-file streams |
 | `archive_backend` | `archive_backend.lib` | Shared archive listing, metadata, memory/file extraction, streaming and cache logic |
 | `archive_backend_test` | `archive_backend_test.exe` | Command-line listing, extraction and stream diagnostics |
 | `libarchive_static` | `libarchive_static.lib` | Static libarchive build used by archive backends |
@@ -19,11 +21,11 @@ This repository contains the native C/C++ Winamp plugins, archive backends, Visu
 | `shared` | Source files | Shared logging and Winamp adapter protocol definitions |
 | `third_party` | Source files | Bundled upstream libraries, Winamp headers and codec components |
 
-The full multi-project solution is `in_archive_stream/in_archive_stream.slnx`. The project references express the library dependencies.
+The Winamp/backend multi-project solution is `in_archive_stream/in_archive_stream.slnx`. The AIMP, XMPlay and foobar2000 adapters are built separately against their respective official SDKs. For AIMP/XMPlay build commands, installation, validation and WACUP x86/x64 limitations, see [Player adapters: AIMP, XMPlay and WACUP](PLAYER-ADAPTERS.md).
 
 ## Player-independent core and adapters (refactor in progress)
 
-The long-term design is a reusable archive-audio core with independently built player adapters for Winamp and potentially foobar2000, MediaMonkey and other players. Winamp retains its own playback adapter. The foobar2000 component now exposes native ZIP/7z/RAR virtual archive files and adds their audio entries to playlists, delegating decoding to foobar2000's installed codecs. Decoded PCM and seeking were validated without an audio output device. Winamp binaries cannot be loaded by foobar2000.
+The design is a reusable archive-audio core with independently built player adapters for Winamp, foobar2000, XMPlay and AIMP. WACUP x86 reuses the Winamp plugins after host-specific playlist compatibility adjustments. Winamp retains its own playback adapter. The foobar2000 component now exposes native ZIP/7z/RAR virtual archive files and adds their audio entries to playlists, delegating decoding to foobar2000's installed codecs. Decoded PCM and seeking were validated without an audio output device. Winamp binaries cannot be loaded by foobar2000.
 
 The first refactor step moved Winamp-specific playlist messaging from the former `shared/zip_audio.cpp` into `in_archive_stream/winamp_playlist_bridge.cpp`. Both Winamp DLLs now use `shared/winamp_bridge_protocol.h` for their private window-message protocol; the low-level archive backend no longer declares those Winamp message constants. Obsolete ZIP wrappers and an unused duplicate duration-scanner were removed.
 
@@ -155,7 +157,10 @@ Bundled sources include **7-Zip LZMA SDK**, **RARLAB UnRAR**, **libarchive**, **
 - Created the independent foobar2000 native inspection component `foo_archive_stream` using the official SDK (2026-10-01). Both Release|Win32 and Release|x64 build on DEV, with x86 and x64 output and dependency isolation. The component and its native Preferences pages loaded and passed Apply, Reset, Cancel and restart-persistence tests in separate portable foobar2000 2.26.2 x86 and x64 instances. Native foobar2000 playlist integration and delegated audio decoding now work on the development branch, with audio output device validation pending.
 - Stream API closeout: typed open/read/seek results, cancellation-aware byte accounting, move-only stream ownership, and the `diagtest` regression pass Windows Release/Win32 CI. Native decoder-specific details for some 7z failures still appear in logs; individual blocking decompression calls remain noninterruptible.
 - foobar2000 settings parity: native Preferences pages under Tools, including cache sizing/cleanup, password and debug-log paths, cache folder actions, and all six Winamp title presets. Values persist in foobar's host-native configuration, separated from Winamp. CI and DEV x86 builds passed; page registration, settings Apply, Reset/Cancel and restart persistence were runtime-tested in a clean portable x86 player. The archive inspector was runtime-tested in isolated x64 foobar2000 2.26.2 with ZIP, RAR, non-solid 7z and Unicode split ZIP (3/3 audio entries each). Direct ZIP/RAR streams and a unique temporary extracted-file fallback for unsupported 7z coder layouts passed full PCM decoding and mid-track seeking tests. The explicit Inspect, Add and Verify commands now run on foobar2000's progress workers with Abort controls. WAV, FLAC, MP3 and Ogg Vorbis each decoded successfully through ZIP, RAR and solid 7z in both x86 and x64 portable players (4/4 per archive, zero decoder failures). A 300-track ZIP cancellation test passed on both architectures. Remaining work: interrupt/cancel individual blocking library calls where possible, apply stored title/buffer settings, test encrypted archives and playback transitions, and verify audible playback on an available output device.
-- Actual Winamp playback remains unverified after these changes.
+- WACUP **x86** now loads the Winamp adapters and passed four-track solid 7z playlist expansion, WAV playback progression and FLAC transition in an isolated test. The Winamp general plugin handles WACUP's zero-return enqueue semantics and preserves the original archive until replacement entries are appended. Winamp (the original host) still requires separate live playback validation after these compatibility changes.
+- Added XMPlay 4.1 x86 native XMPARC archive adapter, with stream → memory → temporary-file fallback; real-player solid 7z route logs and ZIP/7z/RAR full/partial host-interface parity tests passed.
+- Added AIMP 5.40 x86/x64 native FileExpander, FileFormat and seekable virtual-file adapter; both real-player builds expanded a four-track 7z and the mock host passed seek/reopen/large-cache tests.
+- Repaired x64 Winamp plugin build settings, but isolated WACUP **x64** did not load these third-party plugins. Treat WACUP x64 runtime integration as unsupported/unverified until host API compatibility is resolved. See [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md).
 
 ### Next validation and development priorities
 

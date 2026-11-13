@@ -640,10 +640,15 @@ static bool EnqueueFilePlainToWinamp(HWND hwndWinamp, const char* path)
     cds.dwData = IPC_ENQUEUEFILE;
     cds.lpData = (void*)path;
     cds.cbData = (DWORD)strlen(path) + 1;
-    LRESULT result = SendMessage( hwndWinamp, WM_COPYDATA, 0, (LPARAM)&cds);
-    DebugLogWrite(result ? "INFO" : "ERROR", "GEN", result ? "ENQUEUE_PLAIN" : "ENQUEUE_PLAIN_FAIL", "path=%s", path);
+    // WACUP returns zero from WM_COPYDATA even when it enqueues the file.
+    // Verify the observable playlist change, rather than relying on lresult.
+    const int countBefore = (int)SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH);
+    const LRESULT result = SendMessage(hwndWinamp, WM_COPYDATA, 0, (LPARAM)&cds);
+    const int countAfter = (int)SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH);
+    const bool appended = countBefore >= 0 && countAfter == countBefore + 1;
 
-    return result ? true : false;
+    DebugLogWrite(appended ? "INFO" : "ERROR", "GEN", appended ? "ENQUEUE_PLAIN" : "ENQUEUE_PLAIN_FAIL", "path=%s | lresult=%lld | before=%d | after=%d", path, (long long)result, countBefore, countAfter);
+    return appended;
 }
 
 static void RefreshPlaylistCacheForPath(HWND hwndWinamp, const char* path)
@@ -837,22 +842,34 @@ static bool RebuildPlaylistWithExpandedZip(HWND hwndWinamp, int targetIndex, boo
         return false;
     }
 
-    if (!DeletePlaylistIndex(hwndWinamp, targetIndex))
+    // Append every replacement *before* removing the original archive.
+    // This preserves the user's playlist if the host rejects a virtual path.
+    const int lengthBefore = (int)SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH);
+    const auto removeAppendedItems = [&]()
     {
-        DebugLogWrite("ERROR", "GEN", "REBUILD_FAIL", "target_index=%d | archive=%s | reason=delete_target_failed", targetIndex, archivePath);
-        return false;
-    }
-
-    int lengthAfterDelete = (int)SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH);
+        const int lengthNow = (int)SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH);
+        for (int index = lengthNow - 1; index >= lengthBefore; --index)
+            DeletePlaylistIndex(hwndWinamp, index);
+    };
 
     for (size_t i = 0; i < replacementItems.size(); ++i)
     {
         if (!EnqueueFileToWinamp(hwndWinamp, replacementItems[i]))
         {
-            DebugLogWrite("ERROR", "GEN", "REBUILD_FAIL", "target_index=%d | replacement_index=%zu | reason=enqueue_failed", targetIndex, i);
+            removeAppendedItems();
+            DebugLogWrite("ERROR", "GEN", "REBUILD_FAIL", "target_index=%d | replacement_index=%zu | reason=enqueue_failed_original_preserved", targetIndex, i);
             return false;
         }
     }
+
+    if (!DeletePlaylistIndex(hwndWinamp, targetIndex))
+    {
+        removeAppendedItems();
+        DebugLogWrite("ERROR", "GEN", "REBUILD_FAIL", "target_index=%d | archive=%s | reason=delete_target_failed_original_preserved", targetIndex, archivePath);
+        return false;
+    }
+
+    const int lengthAfterDelete = lengthBefore - 1;
 
     for (size_t i = 0; i < replacementItems.size(); ++i)
     {

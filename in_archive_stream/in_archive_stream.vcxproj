@@ -135,7 +135,8 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>archive_backend.lib;
-unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
+unrar_static.lib
+;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\archive_backend\Release</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
@@ -153,18 +154,17 @@ unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\winamp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\archive_backend;$(ProjectDir)..\third_party\stb;$(ProjectDir)..\third_party\dr_libs;$(ProjectDir)..\third_party\winamp;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalDependencies>archive_backend.lib;
-unrar_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\archive_backend\Release</AdditionalLibraryDirectories>
+      <AdditionalDependencies>archive_backend.lib;unrar_static.lib;libarchive_static.lib;zlib_static.lib;bcrypt.lib;Advapi32.lib;Shell32.lib;User32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\x64\Release;$(ProjectDir)..\unrar_static\x64\Release;$(ProjectDir)..\libarchive_static\x64\Release;$(ProjectDir)..\zlib_static\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(TargetDir)$(TargetName).dll" "C:\Program Files (x86)\Winamp\Plugins\$(TargetName).dll"</Command>
+      <Command>echo x64 WACUP adapter build complete; stage in the matching WACUP Plugins folder after validation.</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

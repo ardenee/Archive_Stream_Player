@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><VCProjectVersion>18.0</VCProjectVersion><ProjectGuid>{9971AD6F-1CB4-4F18-9A2D-44F4B2E9DAB1}</ProjectGuid><RootNamespace>aimp_adapter_test</RootNamespace><AimpSdkRoot Condition="'$(AimpSdkRoot)'==''">$(AIMP_SDK_ROOT)</AimpSdkRoot></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration"><ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset><UseDebugLibraries>false</UseDebugLibraries><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration"><ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset><UseDebugLibraries>false</UseDebugLibraries><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'"><OutDir>$(ProjectDir)Release\</OutDir><IntDir>$(ProjectDir)obj\TestWin32\Release\</IntDir><TargetName>aimp_adapter_test</TargetName></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'"><OutDir>$(ProjectDir)x64\Release\</OutDir><IntDir>$(ProjectDir)obj\Testx64\Release\</IntDir><TargetName>aimp_adapter_test</TargetName></PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><WarningLevel>Level3</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard><ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader><PreprocessorDefinitions>NDEBUG;WIN32;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalIncludeDirectories>$(AimpSdkRoot)\Sources\Cpp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>ole32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="aimp_adapter_test.cpp"/></ItemGroup>
+  <Target Name="RequireAimpSdk" BeforeTargets="PrepareForBuild"><Error Condition="!Exists('$(AimpSdkRoot)\Sources\Cpp\apiPlugin.h')" Text="AIMP SDK missing"/></Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+</Project>

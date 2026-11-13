@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations"><ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration></ItemGroup>
+  <PropertyGroup Label="Globals"><VCProjectVersion>18.0</VCProjectVersion><ProjectGuid>{4A3092B2-151E-4113-BC02-BDF6B362A810}</ProjectGuid><RootNamespace>xmplay_adapter_test</RootNamespace><XmplaySdkRoot Condition="'$(XmplaySdkRoot)'==''">$(XMPLAY_SDK_ROOT)</XmplaySdkRoot></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration"><ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset><UseDebugLibraries>false</UseDebugLibraries><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'"><OutDir>$(ProjectDir)Release\</OutDir><IntDir>$(ProjectDir)obj\TestWin32\Release\</IntDir><TargetName>xmplay_adapter_test</TargetName></PropertyGroup>
+  <ItemDefinitionGroup><ClCompile><WarningLevel>Level3</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard><ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader><PreprocessorDefinitions>NDEBUG;WIN32;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalIncludeDirectories>$(XmplaySdkRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile><Link><SubSystem>Console</SubSystem></Link></ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="xmplay_adapter_test.cpp"/></ItemGroup>
+  <Target Name="RequireXmplaySdk" BeforeTargets="PrepareForBuild"><Error Condition="!Exists('$(XmplaySdkRoot)\xmparc.h')" Text="XMPlay SDK missing"/></Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+</Project>

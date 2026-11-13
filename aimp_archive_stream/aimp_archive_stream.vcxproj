@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{56027F3D-EBB9-4B8A-8B86-E2ACB93027CD}</ProjectGuid>
+    <RootNamespace>aimp_archive_stream</RootNamespace>
+    <AimpSdkRoot Condition="'$(AimpSdkRoot)'==''">$(AIMP_SDK_ROOT)</AimpSdkRoot>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType><PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries><WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType><PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries><WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>$(ProjectDir)Release\</OutDir>
+    <IntDir>$(ProjectDir)obj\Win32\Release\</IntDir>
+    <TargetName>aimp_archive_stream</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)x64\Release\</OutDir>
+    <IntDir>$(ProjectDir)obj\x64\Release\</IntDir>
+    <TargetName>aimp_archive_stream</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(AimpSdkRoot)\Sources\Cpp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>$(ProjectDir)aimp_archive_stream.def</ModuleDefinitionFile>
+      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;credui.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\Release;$(ProjectDir)..\libarchive_static\Release;$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\zlib_static\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(AimpSdkRoot)\Sources\Cpp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>$(ProjectDir)aimp_archive_stream.def</ModuleDefinitionFile>
+      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;credui.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\x64\Release;$(ProjectDir)..\libarchive_static\x64\Release;$(ProjectDir)..\unrar_static\x64\Release;$(ProjectDir)..\zlib_static\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="aimp_archive_stream.cpp"/>
+    <ClCompile Include="..\shared\debug_log.cpp"/>
+    <None Include="aimp_archive_stream.def"/>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\archive_backend\archive_backend.vcxproj"/>
+    <ProjectReference Include="..\libarchive_static\libarchive_static.vcxproj"/>
+    <ProjectReference Include="..\unrar_static\unrar_static.vcxproj"/>
+    <ProjectReference Include="..\zlib_static\zlib_static.vcxproj"/>
+  </ItemGroup>
+  <Target Name="RequireAimpSdk" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(AimpSdkRoot)\Sources\Cpp\apiPlugin.h')" Text="AIMP SDK missing. Set AIMP_SDK_ROOT or /p:AimpSdkRoot to the extracted official AIMP 5.40 SDK."/>
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+</Project>

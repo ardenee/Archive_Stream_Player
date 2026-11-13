@@ -1,0 +1,3 @@
+LIBRARY aimp_archive_stream
+EXPORTS
+    AIMPPluginGetHeader

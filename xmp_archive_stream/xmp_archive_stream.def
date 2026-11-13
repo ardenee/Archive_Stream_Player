@@ -1,0 +1,3 @@
+LIBRARY xmp-archive-stream
+EXPORTS
+    XMPARC_GetInterface

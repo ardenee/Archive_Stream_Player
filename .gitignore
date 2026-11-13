@@ -4,6 +4,8 @@
 # Keep only this project set
 !/archive_backend/
 !/archive_backend_test/
+!/aimp_archive_stream/
+!/xmp_archive_stream/
 !/foo_archive_stream/
 !/gen_archive_stream/
 !/in_archive_stream/
@@ -16,6 +18,7 @@
 # Keep repo files
 !/.gitignore
 !/README.md
+!/PLAYER-ADAPTERS.md
 
 # Visual Studio / build junk
 .vs/
