@@ -43,6 +43,10 @@ struct Settings
     std::wstring titleTemplate = L"<filename>";
     unsigned short port = 0;
     unsigned lifetime = 0;
+#ifdef ARCHIVE_STREAM_BRIDGE_FAULT_TEST
+    // Test binaries only. Never enabled in normal release packages.
+    uint64_t injectStreamFailureAfterBytes = 0;
+#endif
 } g_settings;
 std::vector<ArchiveEntry> g_entries;
 std::string g_secret;
@@ -297,6 +301,69 @@ std::wstring Cache(const ArchiveEntry &e)
     g_fileCache[e.index] = path;
     return path;
 }
+// The HTTP status and Content-Length have already been sent. Recover only
+// remaining audio bytes; emitting another HTTP header would corrupt playback.
+bool SendRecoveredAudio(SOCKET s, const ArchiveEntry& e, uint64_t resumeAt, uint64_t remaining, std::unique_lock<std::mutex>& passwordLock)
+{
+    if (!remaining)
+        return true;
+
+    if (!passwordLock.owns_lock())
+        passwordLock.lock();
+
+    std::string error;
+    if (e.size <= g_settings.memoryLimit && e.size <= SIZE_MAX)
+    {
+        std::vector<unsigned char> bytes;
+        if (ArchiveExtractEntryToMemory(g_settings.archive.c_str(), e.index, bytes, error) && bytes.size() == e.size)
+        {
+            ++g_memory;
+            std::fprintf(stderr, "STREAM_RECOVERY route=memory entry=%u offset=%llu remaining=%llu\r\n",
+                         e.index, (unsigned long long)resumeAt, (unsigned long long)remaining);
+            passwordLock.unlock();
+            return Send(s, bytes.data() + static_cast<size_t>(resumeAt), static_cast<size_t>(remaining));
+        }
+    }
+
+    const std::wstring path = Cache(e);
+    if (path.empty())
+        return false;
+
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+
+    LARGE_INTEGER position{};
+    position.QuadPart = static_cast<LONGLONG>(resumeAt);
+    if (!SetFilePointerEx(file, position, nullptr, FILE_BEGIN))
+    {
+        CloseHandle(file);
+        return false;
+    }
+
+    ++g_cacheCount;
+    std::fprintf(stderr, "STREAM_RECOVERY route=cache entry=%u offset=%llu remaining=%llu\r\n",
+                 e.index, (unsigned long long)resumeAt, (unsigned long long)remaining);
+    passwordLock.unlock();
+
+    bool ok = true;
+    std::array<char, 65536> buffer{};
+    while (ok && remaining)
+    {
+        const DWORD want = static_cast<DWORD>((std::min)(remaining, (uint64_t)buffer.size()));
+        DWORD got = 0;
+        if (!ReadFile(file, buffer.data(), want, &got, nullptr) || got == 0)
+            ok = false;
+        else
+        {
+            ok = Send(s, buffer.data(), got);
+            remaining -= got;
+        }
+    }
+
+    CloseHandle(file);
+    return ok && remaining == 0;
+}
 bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, bool head)
 {
     uint64_t start = 0, end = 0;
@@ -348,10 +415,34 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
         while (left)
         {
             const size_t want = (size_t)(std::min)(left, (uint64_t)buffer.size());
-            const size_t got = stream.Read(buffer.data(), want);
-            if (!got || !Send(s, buffer.data(), got))
+            ArchiveStreamReadResult result;
+#ifdef ARCHIVE_STREAM_BRIDGE_FAULT_TEST
+            // Inject a backend failure into the real production error branch.
+            if (g_settings.injectStreamFailureAfterBytes != 0 &&
+                length - left >= g_settings.injectStreamFailureAfterBytes)
+            {
+                result.errorKind = ArchiveStreamErrorKind::BackendFailure;
+                result.message = "Test-injected decoder failure after partial response";
+            }
+            else
+#endif
+            {
+                result = stream.ReadDetailed(buffer.data(), want);
+            }
+            if (result.errorKind != ArchiveStreamErrorKind::None || result.bytesRead == 0)
+            {
+                // Never duplicate partial bytes from a failed read. Resume at
+                // the last successfully transmitted offset via RAM or cache.
+                if (result.errorKind != ArchiveStreamErrorKind::BackendFailure &&
+                    result.errorKind != ArchiveStreamErrorKind::TruncatedEntry)
+                    return false;
+
+                stream.Close();
+                return SendRecoveredAudio(s, e, start + (length - left), left, passwordLock);
+            }
+            if (!Send(s, buffer.data(), result.bytesRead))
                 return false;
-            left -= got;
+            left -= result.bytesRead;
         }
         return true;
     }
@@ -573,6 +664,15 @@ bool Arguments(int argc, wchar_t **argv)
                     return false;
                 g_settings.lifetime = t;
             }
+#ifdef ARCHIVE_STREAM_BRIDGE_FAULT_TEST
+            else if (key == L"--test-stream-failure-after")
+            {
+                const unsigned long long count = std::stoull(val);
+                if (count == 0 || count > 1048576)
+                    return false;
+                g_settings.injectStreamFailureAfterBytes = count;
+            }
+#endif
             else
                 return false;
         }
