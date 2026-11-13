@@ -9,6 +9,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -132,11 +135,34 @@ private:
 
 int wmain(int argc,wchar_t** argv)
 {
-    if(argc!=3)
+    const bool faultTest = argc == 5 && wcscmp(argv[3], L"faulttest") == 0;
+    if(argc != 3 && !faultTest)
     {
-        puts("Usage: aimp_adapter_test.dllhost <plugin.dll> <archive.zip|7z|rar>");
+        puts("Usage: aimp_adapter_test.exe <plugin.dll> <archive.zip|7z|rar> [faulttest original-audio-path]");
         return 2;
     }
+
+    std::vector<unsigned char> expected;
+    std::string faultMode;
+    if (faultTest)
+    {
+        std::ifstream source(std::filesystem::path(argv[4]), std::ios::binary);
+        if (!source)
+        {
+            puts("FAIL cannot open original audio for fault parity");
+            return 1;
+        }
+        expected.assign(std::istreambuf_iterator<char>(source), std::istreambuf_iterator<char>());
+        char mode[16]{};
+        if (!GetEnvironmentVariableA("AST_AIMP_FAULT_MODE", mode, sizeof(mode)) ||
+            (strcmp(mode, "read") != 0 && strcmp(mode, "seek") != 0) || expected.size() < 250000)
+        {
+            puts("FAIL fault mode or audio fixture invalid");
+            return 1;
+        }
+        faultMode = mode;
+    }
+
     HMODULE module=LoadLibraryW(argv[1]);
     if(!module)
     {
@@ -150,6 +176,15 @@ int wmain(int argc,wchar_t** argv)
         puts("FAIL AIMPPluginGetHeader export missing");
         return 1;
     }
+    using FaultCounter=unsigned(__cdecl*)();
+    const auto injected = faultTest ? reinterpret_cast<FaultCounter>(GetProcAddress(module, "ASTNativeFaultTestGetInjectedCount")) : nullptr;
+    const auto recovered = faultTest ? reinterpret_cast<FaultCounter>(GetProcAddress(module, "ASTNativeFaultTestGetRecoveredCount")) : nullptr;
+    if (faultTest && (!injected || !recovered))
+    {
+        puts("FAIL test-only DLL fault counter exports missing");
+        return 1;
+    }
+
     IAIMPPlugin* plugin=nullptr;
     if(FAILED(get(&plugin))||!plugin)
     {
@@ -223,6 +258,63 @@ int wmain(int argc,wchar_t** argv)
         {
             printf("FAIL stream size or start position index=%d\n",n);return 1;
         }
+        if (faultTest)
+        {
+            if (stream->GetSize() != static_cast<INT64>(expected.size()))
+            {
+                puts("FAIL fault stream size does not match source");
+                return 1;
+            }
+
+            std::vector<unsigned char> block(65536);
+            if (stream->Read(block.data(), static_cast<unsigned>(block.size())) != static_cast<int>(block.size()) ||
+                !std::equal(block.begin(), block.end(), expected.begin()))
+            {
+                puts("FAIL fault initial stream-byte parity");
+                return 1;
+            }
+
+            size_t compareAt = 65536;
+            if (faultMode == "seek")
+            {
+                compareAt = 12345;
+                if (FAILED(stream->Seek(static_cast<INT64>(compareAt), AIMP_STREAM_SEEKMODE_FROM_BEGINNING)) ||
+                    stream->GetPosition() != static_cast<INT64>(compareAt))
+                {
+                    puts("FAIL injected seek recovery or position");
+                    return 1;
+                }
+            }
+
+            const int actual = stream->Read(block.data(), static_cast<unsigned>(block.size()));
+            if (actual != static_cast<int>(block.size()) ||
+                !std::equal(block.begin(), block.end(), expected.begin() + compareAt) ||
+                stream->GetPosition() != static_cast<INT64>(compareAt + block.size()))
+            {
+                puts("FAIL recovered read data or position");
+                return 1;
+            }
+
+            if (injected() != 1 || recovered() != 1)
+            {
+                printf("FAIL fault injection not exercised injected=%u recovered=%u\n", injected(), recovered());
+                return 1;
+            }
+
+            if (FAILED(stream->Seek(-65536, AIMP_STREAM_SEEKMODE_FROM_END)) ||
+                stream->Read(block.data(), static_cast<unsigned>(block.size())) != static_cast<int>(block.size()) ||
+                !std::equal(block.begin(), block.end(), expected.end() - block.size()))
+            {
+                puts("FAIL recovered stream end-seek parity");
+                return 1;
+            }
+            printf("PASS AIMP native fault %s injected=%u recovered=%u byte_parity=ok seek=ok\n", faultMode.c_str(), injected(), recovered());
+            stream->Release();
+            file->Release();
+            ++checked;
+            break;
+        }
+
         unsigned char first[64]{},next[64]{};
         const int got=stream->Read(first,64);
         if(got!=64 || stream->GetPosition()!=64)

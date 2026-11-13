@@ -22,6 +22,19 @@
 #include <string>
 #include <vector>
 
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+static std::atomic<unsigned> g_aimpFaultInjected{0};
+static std::atomic<unsigned> g_aimpFaultRecovered{0};
+extern "C" __declspec(dllexport) unsigned __cdecl ASTNativeFaultTestGetInjectedCount()
+{
+    return g_aimpFaultInjected.load();
+}
+extern "C" __declspec(dllexport) unsigned __cdecl ASTNativeFaultTestGetRecoveredCount()
+{
+    return g_aimpFaultRecovered.load();
+}
+#endif
+
 namespace
 {
     IAIMPCore* g_core = nullptr;
@@ -198,9 +211,21 @@ namespace
             const INT64 target = base + offset;
             if (target < 0 || static_cast<uint64_t>(target) > entry_.size)
                 return E_INVALIDARG;
-            if (mode_ == Mode::Stream && !ArchiveSeekEntryStream(backend_, static_cast<uint64_t>(target)))
+            if (mode_ == Mode::Stream)
             {
-                if (!RecoverFromStreamFailure("archive seek failed"))
+                bool seekFailed = false;
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+                if (!faultInjected_ && position_ >= 65536 && FaultModeMatches("seek"))
+                {
+                    faultInjected_ = true;
+                    ++g_aimpFaultInjected;
+                    seekFailed = true;
+                }
+                else
+#endif
+                    seekFailed = !ArchiveSeekEntryStream(backend_, static_cast<uint64_t>(target));
+
+                if (seekFailed && !RecoverFromStreamFailure("archive seek failed"))
                     return E_FAIL;
             }
             if (mode_ == Mode::Cache)
@@ -224,7 +249,19 @@ namespace
             size_t delivered = 0;
             if (mode_ == Mode::Stream)
             {
-                const auto result = ArchiveReadEntryStreamDetailed(backend_, buffer, wanted);
+                ArchiveStreamReadResult result;
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+                if (!faultInjected_ && position_ >= 65536 && FaultModeMatches("read"))
+                {
+                    faultInjected_ = true;
+                    ++g_aimpFaultInjected;
+                    result.errorKind = ArchiveStreamErrorKind::BackendFailure;
+                    result.message = "Test-injected AIMP decoder read failure";
+                }
+                else
+#endif
+                    result = ArchiveReadEntryStreamDetailed(backend_, buffer, wanted);
+
                 if (result.errorKind != ArchiveStreamErrorKind::None)
                 {
                     if ((result.errorKind == ArchiveStreamErrorKind::BackendFailure ||
@@ -260,10 +297,27 @@ namespace
             return E_NOTIMPL;
         }
     private:
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+        bool FaultModeMatches(const char* expected) const
+        {
+            char mode[16]{};
+            const DWORD count = GetEnvironmentVariableA("AST_AIMP_FAULT_MODE", mode, sizeof(mode));
+            return count > 0 && count < sizeof(mode) && strcmp(mode, expected) == 0;
+        }
+#endif
         bool OpenFallback(std::string& error)
         {
             const auto preferences = ArchiveAdapterPreferencesLoad();
-            const uint64_t memoryLimit = static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024;
+            uint64_t memoryLimit = static_cast<uint64_t>(preferences.memoryMb) * 1024 * 1024;
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+            char configured[16]{};
+            const DWORD length = GetEnvironmentVariableA("AST_AIMP_FAULT_MEMORY_MB", configured, sizeof(configured));
+            if (length > 0 && length < sizeof(configured))
+            {
+                if (strcmp(configured, "1") == 0 || strcmp(configured, "50") == 0)
+                    memoryLimit = static_cast<uint64_t>(atoi(configured)) * 1024 * 1024;
+            }
+#endif
             if (entry_.size <= memoryLimit && entry_.size <= SIZE_MAX)
             {
                 if (ArchiveExtractEntryToMemory(archive_.c_str(), entry_.index, memory_, error) &&
@@ -322,6 +376,9 @@ namespace
                 return false;
             }
             DebugLogWrite("INFO", "AIMP", "STREAM_RECOVER_OK", "index=%u | resume_at=%llu | route=%s", entry_.index, (unsigned long long)position_, mode_ == Mode::Memory ? "memory" : "cache");
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+            ++g_aimpFaultRecovered;
+#endif
             return true;
         }
 
@@ -334,6 +391,9 @@ namespace
         std::wstring cachePath_;
         HANDLE cache_ = INVALID_HANDLE_VALUE;
         uint64_t position_ = 0;
+#ifdef ARCHIVE_STREAM_AIMP_FAULT_TEST
+        bool faultInjected_ = false;
+#endif
     };
 
     class VirtualFile final : public IAIMPVirtualFile

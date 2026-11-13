@@ -13,12 +13,22 @@
 #include "debug_log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <cstring>
 #include <new>
 #include <string>
 #include <vector>
+
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+static std::atomic<unsigned> g_foobarFaultInjected{0};
+static std::atomic<unsigned> g_foobarFaultRecovered{0};
+static std::atomic<unsigned> g_foobarFaultRoute{0};
+#endif
 
 namespace
 {
@@ -202,6 +212,16 @@ namespace
             // destruction, since the notify callback borrows the stream owner.
             const uint64_t readStart = stream_.Tell();
             ArchiveStreamReadResult result;
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+            if (!faultInjected_ && readStart >= 65536 && FaultModeMatches("read"))
+            {
+                faultInjected_ = true;
+                ++g_foobarFaultInjected;
+                result.errorKind = ArchiveStreamErrorKind::BackendFailure;
+                result.message = "Test-injected foobar decoder read failure";
+            }
+            else
+#endif
             {
                 fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
                 result = stream_.ReadDetailed(destination, amount);
@@ -237,7 +257,8 @@ namespace
         {
             abort.check();
             if (!memoryData_.empty())
-                return memoryPosition_;            if (tempFile_ != INVALID_HANDLE_VALUE)
+                return memoryPosition_;
+            if (tempFile_ != INVALID_HANDLE_VALUE)
             {
                 LARGE_INTEGER zero{}, position{};
                 if (!SetFilePointerEx(tempFile_, zero, &position, FILE_CURRENT))
@@ -272,6 +293,16 @@ namespace
             }
 
             ArchiveStreamOperationResult result;
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+            if (!faultInjected_ && stream_.Tell() >= 65536 && FaultModeMatches("seek"))
+            {
+                faultInjected_ = true;
+                ++g_foobarFaultInjected;
+                result.errorKind = ArchiveStreamErrorKind::BackendFailure;
+                result.message = "Test-injected foobar decoder seek failure";
+            }
+            else
+#endif
             {
                 fb2k::abort_notify notifyAbort(abort, [this]() { stream_.Cancel(); });
                 result = stream_.SeekDetailed(position);
@@ -307,6 +338,14 @@ namespace
         }
 
     private:
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+        bool FaultModeMatches(const char* expected) const
+        {
+            char mode[16]{};
+            const DWORD count = GetEnvironmentVariableA("AST_FOOBAR_FAULT_MODE", mode, sizeof(mode));
+            return count > 0 && count < sizeof(mode) && strcmp(mode, expected) == 0;
+        }
+#endif
         void RecoverFromStreamFailure(const std::string& originalError, uint64_t position, abort_callback& abort)
         {
             abort.check();
@@ -315,6 +354,10 @@ namespace
             OpenMemoryOrExtractedFallback(originalError, abort);
             seek(position, abort);
             DebugLogWrite("INFO", "FOOBAR", "STREAM_RECOVER_OK", "index=%u | resume_at=%llu | route=%s", (unsigned)entry_.index, (unsigned long long)position, !memoryData_.empty() ? "memory" : "cache");
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+            g_foobarFaultRoute = !memoryData_.empty() ? 1 : 2;
+            ++g_foobarFaultRecovered;
+#endif
         }
 
         void CloseExtractedFallback() noexcept
@@ -335,7 +378,16 @@ namespace
         void OpenMemoryOrExtractedFallback(const std::string& streamError, abort_callback& abort)
         {
             abort.check();
-            const uint64_t memoryLimit = static_cast<uint64_t>(FoobarArchiveSettingsLoad().bufferSizeMb) * 1024 * 1024;
+            uint64_t memoryLimit = static_cast<uint64_t>(FoobarArchiveSettingsLoad().bufferSizeMb) * 1024 * 1024;
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+            char configured[16]{};
+            const DWORD count = GetEnvironmentVariableA("AST_FOOBAR_FAULT_MEMORY_MB", configured, sizeof(configured));
+            if (count > 0 && count < sizeof(configured))
+            {
+                if (strcmp(configured, "1") == 0 || strcmp(configured, "50") == 0)
+                    memoryLimit = static_cast<uint64_t>(atoi(configured)) * 1024 * 1024;
+            }
+#endif
             const bool nativeEncryptedRar = entry_.isEncrypted && DetectArchiveFormatFromPath(path_.c_str()) == ArchiveFormat::Rar;
             if (entry_.size > 0 && entry_.size <= memoryLimit && entry_.size <= SIZE_MAX)
             {
@@ -432,6 +484,9 @@ namespace
         size_t memoryPosition_ = 0;
         HANDLE tempFile_ = INVALID_HANDLE_VALUE;
         std::wstring tempPath_;
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+        bool faultInjected_ = false;
+#endif
     };
 
     template<ArchiveFormat Format>
@@ -592,3 +647,117 @@ bool FoobarBuildArchivePlaylistUrls(const char* archivePathUtf8, std::vector<std
 
     return true;
 }
+
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+bool FoobarRunNativeRecoveryFaultSelftest(std::string& report)
+{
+    report.clear();
+    try
+    {
+        auto readEnv = [](const wchar_t* name) -> std::wstring
+        {
+            wchar_t buffer[32768]{};
+            const DWORD count = GetEnvironmentVariableW(name, buffer, _countof(buffer));
+            return count > 0 && count < _countof(buffer) ? std::wstring(buffer) : std::wstring{};
+        };
+
+        const std::wstring archive = readEnv(L"AST_FOOBAR_FAULT_ARCHIVE");
+        const std::wstring source = readEnv(L"AST_FOOBAR_FAULT_SOURCE");
+        const std::wstring mode = readEnv(L"AST_FOOBAR_FAULT_MODE");
+        const std::wstring memory = readEnv(L"AST_FOOBAR_FAULT_MEMORY_MB");
+        if (archive.empty() || source.empty() || (mode != L"read" && mode != L"seek") ||
+            (memory != L"1" && memory != L"50"))
+        {
+            report = "Invalid foobar native fault test configuration";
+            return false;
+        }
+
+        std::ifstream input(std::filesystem::path(source), std::ios::binary);
+        if (!input)
+        {
+            report = "Cannot open original audio bytes";
+            return false;
+        }
+        std::vector<unsigned char> expected{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+        if (expected.size() < 250000)
+        {
+            report = "Original audio fixture too small";
+            return false;
+        }
+
+        std::vector<ArchiveEntry> entries;
+        std::string error;
+        if (!ArchiveListEntries(archive.c_str(), entries, error))
+        {
+            report = "Cannot enumerate archive: " + error;
+            return false;
+        }
+        auto found = std::find_if(entries.begin(), entries.end(), [](const ArchiveEntry& e) { return e.isSupportedAudio && !e.isFolder; });
+        if (found == entries.end() || found->size != expected.size())
+        {
+            report = "Archive entry is missing or does not match original size";
+            return false;
+        }
+
+        g_foobarFaultInjected = 0;
+        g_foobarFaultRecovered = 0;
+        g_foobarFaultRoute = 0;
+
+        auto reader = fb2k::service_new<ArchiveEntryFile>(archive, *found, filetimestamp_invalid, fb2k::noAbort);
+        std::vector<unsigned char> block(65536);
+        const auto readFirst = reader->read(block.data(), block.size(), fb2k::noAbort);
+        if (readFirst != block.size() || !std::equal(block.begin(), block.end(), expected.begin()))
+        {
+            report = "Native initial stream read differs from original";
+            return false;
+        }
+
+        size_t target = 65536;
+        if (mode == L"seek")
+        {
+            target = 12345;
+            reader->seek(target, fb2k::noAbort);
+            if (reader->get_position(fb2k::noAbort) != target)
+            {
+                report = "Recovered seek position incorrect";
+                return false;
+            }
+        }
+        const auto readSecond = reader->read(block.data(), block.size(), fb2k::noAbort);
+        if (readSecond != block.size() || !std::equal(block.begin(), block.end(), expected.begin() + target) ||
+            reader->get_position(fb2k::noAbort) != target + block.size())
+        {
+            report = "Recovered read or position differs from original";
+            return false;
+        }
+
+        const unsigned expectedRoute = memory == L"50" ? 1 : 2;
+        if (g_foobarFaultInjected.load() != 1 || g_foobarFaultRecovered.load() != 1 ||
+            g_foobarFaultRoute.load() != expectedRoute)
+        {
+            report = "Recovery counters or route mismatch: injected=" + std::to_string(g_foobarFaultInjected.load()) +
+                " recovered=" + std::to_string(g_foobarFaultRecovered.load()) +
+                " route=" + std::to_string(g_foobarFaultRoute.load());
+            return false;
+        }
+
+        reader->seek(expected.size() - block.size(), fb2k::noAbort);
+        if (reader->read(block.data(), block.size(), fb2k::noAbort) != block.size() ||
+            !std::equal(block.begin(), block.end(), expected.end() - block.size()) ||
+            reader->get_position(fb2k::noAbort) != expected.size())
+        {
+            report = "Recovery end-seek parity failed";
+            return false;
+        }
+
+        report = std::string("FOOBAR_NATIVE_RECOVERY_PASS mode=") + (mode == L"read" ? "read" : "seek") +
+            " route=" + (expectedRoute == 1 ? "memory" : "cache") + " injected=1 recovered=1 byte_parity=ok seek=ok";
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        report = std::string("Native foobar recovery test threw: ") + ex.what();
+        return false;
+    }
+}
+#endif

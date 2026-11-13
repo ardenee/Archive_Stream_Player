@@ -43,7 +43,7 @@ The following have passed tests in at least one supported player or in the share
 - [x] Read supported split and multipart archives.
 - [x] Decrypt supported password-protected ZIP, RAR and 7z entries.
 - [x] Stream eligible archive entries without extracting an entire album. ZIP, non-solid 7z and non-solid RAR direct HTTP streams pass x86/x64 range tests (`archive_player_bridge/test_stream_priority.py`).
-- [x] Use memory before temporary files when archive entries cannot stream, including native in-RAM decryption of encrypted RAR5 entries. The RAR5 data/header password variants pass x86/x64 memory and bridge parity regressions. The HTTP bridge also passes injected mid-stream recovery into both RAM and disk cache without losing or repeating bytes.
+- [x] Use memory before temporary files when archive entries cannot stream, including native in-RAM decryption of encrypted RAR5 entries. The encrypted RAR5 variants pass x86/x64 memory and bridge parity regressions. Injected mid-stream failure recovery passes 8/8 native AIMP, 8/8 native foobar2000 and 4/4 HTTP bridge scenarios, including memory and cache routes with exact source-byte parity.
 - [x] Verify decoded audio bytes and seeking.
 - [x] Expand archives into individual playlist tracks in supported hosts.
 - [x] Provide portable, self-contained archive readers without external extraction utilities.
@@ -57,7 +57,7 @@ The following have passed tests in at least one supported player or in the share
 - [x] Investigate WACUP 64-bit: confirm the current native-plugin limitation and provide tested archive playback through the local playlist bridge.
 - [x] Add shared password prompts, settings, temporary-cache controls and title templates to the newer AIMP, XMPlay, MusicBee and playlist-bridge adapters.
 - [ ] Finish interactive password-dialog, settings-page and track-title display checks in the actual player interfaces.
-- [ ] Expand the automatic tests for Unicode names, encrypted headers, multipart archives, failures, cancellation and cleanup, including injected mid-stream faults and cross-player recovery checks.
+- [ ] Expand automatic tests for Unicode names, encrypted headers, multipart archives, real corruption/truncation, cancellation and cleanup, beyond the completed native/HTTP injected-recovery checks.
 - [ ] Improve installer/distribution packages and include the required third-party licence notices.
 - [x] Publish MIT licensing for the original Archive Stream Player code while retaining separate licences for third-party components.
 - [ ] Finish archive-header metadata checks and remaining performance/reliability testing.

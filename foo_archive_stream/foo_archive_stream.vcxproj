@@ -59,7 +59,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;$(ArchiveFoobarFaultTestDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(FoobarSdkRoot);$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -78,7 +78,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;$(ArchiveFoobarFaultTestDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(FoobarSdkRoot);$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -105,11 +105,13 @@
     <ClInclude Include="foobar_resource.h" />
     <ClInclude Include="foobar_settings.h" />
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(ArchiveFoobarFaultTestDefinitions)'==''">
     <ProjectReference Include="..\archive_backend\archive_backend.vcxproj" />
     <ProjectReference Include="..\libarchive_static\libarchive_static.vcxproj" />
     <ProjectReference Include="..\unrar_static\unrar_static.vcxproj" />
     <ProjectReference Include="..\zlib_static\zlib_static.vcxproj" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- SDK projects are outside this solution; pin their runtime to Release|Win32. -->
     <ProjectReference Include="$(FoobarSdkRoot)\pfc\pfc.vcxproj">
       <SetConfiguration>Configuration=Release</SetConfiguration>

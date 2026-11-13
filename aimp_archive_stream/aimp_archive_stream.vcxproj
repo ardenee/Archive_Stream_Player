@@ -36,7 +36,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;$(ArchiveNativeFaultTestDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(AimpSdkRoot)\Sources\Cpp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -50,7 +50,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBARCHIVE_STATIC;$(ArchiveNativeFaultTestDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(AimpSdkRoot)\Sources\Cpp;$(ProjectDir)..\archive_backend;$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -65,7 +65,7 @@
     <ClCompile Include="..\shared\debug_log.cpp"/>
     <None Include="aimp_archive_stream.def"/>
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(ArchiveNativeFaultTestDefinitions)'==''">
     <ProjectReference Include="..\archive_backend\archive_backend.vcxproj"/>
     <ProjectReference Include="..\libarchive_static\libarchive_static.vcxproj"/>
     <ProjectReference Include="..\unrar_static\unrar_static.vcxproj"/>

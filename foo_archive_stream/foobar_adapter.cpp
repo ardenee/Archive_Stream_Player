@@ -9,6 +9,8 @@
 #include "foobar_decode_test.h"
 #include "debug_log.h"
 #include <commdlg.h>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <utility>
@@ -50,6 +52,22 @@ namespace
             {
                 FoobarArchiveSettingsApplyBackend(FoobarArchiveSettingsLoad());
                 console::print("Archive Stream: foobar2000 archive virtual-file adapter initialized");
+#ifdef ARCHIVE_STREAM_FOOBAR_FAULT_TEST
+                // Runs only in an isolated, test-compiled foobar component and
+                // only when the test runner supplied an explicit report path.
+                wchar_t reportFile[32768]{};
+                const DWORD count = GetEnvironmentVariableW(L"AST_FOOBAR_FAULT_REPORT", reportFile, _countof(reportFile));
+                if (count > 0 && count < _countof(reportFile))
+                {
+                    std::string report;
+                    const bool ok = FoobarRunNativeRecoveryFaultSelftest(report);
+                    const std::string line = std::string(ok ? "PASS " : "FAIL ") + report;
+                    std::ofstream output(std::filesystem::path(reportFile), std::ios::binary | std::ios::trunc);
+                    output << line << "\n";
+                    output.flush();
+                    console::print(line.c_str());
+                }
+#endif
             }
         }
         void on_quit() override
