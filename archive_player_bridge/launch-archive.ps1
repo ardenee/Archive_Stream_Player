@@ -43,11 +43,13 @@ if (!$NoLaunch -and !$playerExe) {
     throw "$Player is not installed at a supported path. Install it or update the script."
 }
 
-# XMPlay's official XMPARC adapter is already a native archive input plugin.
-# Launch the original compressed file directly, not a temporary HTTP playlist.
-# Native XMPARC returns the requested decoded bytes to XMPlay-owned memory;
-# users explicitly select -UseHttpBridge when they need on-demand HTTP reads.
-if ($Player -eq 'XMPlay' -and !$UseHttpBridge) {
+# XMPlay's native XMPARC adapter has real-host playback acceptance for
+# single-file .7z and .rar archives. Its ZIP SDK contract passes, but XMPlay
+# did not dispatch tested ZIP playback to the plugin. Preserve the working
+# bridge for ZIP, split-volume and other unverified launch layouts.
+# -UseHttpBridge always opts into host-on-demand HTTP streaming.
+$nativeXmplayDispatch = ($Archive -match '(?i)\.(?:7z|rar)$') -and ($Archive -notmatch '(?i)\.part[0-9]+\.rar$')
+if ($Player -eq 'XMPlay' -and !$UseHttpBridge -and $nativeXmplayDispatch) {
     if (!$playerExe) {
         throw 'Cannot locate XMPlay. Supply -PlayerPath to verify its native XMPARC installation.'
     }
@@ -68,6 +70,9 @@ if ($Player -eq 'XMPlay' -and !$UseHttpBridge) {
     Write-Host "XMPLAY_NATIVE_PLAYER_PID=$($nativeProcess.Id)"
     Write-Host 'XMPlay native archive playback requested; no HTTP bridge was started.'
     return
+}
+if ($Player -eq 'XMPlay' -and !$UseHttpBridge -and !$nativeXmplayDispatch) {
+    Write-Host 'XMPLAY_BRIDGE_FALLBACK reason=real_host_native_dispatch_unverified mode=on_demand_http'
 }
 
 $bridge = Join-Path $PSScriptRoot 'x64\Release\archive_player_bridge.exe'
