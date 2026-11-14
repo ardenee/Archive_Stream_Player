@@ -215,7 +215,7 @@ The launcher opens the temporary archive playlist with WACUP's `/ENQPLAY` comman
 
 **Scope:** WACUP x64 supports **archive-backed playlist/HTTP playback**, **not native ZIP/7z/RAR drag-and-drop expansion or an Archive Stream settings page inside WACUP**. The temporary URLs work only while the bridge runs. For a fully integrated Winamp-style playlist expander, use **WACUP x86** until WACUP's x64 host gains public third-party plugin support.
 
-## MediaMonkey, MusicBee, VLC, and Windows Media Player (13 November 2026)
+## MediaMonkey, MusicBee, VLC, and Windows Media Player (13–14 November 2026)
 
 These integrations reuse the **existing statically linked** ZIP/7z/RAR/AES backend. The main addition is an x86/x64 seekable loopback HTTP bridge, plus a native MusicBee C# plugin and a MediaMonkey MMIP packaging project. **VLC and Windows Media Player use supported playlist and HTTP media interfaces; they do not have native archive-format plugins.**
 
@@ -258,7 +258,7 @@ Run `musicbee_archive_stream/package-musicbee.ps1` to make a self-contained x86 
 
 **Verified (14 November 2026):** The Win32 C# SDK build passed. A repeatable actual MusicBee 3.7.9796 host test, [`musicbee_archive_stream/test_host_queue_ui.py`](musicbee_archive_stream/test_host_queue_ui.py), creates a temporary portable player profile and synthetic two-track ZIP, opens **Tools > Archive Stream: Add Archive Audio**, selects the archive, and confirms `QUEUE_RESULT accepted=1 tracks=2` from the real MusicBee Now Playing API. The MP3 was selected and played with advancing MusicBee time; a GUI seek produced a genuine nonzero HTTP Range request at byte offset 8,462,728 (subsequent runs may yield a different offset). Session and bridge logs are written to `%LOCALAPPDATA%\ArchiveStreamPlayer\Logs` inside the isolated profile with `ARCHIVE_STREAM_ADAPTER_DEBUG=1`. **Open issue:** The second OGG URL appears in the queue as `1` with an error indicator, and MusicBee reports its source file cannot be found when selected, even though the bridge serves its bytes in direct tests. MusicBee has not passed an OGG host-playback check. These tests do not verify audible speaker output or every codec; native title presets remain host-dependent.
 
-### MediaMonkey 2024 — Winamp DLL compatibility and playlist bridge
+### MediaMonkey 2024 — Winamp input-module limit and verified playlist bridge
 
 DEV installed player: `C:\Program Files (x86)\MediaMonkey 5` (2024.2.2). Its documented MMIP native plugin packaging format supports Winamp 2.x DLLs: https://www.mediamonkey.com/wiki/Getting_Started_(Addons).
 
@@ -268,7 +268,7 @@ DEV installed player: `C:\Program Files (x86)\MediaMonkey 5` (2024.2.2). Its doc
 # Select mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5.mmip
 ~~~
 
-The MMIP packages the Release/Win32 `in_archive_stream.dll` and `gen_archive_stream.dll`. In the DEV MediaMonkey playback-engine process, **both DLLs loaded** without a process crash during the stability test. That is **binary-load confirmation, not proof that MediaMonkey invokes the Winamp general-purpose expansion callback**. The in-player list-expansion UI still requires validation, and the standard Winamp `.archive_stream|index|entry` playlist format must not be presumed fully supported in MediaMonkey.
+**Verified compatibility limit:** MediaMonkey's own [What's New in MediaMonkey 5](https://www.mediamonkey.com/wiki/WebHelp:What's_New/5.0) states that Winamp input/output plugins remain supported but **general-purpose Winamp plugins are no longer supported**. The DEV player previously loaded both DLLs without a crash, but this is not evidence that MediaMonkey ever invokes `gen_archive_stream.dll`. There is no general-purpose expansion callback to certify in MM5. The MMIP therefore packages **only the experimental Win32 `in_archive_stream.dll` and shared settings script**; it does not pretend to add archive playlist expansion. The MediaMonkey 5 installer may leave an older `gen_archive_stream.dll` behind from a previous MMIP; remove it manually only after confirming it came from this project. MediaMonkey's verified, user-facing archive playback mode remains the bridge. Native in-player archive expansion requires a new dedicated MediaMonkey 5 JavaScript add-on using its documented add-on API; the Winamp virtual-path scheme is not automatically supported.
 
 The verified playback alternative is the bridge and MediaMonkey's official `/NoSplash /Add` playlist command:
 
@@ -276,7 +276,7 @@ The verified playback alternative is the bridge and MediaMonkey's official `/NoS
 & '.\archive_player_bridge\launch-archive.ps1' -Archive 'C:\audiotest\Archives\7Z_NonSolid.7z' -Player MediaMonkey
 ~~~
 
-MediaMonkey successfully accepted `/Add` and `/Play` in the DEV test, and the bridge recorded an actual direct-stream request (stream=1). Audible output and the native playlist expander remain to be certified separately.
+MediaMonkey successfully accepted `/Add` and `/Play` in the DEV test, and the bridge recorded an actual direct-stream request (stream=1). Audible output remains uncertified. In-player archive expansion is **not provided by the old Winamp general plugin in MediaMonkey 5**; a dedicated supported host add-on must be implemented and tested separately.
 
 ### VLC — M3U8/HTTP playback
 
