@@ -47,10 +47,11 @@ install the obsolete Winamp general-purpose expander. The addon's JavaScript
 loads a temporary authenticated M3U8 from the shared bridge and adds the
 individual ZIP/7z/RAR track URLs through MediaMonkey's native Now Playing API.
 The original audio files and their embedded tags are not modified.
-Existing queued archive titles are refreshed automatically from session-authenticated
-bridge playlists when the shared title template changes. The third Tools action
-also triggers an immediate refresh; unrelated tracks are never changed.
-ZIP MP3 in-place title refresh has passed real portable MediaMonkey 2024 QA.
+Existing titles are refreshed from authenticated bridge playlists only for
+single-entry archive sessions. The third Tools action can refresh immediately.
+Multi-entry sessions retain their existing row titles to protect playback;
+new tracks still use the configured shared title template. No tags are changed.
+Single-entry ZIP MP3 title refresh passed real portable MediaMonkey 2024 QA.
 MP3/OGG/FLAC/WAV/WMA/M4A/AAC ZIP streams pass real-host playback and
 GUI seek/resume acceptance. Vorbis duration is obtained via bounded archive
 stream header/tail reads when safe, allowing direct OGG seeking without

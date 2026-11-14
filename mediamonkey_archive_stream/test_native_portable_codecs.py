@@ -127,7 +127,10 @@ def dismiss_first_run_wizard(window):
                      if c.element_info.control_type == "Button" and c.is_visible() and
                      c.window_text().replace("&","").strip().upper() == "CANCEL"), None)
     cancel = wait_for(cancel_control, 30, "portable first-run safe Cancel button")
-    cancel.click_input()
+    try:
+        cancel.invoke()
+    except Exception:
+        cancel.click_input()
     try:
         wait_for(lambda: not wizard_control(), 8, "first-run wizard dismissal")
     except AssertionError:
@@ -148,7 +151,10 @@ def dismiss_first_run_wizard(window):
             buttons=[c for c in wizard.descendants() if c.element_info.control_type=="Button"
                      and c.window_text().strip().upper()=="CANCEL" and c.is_visible()]
             if buttons:
-                buttons[-1].click_input()
+                try:
+                    buttons[-1].invoke()
+                except Exception:
+                    buttons[-1].click_input()
         wait_for(lambda: not wizard_control(), 12, "first-run wizard dismissal after retry")
     print("MM5_PORTABLE_WIZARD_CANCELED_WITHOUT_MEDIA_SCAN",flush=True)
 
@@ -423,19 +429,35 @@ def main():
             # Exercise the production background refresh by atomically replacing
             # the real bridge playlist as a changed title preset would do.
             # Do not inject JavaScript metadata changes into the QA addon.
-            previous_title=labels[0]
-            refreshed_title="AST_QA_TITLE_REFRESHED"
             original=playlist.read_text(encoding="utf-8-sig")
-            needle=","+previous_title
-            if original.count(needle)!=1:
-                raise AssertionError("Expected exactly one queued bridge title to refresh")
+            updated=original
+            replacements=[]
+            for (key,_),previous_title in zip(SOURCES,labels):
+                refreshed_title="AST_QA_REFRESHED_"+key
+                needle=","+previous_title+"\n"
+                if updated.count(needle)!=1:
+                    raise AssertionError("Expected exactly one bridge title to refresh: "+key)
+                updated=updated.replace(needle,","+refreshed_title+"\n",1)
+                replacements.append(refreshed_title)
             draft=playlist.with_name(playlist.name+".qa-update")
-            draft.write_text(original.replace(needle,","+refreshed_title,1),encoding="utf-8")
+            draft.write_text(updated,encoding="utf-8")
             os.replace(draft,playlist)
-            wait_for(lambda: refreshed_title in doc(window),45,
-                     "production automatic in-place Now Playing title repaint")
-            labels[0]=refreshed_title
-            print("MM5_REAL_HOST_QUEUED_ARCHIVE_INPLACE_TITLE_REFRESH_PASS",flush=True)
+            if len(SOURCES)==1:
+                wait_for(lambda: replacements[0] in doc(window),55,
+                         "production single-entry in-place title repaint")
+                labels[:]=replacements
+                print("MM5_REAL_HOST_QUEUED_ARCHIVE_INPLACE_TITLE_REFRESH_PASS",
+                      ",".join(key for key,_ in SOURCES),flush=True)
+            else:
+                # Host can invalidate decoder references when metadata on
+                # multiple queued rows is rewritten. The production guard
+                # must preserve all original row titles and their playback.
+                time.sleep(8)
+                view_after=doc(window)
+                if replacements[0] in view_after or labels[0] not in view_after:
+                    raise AssertionError("Multi-entry refresh unexpectedly mutated queued tracks")
+                print("MM5_MULTI_ENTRY_TITLE_REFRESH_BLOCKED_FOR_PLAYBACK_SAFETY_PASS",
+                      len(SOURCES),flush=True)
 
         results={}
         for key,label in zip((p[0] for p in SOURCES),labels):
@@ -464,6 +486,14 @@ def main():
                 if after < 2:
                     time.sleep(7)
                     after=elapsed(window,label)
+                if TITLE_REFRESH_QA and after < 2:
+                    # MM5 may consume the first double-click to focus the
+                    # dynamically repainted Now Playing panel rather than play.
+                    window.set_focus()
+                    start_track(window,label)
+                    time.sleep(5)
+                    after=elapsed(window,label)
+                    print("MM5_REFRESHED_ROW_RESELECT_RESULT",key,after,flush=True)
                 results[key]={"before":before,"after":after,"working":after>=2 and after>before}
                 if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1" and results[key]["working"]:
                     bounds=window.rectangle()

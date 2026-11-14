@@ -141,6 +141,10 @@
         try {
             const updated = new Map();
             for (const [playlist, permittedUrls] of queuedArchiveSessions) {
+                // Real host multi-entry title repaint has not passed playback parity;
+                // do not mutate any queued album until this case is certified.
+                if (permittedUrls.size !== 1)
+                    continue;
                 try {
                     const current = playlistTitles(await app.filesystem.loadTextFromFileAsync(playlist));
                     for (const [url, label] of current) {

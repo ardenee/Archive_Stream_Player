@@ -144,15 +144,23 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
     assert(normal.messages.some(x => x.message.includes('Added 2 archive tracks')));
     console.log('MEDIAMONKEY_NATIVE_ADDON_IN_PROCESS_QUEUE_AND_TITLES_PASS');
 
-    const refreshed = await exercise({refreshTitle: true});
+    const singlePlaylist = validPlaylist.split('#EXTINF:199,')[0];
+    const refreshed = await exercise({playlist: singlePlaylist,
+        manifest: {ok: true, playlist: playlistFile, entries: 1}, refreshTitle: true});
     assert.equal(refreshed.timerCallbacks.length, 1, 'Only one background title refresh poll');
     assert.equal(refreshed.hostTracks[0].title, 'Updated Archive Title 1');
-    assert.equal(refreshed.hostTracks[1].title, 'Custom Archive Title 2');
+    assert.equal(refreshed.hostTracks.length, 1);
     assert.equal(refreshed.calls.filter(x => x[0] === 'trackChanged').length, 1);
     assert.equal(refreshed.calls.filter(x => x[0] === 'listChanged').length, 1);
     assert(refreshed.messages.some(x => x.message.includes('Refreshed 1 queued archive titles')));
-    const foreign = await exercise();
-    foreign.files[playlistFile] = validPlaylist.replace('127.0.0.1:12345', 'example.net')
+    const multi = await exercise({refreshTitle: true});
+    assert.equal(multi.hostTracks[0].title, 'Custom Archive Title 1',
+        'Multi-entry title changes must not disturb playable queued tracks');
+    assert(!multi.calls.some(x => x[0] === 'trackChanged'));
+    assert(!multi.calls.some(x => x[0] === 'listChanged'));
+    const foreign = await exercise({playlist: singlePlaylist,
+        manifest: {ok: true, playlist: playlistFile, entries: 1}});
+    foreign.files[playlistFile] = singlePlaylist.replace('127.0.0.1:12345', 'example.net')
         .replace('Custom Archive Title 1', 'Malicious Foreign Title');
     await foreign.actions.archiveStreamNativeRefreshTitles.execute();
     assert.equal(foreign.hostTracks[0].title, 'Custom Archive Title 1');
