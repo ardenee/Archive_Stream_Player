@@ -13,12 +13,16 @@
 #include <new>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 #include <utility>
 
 namespace
 {
     std::mutex g_nativeRarExtractionMutex;
+    // Protected by g_nativeRarExtractionMutex. Header-only password consent is
+    // not persisted until the first selected encrypted entry decodes cleanly.
+    std::unordered_set<std::string> g_nativeRarPendingHeaderSave;
 
     struct NativeRarArchive
     {
@@ -378,7 +382,16 @@ namespace
         for (const auto& candidate : runtime)
         {
             if (decode(candidate, decodeError))
+            {
+                if (g_nativeRarPendingHeaderSave.erase(archiveUtf8))
+                {
+                    std::string saveError;
+                    if (!ArchivePasswordAppendIfMissing(candidate.c_str(), saveError))
+                        DebugLogWrite("WARN", "RAR", "HEADER_PASSWORD_SAVE_FAIL", "index=%u | error=%s", static_cast<unsigned>(index), saveError.c_str());
+                }
+                ArchivePasswordNotifyAccepted(archiveUtf8.c_str());
                 return true;
+            }
         }
         for (const auto& candidate : saved.passwords)
         {
@@ -586,27 +599,76 @@ bool RarNativeListHeaderEncryptedEntries(const wchar_t* archivePath, std::vector
         return false;
     }
 
-    ArchivePasswordList passwords;
-    if (!ArchivePasswordLoadList(passwords, error))
-        return false;
-
-    if (passwords.passwords.empty())
+    const std::string archiveUtf8 = NativeRarArchivePathUtf8(archivePath);
+    if (archiveUtf8.empty())
     {
-        error = "No saved RAR passwords are available for encrypted headers";
+        error = "Encrypted RAR header archive path could not be converted to UTF-8";
         return false;
     }
 
-    std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
-    for (const std::string& password : passwords.passwords)
-    {
-        if (!NativeRarTryListEntryHeaders(archivePath, password, true, entries, error))
-            continue;
+    ArchivePasswordList saved;
+    if (!ArchivePasswordLoadList(saved, error))
+        return false;
+    std::vector<std::string> runtime;
+    ArchivePasswordGetRuntimePasswords(archiveUtf8.c_str(), runtime);
 
-        DebugLogWrite("INFO", "RAR", "NATIVE_ENCRYPTED_HEADER_LIST_OK", "entries=%zu", entries.size());
-        return true;
+    // UnRAR has process-wide state. Serialize each bounded header-list
+    // attempt, but never hold its mutex while the user is in a password UI.
+    const auto tryPassword = [&](const std::string& candidate)
+    {
+        std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+        return NativeRarTryListEntryHeaders(archivePath, candidate, true, entries, error) && !entries.empty();
+    };
+    for (const auto& candidate : runtime)
+    {
+        if (tryPassword(candidate))
+            return true;
+    }
+    for (const auto& candidate : saved.passwords)
+    {
+        if (tryPassword(candidate))
+        {
+            ArchivePasswordAddRuntimePassword(archiveUtf8.c_str(), candidate.c_str());
+            return true;
+        }
     }
 
-    return false;
+    if (!ArchivePasswordGetPromptAllowedForCurrentThread() || ArchivePasswordIsArchiveCancelled(archiveUtf8.c_str()))
+    {
+        error = "Encrypted RAR filenames require an interactive archive password";
+        return false;
+    }
+
+    char input[256]{};
+    bool requestedSave = false;
+    if (!ArchivePasswordPromptUser(archiveUtf8.c_str(), nullptr, input, sizeof(input), &requestedSave))
+    {
+        SecureZeroMemory(input, sizeof(input));
+        error = "Encrypted RAR filename password prompt cancelled";
+        return false;
+    }
+
+    std::string candidate(input);
+    SecureZeroMemory(input, sizeof(input));
+    const bool listed = !candidate.empty() && tryPassword(candidate);
+    if (listed)
+    {
+        ArchivePasswordAddRuntimePassword(archiveUtf8.c_str(), candidate.c_str());
+        if (requestedSave)
+        {
+            std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+            g_nativeRarPendingHeaderSave.insert(archiveUtf8);
+        }
+        DebugLogWrite("INFO", "RAR", "INTERACTIVE_ENCRYPTED_HEADER_LIST_OK", "entries=%zu | save_deferred=%d", entries.size(), requestedSave ? 1 : 0);
+    }
+    if (!candidate.empty())
+        SecureZeroMemory(candidate.data(), candidate.size());
+    if (!listed)
+    {
+        entries.clear();
+        error = "Entered RAR filename password could not decrypt the archive headers";
+    }
+    return listed;
 }
 
 

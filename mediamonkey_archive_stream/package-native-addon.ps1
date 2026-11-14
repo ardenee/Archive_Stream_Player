@@ -53,6 +53,8 @@ extracting. Synthetic AES non-solid 7z plays/seeks through direct stream.
 Synthetic encrypted RAR5 plays/seeks using bounded RAM fallback if direct
 streaming is unsupported. The real host passed password entry, cancellation
 for both formats, and wrong-password rejection for RAR5 without saving keys.
+First-use encrypted RAR5 filenames also pass host password entry, queue,
+playback/seek, cancellation and wrong-password rejection without saved keys.
 Other archive layouts use the shared stream -> memory -> cache policy.
 
 Bridge sessions end when MediaMonkey closes (after a short grace period),

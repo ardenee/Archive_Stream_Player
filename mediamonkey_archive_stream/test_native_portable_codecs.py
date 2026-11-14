@@ -7,7 +7,9 @@ Uses pywinauto on DEV, without requiring interaction with a personal library.
 Run: py -3.13 mediamonkey_archive_stream/test_native_portable_codecs.py
 For actual encrypted host dialogs, set AST_MM5_QA_AES=accept|cancel|wrong
 and AST_MM5_QA_ARCHIVE=7z|rar (default 7z). Enable GUI seek acceptance with
-AST_MM5_VERIFY_GUI_SEEK=1. The only archive UI picker override is test-only.
+AST_MM5_VERIFY_GUI_SEEK=1. Set AST_MM5_QA_RAR_HEADERS=1 for first-use RAR5
+encrypted filenames (with no saved password). Only the archive picker result
+is substituted for the test; the packaged bridge and native queue run as-is.
 No persistent personal player database or password file is read or changed.
 """
 import hashlib
@@ -51,6 +53,12 @@ SOURCES = (
 )
 AES_MODE = os.environ.get("AST_MM5_QA_AES", "").lower()
 ARCHIVE_KIND = os.environ.get("AST_MM5_QA_ARCHIVE", "7z").lower()
+RAR_HEADERS = os.environ.get("AST_MM5_QA_RAR_HEADERS", "0") == "1"
+TEST_SAVE_CONSENT = os.environ.get("AST_MM5_QA_SAVE", "0") == "1"
+if TEST_SAVE_CONSENT and (not RAR_HEADERS or AES_MODE != "accept"):
+    raise SystemExit("AST_MM5_QA_SAVE requires RAR encrypted headers and accepted password")
+if RAR_HEADERS and (ARCHIVE_KIND != "rar" or not AES_MODE):
+    raise SystemExit("AST_MM5_QA_RAR_HEADERS requires AST_MM5_QA_AES and AST_MM5_QA_ARCHIVE=rar")
 if ARCHIVE_KIND not in ("7z", "rar"):
     raise SystemExit("AST_MM5_QA_ARCHIVE must be 7z or rar")
 if AES_MODE:
@@ -149,7 +157,7 @@ def start_track(window, label):
     controls[0].double_click_input()
     print("SELECTED_CODEC", label, "row", str(controls[0].rectangle()), flush=True)
 
-def handle_qa_password_windows(workspace, password, mode, events, stop):
+def handle_qa_password_windows(workspace, password, mode, events, stop, save_consent=False):
     """Operate only credential dialogs owned by this throwaway archive bridge."""
     while not stop.is_set():
         windows = []
@@ -183,10 +191,11 @@ def handle_qa_password_windows(workspace, password, mode, events, stop):
                             next(c for c in dialog.descendants() if c.window_text() in ("Cancel", "&Cancel")).click()
                             events.append("PASSWORD_CANCELED")
                     elif title == "Archive Stream Player":
-                        no = next((c for c in dialog.descendants() if c.window_text() in ("No", "&No")), None)
-                        if no:
-                            no.click()
-                            events.append("SAVE_DECLINED")
+                        choice = ("Yes", "&Yes") if save_consent else ("No", "&No")
+                        action = next((c for c in dialog.descendants() if c.window_text() in choice), None)
+                        if action:
+                            action.click()
+                            events.append("SAVE_APPROVED" if save_consent else "SAVE_DECLINED")
                 except Exception as exc:
                     events.append("PROMPT_HANDLER_RETRY_" + type(exc).__name__)
         except Exception as exc:
@@ -247,13 +256,15 @@ def main():
             else:
                 binary=Path(r"C:\Program Files\WinRAR\Rar.exe")
                 arguments=[str(binary),"a","-ma5","-m0","-s-","-ep",
-                           "-p"+synthetic_password,str(archive_path),str(source.name)]
+                           ("-hp" if RAR_HEADERS else "-p")+synthetic_password,
+                           str(archive_path),str(source.name)]
             if not binary.is_file():
                 raise AssertionError("Missing DEV synthetic encrypted fixture builder")
             build=subprocess.run(arguments,cwd=workspace,capture_output=True,text=True,timeout=70)
             if build.returncode != 0 or not archive_path.is_file():
                 raise AssertionError("Failed to create synthetic encrypted "+ARCHIVE_KIND+": "+build.stderr[-200:])
-            print("MM5_SYNTHETIC_AES_"+ARCHIVE_KIND.upper()+"_TEST_FIXTURE_READY",flush=True)
+            print("MM5_SYNTHETIC_AES_"+ARCHIVE_KIND.upper()+"_TEST_FIXTURE_READY",
+                  "encrypted_headers="+str(RAR_HEADERS),flush=True)
             launcher=addons/"launch-mediamonkey.ps1"
             power=launcher.read_text(encoding="utf-8-sig")
             match="$start.Arguments = '--archive \"' + $Archive + '\" --lifetime 7200'"
@@ -301,7 +312,7 @@ def main():
                    ARCHIVE_STREAM_ADAPTER_DEBUG="1")
         if AES_MODE:
             ui_thread=threading.Thread(target=handle_qa_password_windows,
-                      args=(workspace,synthetic_password,AES_MODE,password_events,ui_stop),daemon=True)
+                      args=(workspace,synthetic_password,AES_MODE,password_events,ui_stop,TEST_SAVE_CONSENT),daemon=True)
             ui_thread.start()
         process=subprocess.Popen([str(exe_dir/"MediaMonkey.exe")],cwd=str(exe_dir),env=env)
         window=wait_for(lambda: player_window(process.pid),90,"portable MediaMonkey UI")
@@ -310,6 +321,21 @@ def main():
         db=wait_for(lambda: portable/"MM5.DB" if (portable/"MM5.DB").exists() else None,
                     30,"portable MediaMonkey database")
         print("MM5_PORTABLE_PROFILE_ISOLATION_PASS",db,flush=True)
+
+        if RAR_HEADERS and AES_MODE in ("cancel", "wrong"):
+            expected = "PASSWORD_CANCELED" if AES_MODE == "cancel" else "PASSWORD_WRONG_ENTERED"
+            wait_for(lambda: expected if expected in password_events else None, 55,
+                     "encrypted filename first-use credential dialog")
+            wait_for(lambda: workspace/"qa-error.txt" if (workspace/"qa-error.txt").is_file() else None,
+                     40, "native add-on rejection of inaccessible encrypted RAR filenames")
+            if (workspace/"qa-queued.txt").exists():
+                raise AssertionError("Native queue unexpectedly accepted encrypted RAR header after rejected password")
+            if isolated_password_list.read_bytes() != b"":
+                raise AssertionError("Rejected header password was saved to disk")
+            if list((workspace/"Temp").glob("ArchiveBridge-*/archive-stream.m3u8")):
+                raise AssertionError("Encrypted RAR headers exposed a playlist after rejected password")
+            print("MM5_RAR_ENCRYPTED_HEADER_FIRST_USE_"+AES_MODE.upper()+"_FAIL_CLOSED_PASS",flush=True)
+            return
 
         def ready():
             matches=list((workspace/"Temp").glob("ArchiveBridge-*/archive-stream.m3u8"))
@@ -322,6 +348,12 @@ def main():
         playlist,labels,lines=wait_for(ready,65,"native addon bridge playlist")
         wait_for(lambda: (workspace/"qa-queued.txt").is_file(),35,"native player queue acknowledgement")
         print("MM5_SELECTED_CODEC_NATIVE_QUEUE_ACK_PASS", (workspace/"qa-queued.txt").read_text(),flush=True)
+        if TEST_SAVE_CONSENT:
+            if "SAVE_APPROVED" not in password_events:
+                raise AssertionError("Header password save consent dialog was not confirmed")
+            if isolated_password_list.read_bytes() != b"":
+                raise AssertionError("Header password saved before any audio bytes were decoded")
+            print("MM5_RAR_HEADER_PASSWORD_SAVE_DEFERRED_UNTIL_DATA_PASS",flush=True)
         window.set_focus()
         window.maximize()
         playlist_out=portable / "mediamonkey.m3u8"
@@ -404,7 +436,11 @@ def main():
 
         print("MM5_PORTABLE_CODEC_MATRIX",json.dumps(results),flush=True)
         if AES_MODE:
-            if isolated_password_list.read_bytes() != b"":
+            if TEST_SAVE_CONSENT:
+                if isolated_password_list.read_text(encoding="utf-8").splitlines() != [synthetic_password]:
+                    raise AssertionError("Confirmed header password was not saved after successful audio decode")
+                print("MM5_RAR_HEADER_VERIFIED_PASSWORD_SAVE_CONSENT_PASS",flush=True)
+            elif isolated_password_list.read_bytes() != b"":
                 raise AssertionError("Synthetic password was saved without user consent")
             if "PASSWORD_ENTERED" not in password_events and AES_MODE == "accept":
                 raise AssertionError("Did not exercise encrypted host password acceptance")

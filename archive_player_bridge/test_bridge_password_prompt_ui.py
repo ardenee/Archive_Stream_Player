@@ -1,7 +1,8 @@
 """Real Windows password dialog acceptance for the shared HTTP archive bridge.
-Runs Win32 or x64 bridge with a temporary 7z AES fixture, isolated plaintext
-password file and synthetic password. Always declines saving, never writes to
-the configured user password list or registry. Does not require a real player.
+Runs Win32 or x64 bridge with temporary 7z AES fixtures (default) or RAR5
+encrypted filenames (third CLI argument: rar-headers). Synthetic passwords and
+isolated empty password lists are never copied into the real player profile.
+Always declines saving; verifies 128 decoded WAV bytes through HTTP Range.
 """
 import os
 import queue
@@ -23,8 +24,11 @@ from pywinauto import Desktop
 import win32gui
 import win32process
 
-assert len(sys.argv)==2 and sys.argv[1] in ("Win32","x64")
+assert len(sys.argv) in (2,3) and sys.argv[1] in ("Win32","x64")
 arch=sys.argv[1]
+rar_headers=len(sys.argv)==3 and sys.argv[2]=="rar-headers"
+if len(sys.argv)==3 and not rar_headers:
+    raise SystemExit("Supported additional mode: rar-headers")
 ROOT=Path(__file__).resolve().parent
 EXE=ROOT/("Release" if arch=="Win32" else "x64/Release")/"archive_player_bridge.exe"
 SEVEN=Path(r"C:\Program Files\7-Zip\7z.exe")
@@ -69,10 +73,16 @@ with tempfile.TemporaryDirectory(prefix="asp-bridge-cred-ui-",dir=r"D:\Temp") as
     with wave.open(str(wav),"wb") as w:
         w.setparams((1,2,44100,0,"NONE","not compressed"))
         w.writeframes(struct.pack("<h",1000)*44100*2)
-    archive=root/"PromptBridge.7z"
-    result=subprocess.run([str(SEVEN),"a","-t7z","-m0=LZMA2","-mhe=on","-ms=off",
-        "-p"+password,str(archive),str(wav)],
-        capture_output=True,text=True,timeout=25)
+    archive=root/("PromptBridge.rar" if rar_headers else "PromptBridge.7z")
+    if rar_headers:
+        rar=Path(r"C:\Program Files\WinRAR\Rar.exe")
+        assert rar.is_file()
+        cmd=[str(rar),"a","-idq","-y","-ma5","-m0","-s-","-ep",
+             "-hp"+password,str(archive),str(wav)]
+    else:
+        cmd=[str(SEVEN),"a","-t7z","-m0=LZMA2","-mhe=on","-ms=off",
+             "-p"+password,str(archive),str(wav)]
+    result=subprocess.run(cmd, capture_output=True,text=True,timeout=25)
     assert result.returncode==0 and archive.is_file(),result.stderr[-450:]
     password_list=root/"empty-passwords.txt"
     password_list.write_bytes(b"")
@@ -127,13 +137,14 @@ with tempfile.TemporaryDirectory(prefix="asp-bridge-cred-ui-",dir=r"D:\Temp") as
         assert not worker.is_alive() and received.get("status")==206 and len(received.get("bytes",b""))==128,(arch,events,received)
         assert received["bytes"][:4]==b"RIFF",(arch,received["bytes"][:12])
         assert password_list.read_bytes()==b"", "Password saved without consent"
-        print("PASS_BRIDGE_CREDENTIALS_UI",arch,"prompts",events,"range_bytes=128","no_saved_password",flush=True)
+        print("PASS_BRIDGE_CREDENTIALS_UI",arch,"rar_headers="+str(rar_headers),
+              "prompts",events,"range_bytes=128","no_saved_password",flush=True)
         shutdown=values["URL_M3U8"].replace("/playlist.m3u8","/shutdown")
         with urllib.request.urlopen(urllib.request.Request(shutdown,method="POST"),timeout=5) as resp:
             assert resp.status==200
         proc.wait(timeout=10)
         assert proc.returncode==0,proc.returncode
-        print("PASS_BRIDGE_PASSWORD_UI_AND_AUDIO",arch,flush=True)
+        print("PASS_BRIDGE_PASSWORD_UI_AND_AUDIO",arch,"rar_headers="+str(rar_headers),flush=True)
     finally:
         if proc.poll() is None:
             proc.terminate()

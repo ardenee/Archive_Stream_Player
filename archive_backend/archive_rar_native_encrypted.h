@@ -17,6 +17,9 @@ bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t i
 bool RarNativeExtractEncryptedEntryToMemory(const wchar_t* archivePath, uint32_t index, size_t maxBytes, std::vector<unsigned char>& data, std::string& error);
 
 // Fallback listing when RAR5 filename encryption makes libarchive's listing empty.
+// Try runtime and saved passwords first; only an explicitly interactive caller
+// can display a first-use header password UI. Save consent is held in memory
+// until a selected encrypted entry is verified by UnRAR (no header-only save).
 // RAR CRC metadata is copied only from native archive headers, never recalculated.
 bool RarNativeEnrichMultipartEntryEncryption(const wchar_t* archivePath, std::vector<ArchiveEntry>& entries, std::string& error);
 // Header-only lookup for foobar virtual files. Matches their entry index and
