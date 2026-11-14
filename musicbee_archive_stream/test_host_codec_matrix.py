@@ -1,6 +1,8 @@
-"""Real MusicBee 3.7 host acceptance: plugin Tools menu, queue, MP3 playback and seek.
+"""Real MusicBee 3.7 seven-codec Tools-menu, host playback and GUI seek regression.
+Checks native SDK Playing state/time progression, seek-resume, streaming HTTP ranges,
+local-file SHA-256 parity, and safe isolated host queueing. Not speaker/PCM certification.
 DEV-only dependencies: installed MusicBee, pywinauto automation runtime and test audio.
-Stages a fresh portable MusicBee copy and never edits the installed profile/library.
+Stages a fresh portable MusicBee copy; never edits the installed profile/library.
 Run only on an interactive Windows desktop when no other MusicBee is running.
 """
 import os
@@ -144,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-codecs-", dir=r"D:\Temp") 
             time.sleep(.25)
 
         main = await_window(process.pid, "MusicBee")
-        await_log(adapter_log, r"MENU_ITEM_REGISTERED", timeout=12)
+        await_log(adapter_log, r"MENU_ITEM_REGISTERED", timeout=30)
         rect = main.rectangle()
         main.set_focus()
         click((rect.left + 103, rect.top + 14))
@@ -161,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-codecs-", dir=r"D:\Temp") 
         button.click_input()
         await_log(adapter_log, r"QUEUE_RESULT accepted=1 tracks=7", timeout=45)
         await_log(adapter_log, r"OGG_LOCAL_READY index=1 bytes=", timeout=10)
-        for index in (1, 3, 4, 5):
+        for index in (1, 2, 3, 4, 5):
             sound = SOURCES[index]
             local_track = next(iter((path / "SessionTemp").glob(
                 "ArchiveStreamMusicBee-*/archive-entry-" + str(index).zfill(6) + sound.suffix.lower())), None)
@@ -170,13 +172,15 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-codecs-", dir=r"D:\Temp") 
             print("LOCAL_CODEC_SHA256_PARITY", index, sound.suffix, local_track.stat().st_size, flush=True)
         print("MUSICBEE_CODEC_QUEUE_ACCEPTED tracks=7", flush=True)
 
-        for i, sound in enumerate(SOURCES):
+        selected_indices = [int(os.environ["AST_MUSICBEE_CODEC_INDEX"])] if os.environ.get("AST_MUSICBEE_CODEC_INDEX") else range(len(SOURCES))
+        for step, i in enumerate(selected_indices):
+            sound = SOURCES[i]
             if process.poll() is not None:
                 raise AssertionError("MusicBee exited before codec " + sound.suffix)
             main = await_window(process.pid, "MusicBee")
             main.set_focus()
             rect = main.rectangle()
-            if i == 0:
+            if step == 0:
                 click((rect.left + 189, rect.bottom - 26))  # Mute before playback.
             mouse.double_click(coords=(rect.right - 200, rect.top + 90 + 45 * i))
             time.sleep(3)
@@ -186,13 +190,46 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-codecs-", dir=r"D:\Temp") 
                                         if c.window_text()][:12]) for w in dialogs]
             logs = bridge_log.read_text(encoding="utf-8", errors="replace") if bridge_log.is_file() else ""
             index_requests = re.findall(r"ROUTE_\w+[^\n]*index=" + str(i) + r"(?:\D|$)[^\n]*", logs)
+            playback_log = adapter_log.read_text(encoding="utf-8", errors="replace") if adapter_log.is_file() else ""
+            samples = re.findall(r"HOST_PLAYBACK index=" + str(i) + r" codec=" + re.escape(sound.suffix.lower()) +
+                                 r" route=(HTTP|LOCAL) state=(\w+) position_ms=(-?\d+)", playback_log)
             print("CODEC_HOST_OBSERVATION", i, sound.suffix, "requests=" + str(len(index_requests)),
-                  "modal=" + repr(modal), flush=True)
+                  "modal=" + repr(modal), "playback_samples=" + repr(samples[-5:]), flush=True)
             assert not modal, ("MusicBee reported playback error", i, sound.suffix, modal)
-            if i in (0, 2, 6):
+            expected_route = "HTTP" if i in (0, 6) else "LOCAL"
+            positions = [int(position) for route, state, position in samples
+                         if route == expected_route and state == "Playing"]
+            assert len(positions) >= 2 and max(positions) - min(positions) >= 500, (
+                "MusicBee host playback did not advance", i, sound.suffix, samples)
+            if i in (0, 6):
                 assert index_requests, ("Expected MusicBee live archive-backed HTTP request", i, sound.suffix)
             if os.environ.get("AST_MUSICBEE_UI_DEBUG") == "1":
                 capture_screen("codec-" + str(i))
-        print("MUSICBEE_CODEC_SMOKE_COMPLETE (transport observations; decoded playback not automatically certified)", flush=True)
+            click((rect.left + 895, rect.bottom - 14))
+            time.sleep(float(os.environ.get("AST_MUSICBEE_SEEK_WAIT", "3.5")))
+            after_log = adapter_log.read_text(encoding="utf-8", errors="replace")
+            after_samples = re.findall(r"HOST_PLAYBACK index=" + str(i) + r" codec=" + re.escape(sound.suffix.lower()) +
+                                   r" route=(HTTP|LOCAL) state=(\w+) position_ms=(-?\d+)", after_log)
+            after_positions = [int(position) for route, state, position in after_samples
+                               if route == expected_route and state == "Playing"]
+            bridge_after = bridge_log.read_text(encoding="utf-8", errors="replace") if bridge_log.is_file() else ""
+            after_routes = re.findall(r"ROUTE_\w+[^\n]*index=" + str(i) + r"(?:\D|$)[^\n]*", bridge_after)
+            print("CODEC_GUI_SEEK_OBSERVATION", i, sound.suffix,
+                  "before_ms=" + str(max(positions)), "after_ms=" + repr(after_positions[-3:]),
+                  "last_state=" + repr(after_samples[-3:]), "bridge_routes=" + repr(after_routes[-4:]), flush=True)
+            resumed = [int(position) for route, state, position in after_samples[len(samples):]
+                       if route == expected_route and state == "Playing"]
+            seek_resumed = [position for position in resumed if position >= max(positions) + 30000]
+            assert len(seek_resumed) >= 2, (
+                "Host GUI seek did not resume at expected position", i, sound.suffix, resumed)
+            assert seek_resumed[-1] > seek_resumed[0], (
+                "Host did not advance after GUI seek", i, sound.suffix, seek_resumed)
+            if expected_route == "HTTP":
+                route_offsets = [int(value) for value in re.findall(
+                    r"ROUTE_STREAM[^\n]*index=" + str(i) + r"[^\n]*start=(\d+)", bridge_after)]
+                assert any(offset > 0 for offset in route_offsets), (
+                    "Host seek did not produce a byte-range read", i, sound.suffix, route_offsets)
+            print("CODEC_HOST_PLAYBACK_AND_GUI_SEEK_PASS", i, sound.suffix, resumed[-2:], flush=True)
+        print("ALL_MUSICBEE_SEVEN_CODEC_HOST_PLAYBACK_AND_GUI_SEEK_CHECKS_PASS", flush=True)
     finally:
         cleanup(process)

@@ -19,6 +19,7 @@ namespace MusicBeePlugin
         private readonly List<string> directories = new List<string>();
         private readonly List<string> shutdownUrls = new List<string>();
         private readonly object stateLock = new object();
+        private System.Windows.Forms.Timer playbackTraceTimer;
 
         private static readonly object traceLock = new object();
 
@@ -57,6 +58,50 @@ namespace MusicBeePlugin
                 }
             }
             catch { }
+        }
+
+        private void StartPlaybackDiagnostics()
+        {
+            if (playbackTraceTimer != null)
+                return;
+            bool enabled = Environment.GetEnvironmentVariable("ARCHIVE_STREAM_ADAPTER_DEBUG") == "1";
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
+            {
+                if (key != null && key.GetValue("DebugLogging", 0) is int && (int)key.GetValue("DebugLogging", 0) == 1)
+                    enabled = true;
+            }
+            if (!enabled)
+                return;
+
+            // A WinForms timer calls MusicBee's native API on the host UI thread.
+            // Observe only our own archive URLs/local files; never log bridge tokens.
+            playbackTraceTimer = new System.Windows.Forms.Timer();
+            playbackTraceTimer.Interval = 1000;
+            playbackTraceTimer.Tick += (sender, args) =>
+            {
+                try
+                {
+                    string source = api.NowPlaying_GetFileUrl == null ? "" : api.NowPlaying_GetFileUrl();
+                    Uri uri;
+                    bool http = Uri.TryCreate(source, UriKind.Absolute, out uri) &&
+                        uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback &&
+                        uri.AbsolutePath.IndexOf("/entry/", StringComparison.Ordinal) >= 0;
+                    bool local = source.IndexOf("ArchiveStreamMusicBee-", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!http && !local)
+                        return;
+                    string codec = Path.GetExtension(http ? uri.AbsolutePath : source).ToLowerInvariant();
+                    int queueIndex = api.NowPlayingList_GetCurrentIndex == null ? -1 : api.NowPlayingList_GetCurrentIndex();
+                    int position = api.Player_GetPosition == null ? -1 : api.Player_GetPosition();
+                    string state = api.Player_GetPlayState == null ? "unknown" : api.Player_GetPlayState().ToString();
+                    Trace("HOST_PLAYBACK index=" + queueIndex + " codec=" + codec + " route=" + (http ? "HTTP" : "LOCAL") + " state=" + state + " position_ms=" + position);
+                }
+                catch (Exception e)
+                {
+                    Trace("HOST_PLAYBACK_DIAGNOSTIC_FAILED type=" + e.GetType().Name);
+                }
+            };
+            playbackTraceTimer.Start();
+            Trace("HOST_DIAGNOSTICS_TIMER_START");
         }
 
         public PluginInfo Initialise(IntPtr apiInterfacePtr)
@@ -107,6 +152,8 @@ namespace MusicBeePlugin
                     bool queued = tracks.Length > 0 && api.NowPlayingList_QueueFilesLast != null &&
                         api.NowPlayingList_QueueFilesLast(tracks);
                     Trace("QUEUE_RESULT accepted=" + (queued ? "1" : "0") + " tracks=" + tracks.Length);
+                    if (queued)
+                        StartPlaybackDiagnostics();
                     if (!queued)
                     {
                         MessageBox.Show("MusicBee did not accept the decoded archive track URLs.",
@@ -123,7 +170,7 @@ namespace MusicBeePlugin
         private static string[] PrepareMusicBeeTracks(string[] urls, string sessionFolder)
         {
             // MusicBee 3.7 rejects some codec containers over HTTP despite accepting
-            // their bytes from local files. Keep MP3/FLAC/AAC archive HTTP URLs intact.
+            // their bytes from local files. Keep MP3/AAC archive HTTP URLs intact.
             // The host queue API accepts paths/URLs, not an in-memory media stream.
             int limitMb = 2048;
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
@@ -145,7 +192,7 @@ namespace MusicBeePlugin
                     url.Scheme != Uri.UriSchemeHttp || !url.IsLoopback)
                     throw new IOException("Archive Stream returned an unexpected media URL.");
                 string extension = Path.GetExtension(url.AbsolutePath).ToLowerInvariant();
-                if (extension != ".ogg" && extension != ".wav" && extension != ".wma" && extension != ".m4a")
+                if (extension != ".ogg" && extension != ".flac" && extension != ".wav" && extension != ".wma" && extension != ".m4a")
                     continue;
                 if (remaining == 0)
                     throw new IOException("MusicBee needs temporary local media for this archive codec. Enable a nonzero managed-cache limit in Archive Stream settings.");
@@ -289,6 +336,12 @@ namespace MusicBeePlugin
 
         public void Close(PluginCloseReason reason)
         {
+            if (playbackTraceTimer != null)
+            {
+                playbackTraceTimer.Stop();
+                playbackTraceTimer.Dispose();
+                playbackTraceTimer = null;
+            }
             lock (stateLock)
             {
                 for (int i = 0; i < processes.Count; ++i)

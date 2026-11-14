@@ -10,7 +10,7 @@ $bridge = Join-Path $root 'archive_player_bridge\Release\archive_player_bridge.e
 $fixtures = @(
     @{ Path = 'C:\audiotest\01.MP3File.mp3'; Name = 'MusicBee.MP3.mp3'; Local = $false },
     @{ Path = 'C:\audiotest\02.OGGFile.ogg'; Name = 'MusicBee.OGG.ogg'; Local = $true },
-    @{ Path = 'C:\audiotest\03.FlacFile.flac'; Name = 'MusicBee.FLAC.flac'; Local = $false },
+    @{ Path = 'C:\audiotest\03.FlacFile.flac'; Name = 'MusicBee.FLAC.flac'; Local = $true },
     @{ Path = 'C:\audiotest\04.WAVFile.wav'; Name = 'MusicBee.WAV.wav'; Local = $true },
     @{ Path = 'C:\audiotest\05.WMAFile.wma'; Name = 'MusicBee.WMA.wma'; Local = $true },
     @{ Path = 'C:\audiotest\06.M4AFile.m4a'; Name = 'MusicBee.M4A.m4a'; Local = $true },

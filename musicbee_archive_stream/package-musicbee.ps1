@@ -27,9 +27,10 @@ Tools > Archive Stream: Settings...
 The bridge listens only on 127.0.0.1 while MusicBee is running.
 Default saved passwords use %LOCALAPPDATA%\WinampArchiveStream\keeps.txt.
 Shared settings are stored under HKCU\Software\ArchiveStreamPlayer\Adapters.
-MusicBee 3.7 rejects tested OGG/WAV/WMA/M4A archive HTTP playback.
-Those codecs use content-length-checked temporary local files, bounded per session
-by CacheLimitMB. MP3/FLAC/AAC retain archive-backed HTTP streaming.
+MusicBee 3.7 rejects tested OGG/WAV/WMA/M4A archive HTTP playback;
+FLAC streams but fails to resume after host GUI seek.
+OGG/FLAC/WAV/WMA/M4A use content-length-checked temporary local files,
+bounded per session by CacheLimitMB. MP3/AAC retain HTTP streaming and GUI seeking.
 The MusicBee queue API has no memory-stream input for these host-limited codecs.
 A zero cache limit blocks local fallback. Unencrypted temporary audio may remain
 after a crash; clear stale sessions in shared settings. Normal shutdown removes it.
