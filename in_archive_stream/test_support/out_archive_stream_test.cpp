@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 namespace
@@ -21,6 +22,15 @@ namespace
     ULONGLONG g_startTick = 0;
     ULONGLONG g_pausedAt = 0;
     int g_baseMs = 0;
+    bool g_expectPcm = false;
+    int16_t g_expectedPcm = 0;
+    uint64_t g_checkedSamples = 0;
+    uint64_t g_mismatchedSamples = 0;
+    uint64_t g_firstMismatchAt = 0;
+    int16_t g_firstMismatchValue = 0;
+    uint64_t g_mismatchZeroCount = 0;
+    bool g_hasPendingByte = false;
+    unsigned char g_pendingByte = 0;
 
     void Report(const char* action, unsigned long long value, unsigned long long extra)
     {
@@ -60,6 +70,15 @@ namespace
         if (sampleRate <= 0 || channels <= 0 || bits <= 0 || bits % 8)
             return -1;
         const uint64_t bytes = static_cast<uint64_t>(sampleRate) * channels * (bits / 8);
+        char expected[32]{};
+        const DWORD expectedLength = GetEnvironmentVariableA("AST_WINAMP_TEST_SINK_EXPECT_S16", expected, sizeof(expected));
+        const bool haveExpectation = expectedLength > 0 && expectedLength < sizeof(expected);
+        const long expectedValue = haveExpectation ? std::strtol(expected, nullptr, 10) : 0;
+        if (haveExpectation && (bits != 16 || expectedValue < -32768 || expectedValue > 32767))
+        {
+            Report("PCM_UNSUPPORTED_FORMAT", bits, channels);
+            return -1;
+        }
         {
             std::lock_guard<std::mutex> guard(g_mutex);
             g_bytesPerSecond = bytes;
@@ -70,20 +89,39 @@ namespace
             g_baseMs = 0;
             g_paused = false;
             g_firstWrite = true;
+            g_expectPcm = haveExpectation;
+            g_expectedPcm = static_cast<int16_t>(expectedValue);
+            g_checkedSamples = 0;
+            g_mismatchedSamples = 0;
+            g_firstMismatchAt = 0;
+            g_firstMismatchValue = 0;
+            g_mismatchZeroCount = 0;
+            g_hasPendingByte = false;
+            g_pendingByte = 0;
             g_open = true;
         }
         Report("OPEN", sampleRate, channels);
+        if (haveExpectation)
+            Report("PCM_VERIFY_EXPECT", static_cast<unsigned long long>(static_cast<uint16_t>(expectedValue)), bits);
         return 2000;
     }
 
     void Close()
     {
         uint64_t total = 0;
+        uint64_t checked = 0;
+        uint64_t mismatched = 0;
+        bool verify = false;
         {
             std::lock_guard<std::mutex> guard(g_mutex);
             total = g_totalWritten;
+            checked = g_checkedSamples;
+            mismatched = g_mismatchedSamples;
+            verify = g_expectPcm;
             g_open = false;
         }
+        if (verify)
+            Report("PCM_VERIFY_CLOSE", checked, mismatched);
         Report("CLOSE", total, 0);
     }
 
@@ -98,7 +136,7 @@ namespace
         return static_cast<int>(std::min<uint64_t>(8192, space));
     }
 
-    int Write(char*, int length)
+    int Write(char* data, int length)
     {
         if (length <= 0)
             return 1;
@@ -111,6 +149,37 @@ namespace
             const uint64_t pending = g_written > consumed ? g_written - consumed : 0;
             if (pending + static_cast<uint64_t>(length) > g_capacity)
                 return 1;
+            if (g_expectPcm)
+            {
+                // Winamp's output contract allows arbitrarily sized Write chunks;
+                // a sample can span calls. Carry a byte rather than interpreting
+                // the next chunk's first byte as a fresh low-byte sample.
+                for (int i = 0; i < length; ++i)
+                {
+                    const unsigned char value = static_cast<unsigned char>(data[i]);
+                    if (!g_hasPendingByte)
+                    {
+                        g_pendingByte = value;
+                        g_hasPendingByte = true;
+                        continue;
+                    }
+                    const auto pcm = static_cast<int16_t>(static_cast<uint16_t>(g_pendingByte) |
+                                      (static_cast<uint16_t>(value) << 8));
+                    g_hasPendingByte = false;
+                    ++g_checkedSamples;
+                    if (pcm != g_expectedPcm)
+                    {
+                        if (g_mismatchedSamples == 0)
+                        {
+                            g_firstMismatchAt = g_checkedSamples;
+                            g_firstMismatchValue = pcm;
+                        }
+                        if (pcm == 0)
+                            ++g_mismatchZeroCount;
+                        ++g_mismatchedSamples;
+                    }
+                }
+            }
             g_written += static_cast<uint64_t>(length);
             g_totalWritten += static_cast<uint64_t>(length);
             if (g_firstWrite)
@@ -120,7 +189,11 @@ namespace
             }
         }
         if (first)
+        {
             Report("WRITE_FIRST", length, 0);
+            if (g_expectPcm)
+                Report("PCM_VERIFY_FIRST", g_checkedSamples, g_mismatchedSamples);
+        }
         return 0;
     }
 
@@ -152,13 +225,26 @@ namespace
 
     void Flush(int milliseconds)
     {
+        uint64_t checked = 0;
+        uint64_t mismatched = 0;
+        bool verify = false;
         {
             std::lock_guard<std::mutex> guard(g_mutex);
+            checked = g_checkedSamples;
+            mismatched = g_mismatchedSamples;
+            verify = g_expectPcm;
             g_written = 0;
+            g_hasPendingByte = false;
             g_baseMs = milliseconds;
             g_startTick = GetTickCount64();
             g_firstWrite = true;
             g_paused = false;
+        }
+        if (verify)
+        {
+            Report("PCM_VERIFY_BEFORE_FLUSH", checked, mismatched);
+            Report("PCM_FIRST_MISMATCH", g_firstMismatchAt, static_cast<unsigned long long>(static_cast<uint16_t>(g_firstMismatchValue)));
+            Report("PCM_ZERO_MISMATCHES", g_mismatchZeroCount, 0);
         }
         Report("FLUSH", milliseconds, 0);
     }

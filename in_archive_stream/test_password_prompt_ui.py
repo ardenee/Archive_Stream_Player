@@ -66,6 +66,9 @@ with tempfile.TemporaryDirectory(prefix="asp-winamp-ui-",dir=r"D:\Temp") as temp
     env["ARCHIVE_STREAM_ADAPTER_DEBUG"]="1"
     sink_report=root/"output-sink.txt"
     env["AST_WINAMP_TEST_SINK_REPORT"]=str(sink_report)
+    if mode=="accept":
+        # Test fixture is mono 16-bit PCM with every sample exactly 1200.
+        env["AST_WINAMP_TEST_SINK_EXPECT_S16"]="1200"
     env["APPDATA"]=str(root/"Roaming")
     (root/"Local").mkdir()
     (root/"Roaming").mkdir()
@@ -169,6 +172,34 @@ with tempfile.TemporaryDirectory(prefix="asp-winamp-ui-",dir=r"D:\Temp") as temp
             report=sink_report.read_text(encoding="ascii") if sink_report.is_file() else ""
             assert "FLUSH 18000 0" in report and report.count("WRITE_FIRST")>=2,("PCM output not flushed/resumed on seek",report)
             print("WINAMP_PCM_SINK_SEEK_VERIFIED",report.strip().splitlines()[-8:],flush=True)
+            if mode=="accept":
+                sample_reports=[line.split() for line in report.splitlines()
+                                if line.startswith("PCM_VERIFY_FIRST ")]
+                assert len(sample_reports)>=2,("Expected PCM samples before and after seek",report)
+                assert all(int(line[1])>0 and int(line[2])==0 for line in sample_reports),\
+                    ("PCM sample mismatch in real native audio output",sample_reports)
+                before_flush=[line.split() for line in report.splitlines()
+                              if line.startswith("PCM_VERIFY_BEFORE_FLUSH ")]
+                assert before_flush and int(before_flush[-1][1])>44100 and int(before_flush[-1][2])==0,\
+                    ("Decoded PCM prior to seek was incomplete or incorrect",before_flush)
+                # Stop through the real player so the test sink can report
+                # every PCM sample received after the seek, not just its first write.
+                time.sleep(1.2)
+                win32gui.PostMessage(hwnd,win32con.WM_COMMAND,40047,0)
+                until=time.monotonic()+7
+                while time.monotonic()<until:
+                    if "PCM_VERIFY_CLOSE " in sink_report.read_text(encoding="ascii"):
+                        break
+                    time.sleep(.15)
+                final_report=sink_report.read_text(encoding="ascii")
+                totals=[line.split() for line in final_report.splitlines()
+                        if line.startswith("PCM_VERIFY_CLOSE ")]
+                assert (totals and int(totals[-1][2])==0 and
+                        int(totals[-1][1])>=int(before_flush[-1][1])+4096),\
+                    ("Full PCM parity after seek failed",totals,final_report)
+                print("WINAMP_NATIVE_PCM_SAMPLE_VALUES_AND_POSTSEEK_PARITY_PASS",host,
+                      "checked_before_seek",before_flush[-1][1],
+                      "checked_total",totals[-1][1],flush=True)
         else:
             assert isplaying==0,"Winamp kept playing after password cancellation"
             report=sink_report.read_text(encoding="ascii") if sink_report.is_file() else ""
