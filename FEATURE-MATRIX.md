@@ -70,6 +70,8 @@ Every adapter uses the **same static archive backend**, but host formats and rec
 
 Here **T** in a bridge row can mean **the bridge itself passed a transport/backend regression**, not that the named player has played that exact format. Source archives are read-only. Supported solid layouts use RAM or cache instead of claiming independently seekable archive streams. Encrypted Copy/Store 7z requires a per-entry CRC verification pass before streaming, and exotic coder chains are not universally certified.
 
+**Ogg/Vorbis edge-case transport (T, Win32/x64):** `archive_player_bridge/test_ogg_edge_cases.py` verifies an ordinary logical stream (199 seconds), a genuine two-stream chain with rewritten serials and valid Ogg page CRCs, and a stream missing its last EOS page. All three preserve exact HTTP ranges, with `stream=9 memory=0 cache=0` per architecture. Chained/truncated streams intentionally advertise unknown duration (`#EXTINF:-1`) rather than a misleading partial duration. This **does not** certify chained-stream host decoding, seek position, or audible output.
+
 ## Player settings, titles and diagnostics
 
 | Player / mode | Settings entry | Password-list use | Interactive password prompt | Shared cache controls | Per-host diagnostic logs | Title-change behavior |
