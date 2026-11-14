@@ -37,15 +37,20 @@ Archive Stream Player - MediaMonkey 5/2024 JavaScript addon
 Install through MediaMonkey: Tools > Addons > Add, select the .mmip, then
 restart MediaMonkey (or reload the window when asked).
 
-Two new Tools menu items:
+Three Tools menu items:
   Archive Stream: Add Archive Audio...
   Archive Stream: Settings...
+  Archive Stream: Refresh Queued Titles
 
 The addon uses the x64 statically linked Archive Stream bridge. It does NOT
 install the obsolete Winamp general-purpose expander. The addon's JavaScript
 loads a temporary authenticated M3U8 from the shared bridge and adds the
 individual ZIP/7z/RAR track URLs through MediaMonkey's native Now Playing API.
 The original audio files and their embedded tags are not modified.
+Existing queued archive titles are refreshed automatically from session-authenticated
+bridge playlists when the shared title template changes. The third Tools action
+also triggers an immediate refresh; unrelated tracks are never changed.
+ZIP MP3 in-place title refresh has passed real portable MediaMonkey 2024 QA.
 MP3/OGG/FLAC/WAV/WMA/M4A/AAC ZIP streams pass real-host playback and
 GUI seek/resume acceptance. Vorbis duration is obtained via bounded archive
 stream header/tail reads when safe, allowing direct OGG seeking without

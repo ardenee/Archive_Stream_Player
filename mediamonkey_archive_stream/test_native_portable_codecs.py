@@ -64,6 +64,7 @@ if RAR_SOLID and (ARCHIVE_KIND != "rar" or not AES_MODE):
     raise SystemExit("AST_MM5_QA_RAR_SOLID requires encrypted RAR5 host QA")
 if RAR_MULTIPART and (ARCHIVE_KIND != "rar" or not AES_MODE):
     raise SystemExit("AST_MM5_QA_RAR_MULTIPART requires AST_MM5_QA_AES and AST_MM5_QA_ARCHIVE=rar")
+TITLE_REFRESH_QA = os.environ.get("AST_MM5_QA_TITLE_REFRESH", "0") == "1"
 TEST_SAVE_CONSENT = os.environ.get("AST_MM5_QA_SAVE", "0") == "1"
 if TEST_SAVE_CONSENT and (not RAR_HEADERS or AES_MODE != "accept"):
     raise SystemExit("AST_MM5_QA_SAVE requires RAR encrypted headers and accepted password")
@@ -115,12 +116,17 @@ def dismiss_first_run_wizard(window):
         return next((c for c in window.descendants()
                      if c.element_info.control_type == "Window" and
                      c.window_text().strip() == "Setup Wizard" and c.is_visible()), None)
-    wizard = wait_for(wizard_control, 40, "portable first-run Setup Wizard")
-    cancel = next((c for c in wizard.descendants()
-                   if c.element_info.control_type == "Button" and
-                   c.window_text().strip().upper() == "CANCEL"), None)
-    if not cancel:
-        raise AssertionError("Fresh portable setup wizard has no safe Cancel button")
+    wait_for(wizard_control, 40, "portable first-run Setup Wizard")
+    # Chromium renders the wizard shell before its buttons. Requery the
+    # controls until a visible Cancel appears; do not click Next/Scan.
+    def cancel_control():
+        wizard=wizard_control()
+        if not wizard:
+            return None
+        return next((c for c in wizard.descendants()
+                     if c.element_info.control_type == "Button" and c.is_visible() and
+                     c.window_text().replace("&","").strip().upper() == "CANCEL"), None)
+    cancel = wait_for(cancel_control, 30, "portable first-run safe Cancel button")
     cancel.click_input()
     try:
         wait_for(lambda: not wizard_control(), 8, "first-run wizard dismissal")
@@ -347,6 +353,10 @@ def main():
                " await app.filesystem.saveTextToFileAsync(marker, '1');" +
                " await actions.archiveStreamNativeAdd.execute(); }, 7000);\n")
         script.write_text(js,encoding="utf-8")
+        if TITLE_REFRESH_QA:
+            syntax=subprocess.run(["node","--check",str(script)],capture_output=True,text=True,timeout=12)
+            if syntax.returncode:
+                raise AssertionError("Staged QA title refresh JavaScript invalid: "+syntax.stderr[-1400:])
         for folder in ("Roaming","Local","Temp"):
             (workspace/folder).mkdir()
         env=os.environ.copy()
@@ -407,8 +417,25 @@ def main():
         view=doc(window)
         visible=[label for label in labels if label in view]
         print("MM5_VISIBLE_QUEUE_TITLES",visible,flush=True)
-        if not visible:
+        if not visible and not (TITLE_REFRESH_QA and "AST_QA_TITLE_REFRESHED" in view):
             raise AssertionError("Native Now Playing view has no archive titles")
+        if TITLE_REFRESH_QA:
+            # Exercise the production background refresh by atomically replacing
+            # the real bridge playlist as a changed title preset would do.
+            # Do not inject JavaScript metadata changes into the QA addon.
+            previous_title=labels[0]
+            refreshed_title="AST_QA_TITLE_REFRESHED"
+            original=playlist.read_text(encoding="utf-8-sig")
+            needle=","+previous_title
+            if original.count(needle)!=1:
+                raise AssertionError("Expected exactly one queued bridge title to refresh")
+            draft=playlist.with_name(playlist.name+".qa-update")
+            draft.write_text(original.replace(needle,","+refreshed_title,1),encoding="utf-8")
+            os.replace(draft,playlist)
+            wait_for(lambda: refreshed_title in doc(window),45,
+                     "production automatic in-place Now Playing title repaint")
+            labels[0]=refreshed_title
+            print("MM5_REAL_HOST_QUEUED_ARCHIVE_INPLACE_TITLE_REFRESH_PASS",flush=True)
 
         results={}
         for key,label in zip((p[0] for p in SOURCES),labels):

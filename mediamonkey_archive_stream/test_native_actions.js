@@ -20,16 +20,19 @@ const validPlaylist = '#EXTM3U\r\n#EXTINF:-1,Custom Archive Title 1\r\n' +
 async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
                          available = true, exitCode = 42, playlist = validPlaylist,
                          manifest = {ok: true, playlist: playlistFile, entries: 2},
-                         queueFailure = false, settings = false} = {}) {
+                         queueFailure = false, settings = false, refreshTitle = false} = {}) {
     const calls = [];
     const messages = [];
     const files = {[playlistFile]: playlist};
     const actions = {};
     const menu = [];
+    const hostTracks = [];
+    const timerCallbacks = [];
     const toolbox = {
         actions,
         URL,
         setTimeout,
+        setInterval: callback => { timerCallbacks.push(callback); return timerCallbacks.length; },
         window: {
             _menuItems: {tools: {action: {submenu: menu}}},
             localPromise: value => Promise.resolve(value)
@@ -81,24 +84,40 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
                 createEmptyTrack: () => ({})
             },
             player: {
+                getSongList: () => ({
+                    getTracklist: () => ({
+                        whenLoaded: async () => {},
+                        forEach: callback => hostTracks.forEach(callback),
+                        notifyChanged: () => calls.push(['listChanged'])
+                    })
+                }),
                 addTracksAsync: async (list, options) => {
                     calls.push(['queue', list, options]);
                     if (queueFailure)
                         throw new Error('Host rejected queue insertion');
+                    for (const track of list.tracks) {
+                        track.notifyChanged = () => calls.push(['trackChanged', track.path]);
+                        hostTracks.push(track);
+                    }
                 }
             }
         },
         uitools: {toastMessage: {show: (message, options) => messages.push({message, options})}}
     };
     vm.runInNewContext(code, toolbox, {filename: 'actions_add.js'});
-    assert.equal(menu.length, 2);
+    assert.equal(menu.length, 3);
     assert.equal(menu[0].action, actions.archiveStreamNativeAdd);
     assert.equal(menu[1].action, actions.archiveStreamNativeSettings);
+    assert.equal(menu[2].action, actions.archiveStreamNativeRefreshTitles);
     if (settings)
         await actions.archiveStreamNativeSettings.execute();
     else
         await actions.archiveStreamNativeAdd.execute();
-    return {calls, files, messages, menu};
+    if (refreshTitle) {
+        files[playlistFile] = files[playlistFile].replace('Custom Archive Title 1', 'Updated Archive Title 1');
+        await actions.archiveStreamNativeRefreshTitles.execute();
+    }
+    return {calls, files, messages, menu, actions, hostTracks, timerCallbacks};
 }
 
 (async () => {
@@ -124,6 +143,21 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
     assert(!Object.hasOwn(normal.files, readyFile), 'Delete manifest after queue handoff');
     assert(normal.messages.some(x => x.message.includes('Added 2 archive tracks')));
     console.log('MEDIAMONKEY_NATIVE_ADDON_IN_PROCESS_QUEUE_AND_TITLES_PASS');
+
+    const refreshed = await exercise({refreshTitle: true});
+    assert.equal(refreshed.timerCallbacks.length, 1, 'Only one background title refresh poll');
+    assert.equal(refreshed.hostTracks[0].title, 'Updated Archive Title 1');
+    assert.equal(refreshed.hostTracks[1].title, 'Custom Archive Title 2');
+    assert.equal(refreshed.calls.filter(x => x[0] === 'trackChanged').length, 1);
+    assert.equal(refreshed.calls.filter(x => x[0] === 'listChanged').length, 1);
+    assert(refreshed.messages.some(x => x.message.includes('Refreshed 1 queued archive titles')));
+    const foreign = await exercise();
+    foreign.files[playlistFile] = validPlaylist.replace('127.0.0.1:12345', 'example.net')
+        .replace('Custom Archive Title 1', 'Malicious Foreign Title');
+    await foreign.actions.archiveStreamNativeRefreshTitles.execute();
+    assert.equal(foreign.hostTracks[0].title, 'Custom Archive Title 1');
+    assert(!foreign.calls.some(x => x[0] === 'trackChanged'), 'Never update from foreign playlist URLs');
+    console.log('MEDIAMONKEY_NATIVE_ADDON_LIVE_TITLE_REFRESH_AND_URL_SCOPE_PASS');
 
     const portable = await exercise({install: 'portable'});
     assert(portable.calls.some(x => x[0] === 'queue'), 'Application-local addon dispatches native queue');

@@ -5,6 +5,10 @@
 
     const folderName = 'archiveStreamPlayerNative';
     const title = 'Archive Stream Player';
+    // A session stays active only while its authenticated bridge playlist is
+    // accessible. The map belongs to this host surface, not the user library.
+    const queuedArchiveSessions = new Map();
+    let refreshingTitles = false;
 
     function notice(message) {
         uitools.toastMessage.show(title + ': ' + message, { disableUndo: true });
@@ -111,6 +115,68 @@
         return {list, count};
     }
 
+    function playlistTitles(text) {
+        const rows = text.split(/\r?\n/);
+        const titles = new Map();
+        let label = '';
+        for (const raw of rows) {
+            const row = raw.trim();
+            if (row.startsWith('#EXTINF:')) {
+                const comma = row.indexOf(',');
+                label = comma >= 0 ? row.slice(comma + 1).trim() : '';
+            }
+            else if (row && !row.startsWith('#')) {
+                if (/^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{32}\/entry\/\d+\.[a-z0-9]+$/i.test(row) && label)
+                    titles.set(row, label);
+                label = '';
+            }
+        }
+        return titles;
+    }
+
+    async function refreshQueuedArchiveTitles() {
+        if (refreshingTitles || !queuedArchiveSessions.size)
+            return 0;
+        refreshingTitles = true;
+        try {
+            const updated = new Map();
+            for (const [playlist, permittedUrls] of queuedArchiveSessions) {
+                try {
+                    const current = playlistTitles(await app.filesystem.loadTextFromFileAsync(playlist));
+                    for (const [url, label] of current) {
+                        if (permittedUrls.has(url))
+                            updated.set(url, label);
+                    }
+                }
+                catch (error) {
+                    // Bridge is gone: do not attempt to reach its stale URLs.
+                    queuedArchiveSessions.delete(playlist);
+                }
+            }
+            if (!updated.size)
+                return 0;
+            const songs = app.player.getSongList().getTracklist();
+            await songs.whenLoaded();
+            let changed = 0;
+            // Official MM5 SDK: forEach gives safe, transient objects, and
+            // notifyChanged repaints in-memory metadata without tag writes.
+            songs.forEach(track => {
+                const expected = track && updated.get(track.path);
+                if (!expected || track.title === expected)
+                    return;
+                track.title = expected;
+                track.notifyChanged();
+                ++changed;
+            });
+            if (changed)
+                songs.notifyChanged();
+            return changed;
+        }
+        finally {
+            refreshingTitles = false;
+        }
+    }
+
     async function addArchive(archive) {
         const tempFile = await app.utils.getTempFilePathAsync();
         const ready = tempFile + '.archive-stream-ready.json';
@@ -135,6 +201,7 @@
             // The launcher terminates its bridge unless the player acknowledged
             // successful queue insertion. This avoids orphaned bridge sessions.
             await app.filesystem.saveTextToFileAsync(acknowledge, 'QUEUED=' + tracks.count);
+            queuedArchiveSessions.set(manifest.playlist, new Set(playlistTitles(playlist).keys()));
             notice('Added ' + tracks.count + ' archive tracks to Now Playing.');
         }
         finally {
@@ -174,6 +241,27 @@
         }
     };
 
+    actions.archiveStreamNativeRefreshTitles = {
+        title: 'Archive Stream: Refresh Queued Titles',
+        hotkeyAble: true,
+        execute: async function () {
+            try {
+                const changed = await refreshQueuedArchiveTitles();
+                notice('Refreshed ' + changed + ' queued archive titles.');
+            }
+            catch (error) {
+                notice(error && error.message ? error.message : 'Could not refresh archive titles.');
+            }
+        }
+    };
+
+    // Reload only authenticated playlists belonging to archive sessions
+    // queued through this addon. Never touch embedded audio tags or unrelated
+    // user tracks. The companion bridge rewrites its M3U8 on template change.
+    setInterval(function () {
+        refreshQueuedArchiveTitles().catch(function () {});
+    }, 3000);
+
     window._menuItems.tools.action.submenu.push({
         action: actions.archiveStreamNativeAdd,
         order: 10,
@@ -182,6 +270,11 @@
     window._menuItems.tools.action.submenu.push({
         action: actions.archiveStreamNativeSettings,
         order: 20,
+        grouporder: 91
+    });
+    window._menuItems.tools.action.submenu.push({
+        action: actions.archiveStreamNativeRefreshTitles,
+        order: 30,
         grouporder: 91
     });
 }());
