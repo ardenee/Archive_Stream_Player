@@ -471,6 +471,12 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
     std::string error;
     bool streamReady = false;
     ArchiveFormat format = DetectArchiveFormatFromPath(g_settings.archive.c_str());
+    // Some encrypted RAR5 entries cannot be streamed by libarchive, even
+    // with a correct password. Probe streaming without prompting, then allow
+    // the native UnRAR memory fallback to ask once and verify the password.
+    const bool deferRarPrompt = format == ArchiveFormat::Rar && e.isEncrypted;
+    if (deferRarPrompt)
+        ArchivePasswordSetPromptAllowedForCurrentThread(false);
     if (!(e.isSolid && (format == ArchiveFormat::SevenZip || format == ArchiveFormat::Rar)))
     {
         if (stream.Open(g_settings.archive.c_str(), e.index, error))
@@ -483,6 +489,8 @@ bool ServeAudio(SOCKET s, const std::string &request, const ArchiveEntry &e, boo
                 stream.Close();
         }
     }
+    if (deferRarPrompt)
+        ArchivePasswordSetPromptAllowedForCurrentThread(g_settings.promptPasswords);
     if (streamReady)
     {
         ++g_stream;

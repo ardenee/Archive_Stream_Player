@@ -49,7 +49,11 @@ The original audio files and their embedded tags are not modified.
 MP3/OGG/FLAC/WAV/WMA/M4A/AAC ZIP streams pass real-host playback and
 GUI seek/resume acceptance. Vorbis duration is obtained via bounded archive
 stream header/tail reads when safe, allowing direct OGG seeking without
-extracting. Other archive routes use the shared memory/cache policy.
+extracting. Synthetic AES non-solid 7z plays/seeks through direct stream.
+Synthetic encrypted RAR5 plays/seeks using bounded RAM fallback if direct
+streaming is unsupported. The real host passed password entry, cancellation
+for both formats, and wrong-password rejection for RAR5 without saving keys.
+Other archive layouts use the shared stream -> memory -> cache policy.
 
 Bridge sessions end when MediaMonkey closes (after a short grace period),
 or automatically after at most two hours. Host playback is not yet certified

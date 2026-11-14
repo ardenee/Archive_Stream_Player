@@ -1830,8 +1830,8 @@ bool RarExtractEntryToMemory(const wchar_t* archivePath, uint32_t index, std::ve
             return true;
         }
 
-        // Preserve the existing libarchive password-prompt/runtime-password
-        // path when no saved native UnRAR candidate can decode the entry.
+        // Preserve the libarchive path when the native saved/runtime/interactive
+        // credential candidates cannot decode the selected encrypted entry.
         if (LibarchiveRarExtractEntryToMemory(archivePath, index, data, error))
             return true;
 

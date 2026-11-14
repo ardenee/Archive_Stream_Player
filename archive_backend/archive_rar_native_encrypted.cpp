@@ -342,6 +342,104 @@ namespace
             return true;
         }
     }
+    std::string NativeRarArchivePathUtf8(const wchar_t* path)
+    {
+        const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, nullptr, 0, nullptr, nullptr);
+        if (needed <= 1)
+            return {};
+        std::string utf8(static_cast<size_t>(needed), '\0');
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, utf8.data(), needed, nullptr, nullptr) != needed)
+            return {};
+        utf8.pop_back();
+        return utf8;
+    }
+
+    template<typename TryDecode>
+    bool NativeRarDecodeWithPasswords(const wchar_t* archivePath, uint32_t index, TryDecode&& decode, std::string& error)
+    {
+        const std::string archiveUtf8 = NativeRarArchivePathUtf8(archivePath);
+        if (archiveUtf8.empty())
+        {
+            error = "Encrypted RAR archive path could not be converted to UTF-8";
+            return false;
+        }
+
+        ArchivePasswordList saved;
+        if (!ArchivePasswordLoadList(saved, error))
+            return false;
+        std::vector<std::string> runtime;
+        ArchivePasswordGetRuntimePasswords(archiveUtf8.c_str(), runtime);
+
+        // The UnRAR SDK uses process-wide internals. Do not hold a password
+        // in the shared plaintext list unless verification succeeded and the
+        // user explicitly consented to saving it.
+        std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+        std::string decodeError;
+        for (const auto& candidate : runtime)
+        {
+            if (decode(candidate, decodeError))
+                return true;
+        }
+        for (const auto& candidate : saved.passwords)
+        {
+            if (decode(candidate, decodeError))
+            {
+                ArchivePasswordAddRuntimePassword(archiveUtf8.c_str(), candidate.c_str());
+                return true;
+            }
+        }
+
+        // A smaller caller-provided memory bound cannot be fixed by asking
+        // for another password. Preserve this hard limit and never show UI.
+        if (decodeError.find("exceeds memory limit") != std::string::npos)
+        {
+            error = decodeError;
+            return false;
+        }
+        if (ArchivePasswordIsArchiveCancelled(archiveUtf8.c_str()))
+        {
+            error = "Password prompt already cancelled for archive";
+            return false;
+        }
+        if (!ArchivePasswordGetPromptAllowedForCurrentThread())
+        {
+            error = decodeError.empty() ? "No valid saved RAR password and prompting disabled" : decodeError;
+            return false;
+        }
+
+        char supplied[256]{};
+        bool save = false;
+        if (!ArchivePasswordPromptUser(archiveUtf8.c_str(), nullptr, supplied, sizeof(supplied), &save))
+        {
+            SecureZeroMemory(supplied, sizeof(supplied));
+            error = "Password prompt cancelled";
+            return false;
+        }
+
+        std::string candidate(supplied);
+        SecureZeroMemory(supplied, sizeof(supplied));
+        const bool decoded = !candidate.empty() && decode(candidate, decodeError);
+        if (decoded)
+        {
+            ArchivePasswordAddRuntimePassword(archiveUtf8.c_str(), candidate.c_str());
+            ArchivePasswordNotifyAccepted(archiveUtf8.c_str());
+            if (save)
+            {
+                std::string saveError;
+                if (!ArchivePasswordAppendIfMissing(candidate.c_str(), saveError))
+                    DebugLogWrite("WARN", "RAR", "VERIFIED_PASSWORD_SAVE_FAIL", "index=%u | reason=%s", static_cast<unsigned>(index), saveError.c_str());
+            }
+        }
+        if (!candidate.empty())
+            SecureZeroMemory(candidate.data(), candidate.size());
+        if (!decoded)
+        {
+            error = "Encrypted RAR password did not decode selected entry: " + decodeError;
+            return false;
+        }
+        DebugLogWrite("INFO", "RAR", "NATIVE_ENCRYPTED_PROMPT_DECODE_OK", "index=%u | saved=%d", static_cast<unsigned>(index), save ? 1 : 0);
+        return true;
+    }
 }
 
 bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error)
@@ -353,32 +451,11 @@ bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t i
         return false;
     }
 
-    ArchivePasswordList passwordList;
-    if (!ArchivePasswordLoadList(passwordList, error))
-        return false;
-
-    if (passwordList.passwords.empty())
-    {
-        error = "No saved RAR passwords are available";
-        return false;
-    }
-
-    // UnRAR uses process-wide internal state, so serialize its fallback calls.
-    std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
-
-    std::string candidateError;
-    for (const std::string& password : passwordList.passwords)
-    {
-        if (NativeRarTryOnePassword(archivePath, index, outputPath, password, candidateError))
+    return NativeRarDecodeWithPasswords(archivePath, index,
+        [archivePath, index, outputPath](const std::string& password, std::string& candidateError)
         {
-            DebugLogWrite("INFO", "RAR", "NATIVE_ENCRYPTED_FALLBACK_OK", "index=%u | password_candidates=%zu", static_cast<unsigned>(index), passwordList.passwords.size());
-            return true;
-        }
-    }
-
-    error = "Native encrypted RAR extraction failed: " + candidateError;
-    DebugLogWrite("WARN", "RAR", "NATIVE_ENCRYPTED_FALLBACK_FAIL", "index=%u | candidates=%zu | error=%s", static_cast<unsigned>(index), passwordList.passwords.size(), error.c_str());
-    return false;
+            return NativeRarTryOnePassword(archivePath, index, outputPath, password, candidateError);
+        }, error);
 }
 
 bool RarNativeExtractEncryptedEntryToMemory(const wchar_t* archivePath, uint32_t index, size_t maxBytes, std::vector<unsigned char>& data, std::string& error)
@@ -391,32 +468,11 @@ bool RarNativeExtractEncryptedEntryToMemory(const wchar_t* archivePath, uint32_t
         return false;
     }
 
-    ArchivePasswordList passwordList;
-    if (!ArchivePasswordLoadList(passwordList, error))
-        return false;
-
-    if (passwordList.passwords.empty())
-    {
-        error = "No saved RAR passwords are available";
-        return false;
-    }
-
-    std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
-
-    std::string candidateError;
-    for (const std::string& password : passwordList.passwords)
-    {
-        if (NativeRarTryOnePasswordToMemory(archivePath, index, maxBytes, password, data, candidateError))
+    return NativeRarDecodeWithPasswords(archivePath, index,
+        [archivePath, index, maxBytes, &data](const std::string& password, std::string& candidateError)
         {
-            DebugLogWrite("INFO", "RAR", "NATIVE_ENCRYPTED_MEMORY_OK", "index=%u | bytes=%zu", static_cast<unsigned>(index), data.size());
-            return true;
-        }
-    }
-
-    data.clear();
-    error = "Native encrypted RAR memory decode failed: " + candidateError;
-    DebugLogWrite("WARN", "RAR", "NATIVE_ENCRYPTED_MEMORY_FAIL", "index=%u | candidates=%zu | error=%s", static_cast<unsigned>(index), passwordList.passwords.size(), error.c_str());
-    return false;
+            return NativeRarTryOnePasswordToMemory(archivePath, index, maxBytes, password, data, candidateError);
+        }, error);
 }
 
 

@@ -5,9 +5,15 @@ under the disposable install. The installed player's profile is never copied.
 Uses pywinauto on DEV, without requiring interaction with a personal library.
 
 Run: py -3.13 mediamonkey_archive_stream/test_native_portable_codecs.py
+For actual encrypted host dialogs, set AST_MM5_QA_AES=accept|cancel|wrong
+and AST_MM5_QA_ARCHIVE=7z|rar (default 7z). Enable GUI seek acceptance with
+AST_MM5_VERIFY_GUI_SEEK=1. The only archive UI picker override is test-only.
+No persistent personal player database or password file is read or changed.
 """
 import hashlib
 import os
+import secrets
+import threading
 import re
 import shutil
 import subprocess
@@ -25,6 +31,10 @@ os.add_dll_directory(str(AUTOMATION / "pywin32_system32"))
 sys.path[:0] = [str(AUTOMATION), str(AUTOMATION / "win32"),
                 str(AUTOMATION / "win32" / "lib"), str(AUTOMATION / "Pythonwin")]
 from pywinauto import Desktop, mouse
+import win32gui
+import win32process
+import win32api
+import win32con
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "mediamonkey_archive_stream" / "Release" / "ArchiveStreamPlayer-MediaMonkey5-Native.mmip"
@@ -39,6 +49,15 @@ SOURCES = (
     ("M4A", "06.M4AFile.m4a"),
     ("AAC", "07.AACFile.aac"),
 )
+AES_MODE = os.environ.get("AST_MM5_QA_AES", "").lower()
+ARCHIVE_KIND = os.environ.get("AST_MM5_QA_ARCHIVE", "7z").lower()
+if ARCHIVE_KIND not in ("7z", "rar"):
+    raise SystemExit("AST_MM5_QA_ARCHIVE must be 7z or rar")
+if AES_MODE:
+    if AES_MODE not in ("accept", "cancel", "wrong"):
+        raise SystemExit("AST_MM5_QA_AES must be accept, cancel, or wrong")
+    SOURCES = (("AAC", "07.AACFile.aac"),)
+
 if os.environ.get("AST_MM5_QA_ONLY"):
     keep = {x.strip().upper() for x in os.environ["AST_MM5_QA_ONLY"].split(",")}
     SOURCES = tuple(x for x in SOURCES if x[0] in keep)
@@ -130,6 +149,50 @@ def start_track(window, label):
     controls[0].double_click_input()
     print("SELECTED_CODEC", label, "row", str(controls[0].rectangle()), flush=True)
 
+def handle_qa_password_windows(workspace, password, mode, events, stop):
+    """Operate only credential dialogs owned by this throwaway archive bridge."""
+    while not stop.is_set():
+        windows = []
+        def collect(hwnd, unused):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if title in ("Archive Stream Player - Password Required", "Archive Stream Player"):
+                    windows.append((hwnd, title))
+        try:
+            win32gui.EnumWindows(collect, None)
+            for hwnd, title in windows:
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    process_handle = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid)
+                    try:
+                        exe = Path(win32process.GetModuleFileNameEx(process_handle, 0))
+                    finally:
+                        process_handle.Close()
+                    if exe.name.lower() != "archive_player_bridge.exe" or not str(exe).lower().startswith(str(workspace).lower()):
+                        continue
+                    dialog = Desktop(backend="win32").window(handle=hwnd)
+                    if title == "Archive Stream Player - Password Required":
+                        if mode != "cancel":
+                            edits = [c for c in dialog.descendants() if c.class_name() == "Edit"]
+                            if not edits:
+                                continue
+                            edits[-1].set_edit_text(password if mode == "accept" else password + "-INVALID")
+                            next(c for c in dialog.descendants() if c.window_text() == "OK").click()
+                            events.append("PASSWORD_ENTERED" if mode == "accept" else "PASSWORD_WRONG_ENTERED")
+                        else:
+                            next(c for c in dialog.descendants() if c.window_text() in ("Cancel", "&Cancel")).click()
+                            events.append("PASSWORD_CANCELED")
+                    elif title == "Archive Stream Player":
+                        no = next((c for c in dialog.descendants() if c.window_text() in ("No", "&No")), None)
+                        if no:
+                            no.click()
+                            events.append("SAVE_DECLINED")
+                except Exception as exc:
+                    events.append("PROMPT_HANDLER_RETRY_" + type(exc).__name__)
+        except Exception as exc:
+            events.append("PROMPT_ENUM_RETRY_" + type(exc).__name__)
+        stop.wait(.15)
+
 def main():
     for required in [PACKAGE, INSTALLED / "MediaMonkey.exe"] + [AUDIO / name for _,name in SOURCES]:
         if not required.is_file():
@@ -147,6 +210,11 @@ def main():
     workspace = Path(tempfile.mkdtemp(prefix="AST-MM5-Portable-",dir=r"D:\Temp"))
     exe_dir = workspace / "MediaMonkey"
     process = None
+    ui_stop = threading.Event()
+    ui_thread = None
+    password_events = []
+    synthetic_password = ""
+    isolated_password_list = None
     try:
         exe_dir.mkdir()
         copied=subprocess.run(["robocopy",str(INSTALLED),str(exe_dir),
@@ -165,9 +233,38 @@ def main():
         print("MM5_PORTABLE_PLAYER_AND_PLUGIN_STAGED",workspace,flush=True)
 
         archive_path=workspace/"host-7-codec.zip"
-        with zipfile.ZipFile(archive_path,"w",zipfile.ZIP_STORED) as archive:
-            for key,source in SOURCES:
-                archive.write(AUDIO / source, f"AST_MM5_QA_{key}.{source.rsplit('.',1)[-1].lower()}")
+        if AES_MODE:
+            synthetic_password="MM5HostQA-"+secrets.token_hex(18)
+            isolated_password_list=workspace/"test-empty-password-list.txt"
+            isolated_password_list.write_bytes(b"")
+            source=workspace/"AST_MM5_QA_AAC.aac"
+            shutil.copyfile(AUDIO/"07.AACFile.aac", source)
+            archive_path=workspace/("host-encrypted-nonsolid."+ARCHIVE_KIND)
+            if ARCHIVE_KIND == "7z":
+                binary=Path(r"C:\Program Files\7-Zip\7z.exe")
+                arguments=[str(binary),"a","-t7z","-m0=LZMA2","-ms=off",
+                           "-mhe=off","-p"+synthetic_password,str(archive_path),str(source.name)]
+            else:
+                binary=Path(r"C:\Program Files\WinRAR\Rar.exe")
+                arguments=[str(binary),"a","-ma5","-m0","-s-","-ep",
+                           "-p"+synthetic_password,str(archive_path),str(source.name)]
+            if not binary.is_file():
+                raise AssertionError("Missing DEV synthetic encrypted fixture builder")
+            build=subprocess.run(arguments,cwd=workspace,capture_output=True,text=True,timeout=70)
+            if build.returncode != 0 or not archive_path.is_file():
+                raise AssertionError("Failed to create synthetic encrypted "+ARCHIVE_KIND+": "+build.stderr[-200:])
+            print("MM5_SYNTHETIC_AES_"+ARCHIVE_KIND.upper()+"_TEST_FIXTURE_READY",flush=True)
+            launcher=addons/"launch-mediamonkey.ps1"
+            power=launcher.read_text(encoding="utf-8-sig")
+            match="$start.Arguments = '--archive \"' + $Archive + '\" --lifetime 7200'"
+            if match not in power:
+                raise AssertionError("MM5 launcher changed; cannot safely isolate synthetic password list")
+            isolated_args=match + " + ' --password-list \""+str(isolated_password_list)+"\" --prompt-password 1 --memory-mb 16 --cache-limit-mb 0'"
+            launcher.write_text(power.replace(match,isolated_args,1),encoding="utf-8")
+        else:
+            with zipfile.ZipFile(archive_path,"w",zipfile.ZIP_STORED) as archive:
+                for key,source in SOURCES:
+                    archive.write(AUDIO / source, f"AST_MM5_QA_{key}.{source.rsplit('.',1)[-1].lower()}")
 
         # Exact archive choice is injected only into this throwaway QA copy;
         # all production archive bridge + player queue code remains unchanged.
@@ -202,6 +299,10 @@ def main():
         env.update(APPDATA=str(workspace/"Roaming"), LOCALAPPDATA=str(workspace/"Local"),
                    TEMP=str(workspace/"Temp"), TMP=str(workspace/"Temp"),
                    ARCHIVE_STREAM_ADAPTER_DEBUG="1")
+        if AES_MODE:
+            ui_thread=threading.Thread(target=handle_qa_password_windows,
+                      args=(workspace,synthetic_password,AES_MODE,password_events,ui_stop),daemon=True)
+            ui_thread.start()
         process=subprocess.Popen([str(exe_dir/"MediaMonkey.exe")],cwd=str(exe_dir),env=env)
         window=wait_for(lambda: player_window(process.pid),90,"portable MediaMonkey UI")
         dismiss_first_run_wizard(window)
@@ -220,14 +321,14 @@ def main():
             return None
         playlist,labels,lines=wait_for(ready,65,"native addon bridge playlist")
         wait_for(lambda: (workspace/"qa-queued.txt").is_file(),35,"native player queue acknowledgement")
-        print("MM5_SEVEN_CODEC_NATIVE_QUEUE_ACK_PASS", (workspace/"qa-queued.txt").read_text(),flush=True)
+        print("MM5_SELECTED_CODEC_NATIVE_QUEUE_ACK_PASS", (workspace/"qa-queued.txt").read_text(),flush=True)
         window.set_focus()
         window.maximize()
         playlist_out=portable / "mediamonkey.m3u8"
         wait_for(lambda: playlist_out.is_file() and all(label in
                          playlist_out.read_text(encoding="utf-8-sig",errors="replace")
                          for label in labels),25,"seven persisted portable playlist titles")
-        print("MM5_SEVEN_CODEC_PORTABLE_QUEUE_TITLES_PASS",flush=True)
+        print("MM5_SELECTED_CODEC_PORTABLE_QUEUE_TITLES_PASS",flush=True)
         view=doc(window)
         visible=[label for label in labels if label in view]
         print("MM5_VISIBLE_QUEUE_TITLES",visible,flush=True)
@@ -238,6 +339,22 @@ def main():
         for key,label in zip((p[0] for p in SOURCES),labels):
             try:
                 start_track(window,label)
+                if AES_MODE:
+                    deadline=time.monotonic()+32
+                    while not any(event in password_events for event in ("PASSWORD_ENTERED","PASSWORD_CANCELED","PASSWORD_WRONG_ENTERED")) and time.monotonic()<deadline:
+                        time.sleep(.18)
+                    print("MM5_ENCRYPTED_PLAYER_UI_EVENTS",password_events,flush=True)
+                    if AES_MODE in ("cancel","wrong"):
+                        time.sleep(3)
+                        rejected_position=elapsed(window,label)
+                        if rejected_position > 0:
+                            raise AssertionError("Rejected password unexpectedly advanced playback")
+                        results[key]={"working":False,"rejected_position":rejected_position}
+                        print("MM5_ENCRYPTED_INVALID_CREDENTIAL_PLAYBACK_REJECTED",results[key],flush=True)
+                        continue
+                    if "PASSWORD_ENTERED" not in password_events:
+                        raise AssertionError("Encrypted playback did not display its native credential dialog")
+                    time.sleep(4)
                 before=elapsed(window,label)
                 time.sleep(4)
                 after=elapsed(window,label)
@@ -286,6 +403,21 @@ def main():
             print("MM5_BRIDGE_LOG_MISSING",flush=True)
 
         print("MM5_PORTABLE_CODEC_MATRIX",json.dumps(results),flush=True)
+        if AES_MODE:
+            if isolated_password_list.read_bytes() != b"":
+                raise AssertionError("Synthetic password was saved without user consent")
+            if "PASSWORD_ENTERED" not in password_events and AES_MODE == "accept":
+                raise AssertionError("Did not exercise encrypted host password acceptance")
+            if "PASSWORD_CANCELED" not in password_events and AES_MODE == "cancel":
+                raise AssertionError("Did not exercise encrypted host password cancellation")
+            if AES_MODE == "wrong" and "PASSWORD_WRONG_ENTERED" not in password_events:
+                raise AssertionError("Did not exercise an incorrect encrypted host password")
+            if AES_MODE in ("cancel", "wrong"):
+                if any(test.get("working") for test in results.values()):
+                    raise AssertionError("Rejected password unexpectedly decoded the test audio")
+                print("MM5_ENCRYPTED_PLAYER_PASSWORD_"+AES_MODE.upper()+"_REJECTED_NO_SAVE_PASS",flush=True)
+                return
+            print("MM5_ENCRYPTED_PLAYER_DIALOG_ENTERED_NO_PLAINTEXT_PASSWORD_SAVE",flush=True)
         if all(x.get("working") for x in results.values()):
             print("MM5_REAL_HOST_CODEC_PLAYBACK_PROGRESS_ALL_PASS",flush=True)
         else:
@@ -296,7 +428,12 @@ def main():
             if failures:
                 raise AssertionError("Real MediaMonkey GUI seek/resume failed: " + ", ".join(failures))
             print("MM5_REAL_HOST_ALL_SELECTED_CODEC_GUI_SEEK_RESUME_PASS",flush=True)
+        if AES_MODE == "accept":
+            print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_AND_SEEK_PASS",flush=True)
     finally:
+        ui_stop.set()
+        if ui_thread is not None:
+            ui_thread.join(timeout=3)
         if process and process.poll() is None:
             subprocess.run(["taskkill","/PID",str(process.pid),"/T","/F"],
                            capture_output=True,timeout=25)

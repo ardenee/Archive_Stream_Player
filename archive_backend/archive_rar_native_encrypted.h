@@ -7,7 +7,9 @@
 #include "archive_types.h"
 
 // Narrow fallback for encrypted RAR entries which libarchive cannot decode.
-// Uses the configured backend password list and the already-linked UnRAR SDK.
+// Tries validated session passwords and configured candidates, then prompts once
+// on permitted interactive threads. Save consent is honored only after native
+// UnRAR has verified the entry. No extra runtime archive DLL is required.
 // Only the selected entry is written, to a caller-owned destination path.
 bool RarNativeExtractEncryptedEntryToFile(const wchar_t* archivePath, uint32_t index, const wchar_t* outputPath, std::string& error);
 // UnRAR RAR_TEST delivers decrypted bytes through UCM_PROCESSDATA, without
