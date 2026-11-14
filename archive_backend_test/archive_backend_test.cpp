@@ -1201,6 +1201,44 @@ int wmain(int argc, wchar_t* argv[])
     if (argc >= 2 && _wcsicmp(argv[1], L"pwlistselftest") == 0)
         return RunUnicodePasswordListSelftest();
 
+    // Test-only command for independently running 32-bit and 64-bit writers.
+    // All values must be synthetic; never put a real password on a CLI.
+    if (argc >= 2 && _wcsicmp(argv[1], L"pwappendtest") == 0)
+    {
+        if (argc != 4 && argc != 5)
+            return 1;
+        const auto utf8 = [](const wchar_t* source, std::string& output)
+        {
+            const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, source, -1, nullptr, 0, nullptr, nullptr);
+            if (needed <= 1)
+                return false;
+            output.resize(static_cast<size_t>(needed));
+            return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, source, -1, output.data(), needed, nullptr, nullptr) == needed;
+        };
+        std::string path;
+        std::string syntheticPassword;
+        if (!utf8(argv[2], path) || !utf8(argv[3], syntheticPassword))
+            return 1;
+        ArchivePasswordSetListPath(path.c_str());
+        if (argc == 5)
+        {
+            // The Python harness releases all child processes together.
+            for (int i = 0; i < 2000 && GetFileAttributesW(argv[4]) == INVALID_FILE_ATTRIBUTES; ++i)
+                Sleep(10);
+            if (GetFileAttributesW(argv[4]) == INVALID_FILE_ATTRIBUTES)
+                return 1;
+        }
+        std::string error;
+        if (!ArchivePasswordAppendIfMissing(syntheticPassword.c_str(), error))
+        {
+            std::printf("PASSWORD_APPEND_TEST_FAIL: %s\n", error.c_str());
+            return 1;
+        }
+        SecureZeroMemory(syntheticPassword.data(), syntheticPassword.size());
+        std::printf("PASSWORD_APPEND_TEST_PASS\n");
+        return 0;
+    }
+
     if (argc >= 2 && _wcsicmp(argv[1], L"pwparallelprompt") == 0)
     {
         if (argc != 5)

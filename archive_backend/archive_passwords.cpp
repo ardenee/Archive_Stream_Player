@@ -8,7 +8,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <fstream>
 #include <filesystem>
 #include <mutex>
@@ -118,6 +120,76 @@ static std::wstring ArchivePasswordPathToWide(const char* path)
     result.pop_back();
     return result;
 }
+
+// A process-local std::mutex is insufficient when Winamp, foobar2000,
+// AIMP and bridge processes share the same plaintext keeps.txt. Use a
+// Windows named mutex scoped to the normalized absolute password-list path.
+// No additional lock file is written and abandoned mutexes recover on exit.
+class ArchivePasswordCrossProcessSaveLock
+{
+public:
+    ~ArchivePasswordCrossProcessSaveLock()
+    {
+        if (acquired_)
+            ReleaseMutex(handle_);
+        if (handle_)
+            CloseHandle(handle_);
+    }
+
+    bool Acquire(const std::wstring& path, std::string& error)
+    {
+        const DWORD required = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+        if (required == 0 || required > 32768)
+        {
+            error = "Cannot normalize password list path for write synchronization";
+            return false;
+        }
+
+        std::wstring normalized(static_cast<size_t>(required), L'\0');
+        const DWORD written = GetFullPathNameW(path.c_str(), required, normalized.data(), nullptr);
+        if (written == 0 || written >= required)
+        {
+            error = "Cannot resolve password list path for write synchronization";
+            return false;
+        }
+        normalized.resize(written);
+        CharLowerBuffW(normalized.data(), written);
+
+        // Stable over process bitness and independent of which user profile
+        // supplied the path. Hash Unicode UTF-16 code units as two bytes.
+        uint64_t hash = 14695981039346656037ULL;
+        for (wchar_t c : normalized)
+        {
+            const uint16_t unit = static_cast<uint16_t>(c);
+            hash = (hash ^ (unit & 0xFF)) * 1099511628211ULL;
+            hash = (hash ^ (unit >> 8)) * 1099511628211ULL;
+        }
+        wchar_t name[96]{};
+        if (swprintf_s(name, L"Global\\ArchiveStreamPlayer.PasswordList.%016llX", static_cast<unsigned long long>(hash)) < 0)
+        {
+            error = "Cannot format password-list synchronization key";
+            return false;
+        }
+        handle_ = CreateMutexW(nullptr, FALSE, name);
+        if (!handle_)
+        {
+            error = "Cannot create cross-process password-list mutex";
+            return false;
+        }
+        const DWORD status = WaitForSingleObject(handle_, 15000);
+        if (status != WAIT_OBJECT_0 && status != WAIT_ABANDONED)
+        {
+            error = status == WAIT_TIMEOUT ? "Timed out waiting for another player's password save" : "Password-list synchronization wait failed";
+            return false;
+        }
+        acquired_ = true;
+        return true;
+    }
+
+private:
+    HANDLE handle_ = nullptr;
+    bool acquired_ = false;
+};
 
 void ArchivePasswordSetListPath(const char* passwordListPath)
 {
@@ -233,19 +305,6 @@ bool ArchivePasswordAppendIfMissing(const char* password, std::string& error)
     }
 
     std::lock_guard<std::mutex> guard(g_archivePasswordSaveMutex);
-    ArchivePasswordList existing;
-
-    if (!ArchivePasswordLoadList(existing, error))
-    {
-        DebugLogWrite("ERROR", "PASSWORD", "SAVE_FAIL", "reason=load_existing_failed | error=%s", error.c_str());
-        return false;
-    }
-
-    if (ArchivePasswordContains(existing.passwords, password))
-    {
-        return true;
-    }
-
     const char* path = ArchivePasswordGetListPath();
 
     if (!path || !path[0])
@@ -261,6 +320,25 @@ bool ArchivePasswordAppendIfMissing(const char* password, std::string& error)
         error = "Password list path cannot be decoded";
         return false;
     }
+
+    // Hold across LoadList, duplicate detection and the final append.
+    // Lock order: process-local save mutex, then the Windows named mutex.
+    ArchivePasswordCrossProcessSaveLock crossProcessLock;
+    if (!crossProcessLock.Acquire(widePath, error))
+    {
+        DebugLogWrite("ERROR", "PASSWORD", "SAVE_FAIL", "reason=cross_process_lock_failed | error=%s", error.c_str());
+        return false;
+    }
+
+    ArchivePasswordList existing;
+    if (!ArchivePasswordLoadList(existing, error))
+    {
+        DebugLogWrite("ERROR", "PASSWORD", "SAVE_FAIL", "reason=load_existing_failed | error=%s", error.c_str());
+        return false;
+    }
+    if (ArchivePasswordContains(existing.passwords, password))
+        return true;
+
     bool needsLeadingNewline = false;
 
     FILE* checkFile = nullptr;

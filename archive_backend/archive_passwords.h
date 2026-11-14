@@ -6,9 +6,9 @@
 // -----------------------------------------------------------------------------
 // ArchivePasswordList
 //
-// Shared password list loaded from keep.txt.
+// Shared password list loaded from keeps.txt.
 //
-// The keep.txt file is deliberately plain and global: one password per line,
+// The keeps.txt file is deliberately plain and global: one password per line,
 // no archive names, no CRCs, no hashes. This matches the intended plugin design:
 // try all saved passwords quickly before asking the UI layer for a new one.
 // -----------------------------------------------------------------------------
@@ -24,7 +24,7 @@ struct ArchivePasswordList
 //
 // The backend never shows UI directly. in_archive_stream.dll registers a
 // callback that can prompt the user, return a password, and say whether the
-// password should be saved to keep.txt.
+// password should be saved to keeps.txt.
 //
 // Return true when the user supplied a password.
 // Return false when the user cancelled.
@@ -54,7 +54,7 @@ void ArchivePasswordSetListPath(const char* passwordListPath);
 // -----------------------------------------------------------------------------
 // ArchivePasswordGetListPath
 //
-// Returns the active keep.txt path, building the default plugin-data path when
+// Returns the active keeps.txt path, building the default plugin-data path when
 // no explicit path has been set.
 // -----------------------------------------------------------------------------
 const char* ArchivePasswordGetListPath();
@@ -62,9 +62,9 @@ const char* ArchivePasswordGetListPath();
 // -----------------------------------------------------------------------------
 // ArchivePasswordLoadList
 //
-// Loads keep.txt into memory.
+// Loads keeps.txt into memory.
 //
-// Missing keep.txt is not an error; it simply means there are no saved
+// Missing keeps.txt is not an error; it simply means there are no saved
 // passwords yet. Empty lines are ignored. Duplicate passwords are collapsed.
 // -----------------------------------------------------------------------------
 bool ArchivePasswordLoadList(ArchivePasswordList& outList, std::string& error);
@@ -72,7 +72,9 @@ bool ArchivePasswordLoadList(ArchivePasswordList& outList, std::string& error);
 // -----------------------------------------------------------------------------
 // ArchivePasswordAppendIfMissing
 //
-// Appends a password to keep.txt only if it is not already present.
+// Appends a password to keeps.txt only if it is not already present.
+// A normalized-path Windows named mutex serializes saves across player
+// processes, including different bitnesses; failure to acquire fails closed.
 //
 // This will be used by the UI prompt stage after the user enters a working
 // password and chooses to save it.
