@@ -120,10 +120,11 @@ namespace MusicBeePlugin
             }
         }
 
-        private static string[] PrepareMusicBeeOggTracks(string[] urls, string sessionFolder)
+        private static string[] PrepareMusicBeeTracks(string[] urls, string sessionFolder)
         {
-            // MusicBee 3.7 plays OGG/Vorbis from disk but rejects the equivalent
-            // archive-backed HTTP OGG entry. Keep streamable MP3/other URLs intact.
+            // MusicBee 3.7 rejects some codec containers over HTTP despite accepting
+            // their bytes from local files. Keep MP3/FLAC/AAC archive HTTP URLs intact.
+            // The host queue API accepts paths/URLs, not an in-memory media stream.
             int limitMb = 2048;
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
             {
@@ -143,12 +144,13 @@ namespace MusicBeePlugin
                 if (!Uri.TryCreate(urls[index], UriKind.Absolute, out url) ||
                     url.Scheme != Uri.UriSchemeHttp || !url.IsLoopback)
                     throw new IOException("Archive Stream returned an unexpected media URL.");
-                if (!url.AbsolutePath.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase))
+                string extension = Path.GetExtension(url.AbsolutePath).ToLowerInvariant();
+                if (extension != ".ogg" && extension != ".wav" && extension != ".wma" && extension != ".m4a")
                     continue;
                 if (remaining == 0)
-                    throw new IOException("MusicBee 3.7 needs temporary disk materialization for archive OGG tracks. Enable a nonzero managed-cache limit in Archive Stream settings.");
+                    throw new IOException("MusicBee needs temporary local media for this archive codec. Enable a nonzero managed-cache limit in Archive Stream settings.");
 
-                string target = Path.Combine(sessionFolder, "archive-entry-" + index.ToString("D6") + ".ogg");
+                string target = Path.Combine(sessionFolder, "archive-entry-" + index.ToString("D6") + extension);
                 string partial = target + ".partial";
                 var request = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
                 request.Method = "GET";
@@ -162,7 +164,7 @@ namespace MusicBeePlugin
                 {
                     if (response.StatusCode != System.Net.HttpStatusCode.OK ||
                         response.ContentLength <= 0 || response.ContentLength > remaining)
-                        throw new IOException("Archive OGG entry exceeds MusicBee's configured temporary cache budget or returned an invalid HTTP response.");
+                        throw new IOException("Archive media entry exceeds MusicBee's configured temporary cache budget or returned an invalid HTTP response.");
                     using (var stream = response.GetResponseStream())
                     using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                     {
@@ -172,17 +174,17 @@ namespace MusicBeePlugin
                         {
                             written += count;
                             if (written > response.ContentLength)
-                                throw new IOException("Archive OGG download exceeded its declared size.");
+                                throw new IOException("Archive media download exceeded its declared size.");
                             output.Write(buffer, 0, count);
                         }
                     }
                     if (written != response.ContentLength)
-                        throw new IOException("Archive OGG download ended prematurely.");
+                        throw new IOException("Archive media download ended prematurely.");
                 }
                 File.Move(partial, target);
                 remaining -= written;
                 prepared[index] = target;
-                Trace("OGG_LOCAL_READY index=" + index + " bytes=" + written);
+                Trace(extension == ".ogg" ? "OGG_LOCAL_READY index=" + index + " bytes=" + written : "LOCAL_CODEC_READY index=" + index + " codec=" + extension + " bytes=" + written);
             }
             return prepared;
         }
@@ -236,7 +238,7 @@ namespace MusicBeePlugin
                     .ToArray();
                 if (transportUrls.Length == 0)
                     throw new IOException("No audio entries were found in the selected archive.");
-                string[] tracks = PrepareMusicBeeOggTracks(transportUrls, folder);
+                string[] tracks = PrepareMusicBeeTracks(transportUrls, folder);
                 lock (stateLock)
                 {
                     processes.Add(process);
