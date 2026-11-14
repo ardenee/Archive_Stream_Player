@@ -311,6 +311,8 @@ Use `launch-archive.ps1 -Player VLC`. VLC receives the archive's per-track URLs 
 
 A real DEV VLC headless run with dummy audio output successfully consumed the two-track ZIP playlist, exited normally, and the bridge recorded **two live direct-stream requests**. HTTP seeking and byte parity passed in independent tests; audible device output was intentionally bypassed.
 
+**Real VLC decoded PCM parity (Win32/x64 bridge):** archive_player_bridge/test_vlc_pcm_parity.py synthesizes a six-second mono 44.1 kHz 16-bit WAV with three distinct sample-value segments. Real VLC decodes the archive-backed HTTP stream into a disposable audio file; both bridge architectures produced exactly 264,600 frames and source-identical PCM SHA-256, with direct streaming and no RAM/cache fallback. This certifies decoder-to-output PCM byte parity in the controlled WAV case, **not speakers**. An exploratory VLC --start-time=3 request did not reliably begin at the corresponding sample; real host seek remains unverified.
+
 ### Windows Media Player Legacy 12 — ASX/HTTP playback
 
 Use `launch-archive.ps1 -Player WMP`. The launcher passes a Windows Media Player compatible **ASX playlist** of localhost per-track audio URLs. **This is not a decoder/input-source plugin** for WMP.
