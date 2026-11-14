@@ -8,6 +8,7 @@ param(
     [string]$TitleTemplate = '',
     [string]$PasswordList = '',
     [string]$PlayerPath = '',
+    [switch]$UseHttpBridge,
     [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
@@ -21,10 +22,6 @@ if (!$Archive -or !(Test-Path -LiteralPath $Archive -PathType Leaf)) {
     throw "Archive not found: $Archive"
 }
 $Archive = (Resolve-Path -LiteralPath $Archive).ProviderPath
-$bridge = Join-Path $PSScriptRoot 'x64\Release\archive_player_bridge.exe'
-if (!(Test-Path $bridge)) {
-    throw "Bridge not built; compile archive_player_bridge.vcxproj Release|x64."
-}
 $hosts = @{
     VLC = @('C:\Program Files\VideoLAN\VLC\vlc.exe','C:\Program Files (x86)\VideoLAN\VLC\vlc.exe')
     WMP = @('C:\Program Files\Windows Media Player\wmplayer.exe','C:\Program Files (x86)\Windows Media Player\wmplayer.exe')
@@ -44,6 +41,38 @@ else {
 }
 if (!$NoLaunch -and !$playerExe) {
     throw "$Player is not installed at a supported path. Install it or update the script."
+}
+
+# XMPlay's official XMPARC adapter is already a native archive input plugin.
+# Launch the original compressed file directly, not a temporary HTTP playlist.
+# Native XMPARC returns the requested decoded bytes to XMPlay-owned memory;
+# users explicitly select -UseHttpBridge when they need on-demand HTTP reads.
+if ($Player -eq 'XMPlay' -and !$UseHttpBridge) {
+    if (!$playerExe) {
+        throw 'Cannot locate XMPlay. Supply -PlayerPath to verify its native XMPARC installation.'
+    }
+    $playerFolder = Split-Path -Path $playerExe -Parent
+    $native = @(
+        (Join-Path $playerFolder 'xmp-archive-stream.dll'),
+        (Join-Path $playerFolder 'Plugins\xmp-archive-stream.dll')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (!$native) {
+        throw 'XMPlay native Archive Stream XMPARC plugin is not installed beside the player. Install xmp-archive-stream.dll, or use -UseHttpBridge explicitly.'
+    }
+    Write-Host "NATIVE_ARCHIVE_READY player=XMPlay archive=$Archive plugin=$native"
+    if ($NoLaunch) {
+        Write-Host 'DRY_RUN_PASS player=XMPlay mode=native_xmparc http=0'
+        return
+    }
+    $nativeProcess = Start-Process -FilePath $playerExe -WorkingDirectory $playerFolder -ArgumentList @('-play', ('"' + $Archive + '"')) -PassThru
+    Write-Host "XMPLAY_NATIVE_PLAYER_PID=$($nativeProcess.Id)"
+    Write-Host 'XMPlay native archive playback requested; no HTTP bridge was started.'
+    return
+}
+
+$bridge = Join-Path $PSScriptRoot 'x64\Release\archive_player_bridge.exe'
+if (!(Test-Path $bridge)) {
+    throw 'Bridge not built; compile archive_player_bridge.vcxproj Release|x64.'
 }
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $bridge
@@ -95,7 +124,7 @@ try {
             Start-Process -FilePath $playerExe -WorkingDirectory (Split-Path -Path $playerExe -Parent) -ArgumentList @('/ENQPLAY', ('"' + $playlist + '"'))
         }
         elseif ($Player -eq 'XMPlay') {
-            # XMPARC only returns decoded memory blocks; use native M3U8/HTTP playback for live streaming.
+            # Explicit -UseHttpBridge override for large files or compatibility testing.
             Start-Process -FilePath $playerExe -WorkingDirectory (Split-Path -Path $playerExe -Parent) -ArgumentList @('-play', ('"' + $playlist + '"'))
         }
         else {
