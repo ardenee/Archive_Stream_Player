@@ -374,16 +374,25 @@ namespace
         std::vector<std::string> runtime;
         ArchivePasswordGetRuntimePasswords(archiveUtf8.c_str(), runtime);
 
-        // The UnRAR SDK uses process-wide internals. Do not hold a password
-        // in the shared plaintext list unless verification succeeded and the
-        // user explicitly consented to saving it.
-        std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+        // Serialize UnRAR's process-wide decoder only while it is in use.
+        // In particular, never hold this mutex while a Windows password UI
+        // waits for input: another archive's decode must not be blocked.
         std::string decodeError;
+        const auto tryDecode = [&](const std::string& candidate)
+        {
+            std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+            return decode(candidate, decodeError);
+        };
         for (const auto& candidate : runtime)
         {
-            if (decode(candidate, decodeError))
+            if (tryDecode(candidate))
             {
-                if (g_nativeRarPendingHeaderSave.erase(archiveUtf8))
+                bool saveAfterVerification = false;
+                {
+                    std::lock_guard<std::mutex> guard(g_nativeRarExtractionMutex);
+                    saveAfterVerification = g_nativeRarPendingHeaderSave.erase(archiveUtf8) != 0;
+                }
+                if (saveAfterVerification)
                 {
                     std::string saveError;
                     if (!ArchivePasswordAppendIfMissing(candidate.c_str(), saveError))
@@ -395,7 +404,7 @@ namespace
         }
         for (const auto& candidate : saved.passwords)
         {
-            if (decode(candidate, decodeError))
+            if (tryDecode(candidate))
             {
                 ArchivePasswordAddRuntimePassword(archiveUtf8.c_str(), candidate.c_str());
                 return true;
@@ -431,7 +440,7 @@ namespace
 
         std::string candidate(supplied);
         SecureZeroMemory(supplied, sizeof(supplied));
-        const bool decoded = !candidate.empty() && decode(candidate, decodeError);
+        const bool decoded = !candidate.empty() && tryDecode(candidate);
         if (decoded)
         {
             ArchivePasswordAddRuntimePassword(archiveUtf8.c_str(), candidate.c_str());

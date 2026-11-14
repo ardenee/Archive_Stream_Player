@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <fstream>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,12 @@ struct ArchiveRuntimePasswordEntry
     std::vector<std::string> passwords;
 };
 
+// These vectors are read and updated by independent HTTP playback threads.
+// Their lock must never be held across a password dialog or UnRAR decoding.
+static std::mutex g_archivePasswordRuntimeMutex;
+// Serialize the read/check/append sequence for plaintext passwords within a
+// process, so two successful decodes cannot append the same key twice.
+static std::mutex g_archivePasswordSaveMutex;
 static std::vector<ArchiveRuntimePasswordEntry> g_archiveRuntimePasswords;
 static std::vector<std::string> g_archivePasswordCancelledArchives;
 static volatile LONG g_archivePasswordPromptActive = 0;
@@ -225,6 +232,7 @@ bool ArchivePasswordAppendIfMissing(const char* password, std::string& error)
         return false;
     }
 
+    std::lock_guard<std::mutex> guard(g_archivePasswordSaveMutex);
     ArchivePasswordList existing;
 
     if (!ArchivePasswordLoadList(existing, error))
@@ -387,6 +395,7 @@ void ArchivePasswordAddRuntimePassword(const char* archivePath, const char* pass
         return;
     }
 
+    std::lock_guard<std::mutex> guard(g_archivePasswordRuntimeMutex);
     ArchiveRuntimePasswordEntry* entry = ArchivePasswordFindRuntimeEntry(archivePath);
 
     if (!entry)
@@ -407,6 +416,7 @@ void ArchivePasswordGetRuntimePasswords(const char* archivePath, std::vector<std
 {
     outPasswords.clear();
 
+    std::lock_guard<std::mutex> guard(g_archivePasswordRuntimeMutex);
     ArchiveRuntimePasswordEntry* entry = ArchivePasswordFindRuntimeEntry(archivePath);
 
     if (!entry)
@@ -424,6 +434,7 @@ void ArchivePasswordMarkArchiveCancelled(const char* archivePath)
         return;
     }
 
+    std::lock_guard<std::mutex> guard(g_archivePasswordRuntimeMutex);
     if (!ArchivePasswordContains(g_archivePasswordCancelledArchives, archivePath))
     {
         g_archivePasswordCancelledArchives.push_back(archivePath);
@@ -437,6 +448,7 @@ bool ArchivePasswordIsArchiveCancelled(const char* archivePath)
         return false;
     }
 
+    std::lock_guard<std::mutex> guard(g_archivePasswordRuntimeMutex);
     return ArchivePasswordContains(g_archivePasswordCancelledArchives, archivePath);
 }
 
@@ -447,6 +459,7 @@ void ArchivePasswordClearArchiveCancelled(const char* archivePath)
         return;
     }
 
+    std::lock_guard<std::mutex> guard(g_archivePasswordRuntimeMutex);
     g_archivePasswordCancelledArchives.erase(
         std::remove_if(
             g_archivePasswordCancelledArchives.begin(),

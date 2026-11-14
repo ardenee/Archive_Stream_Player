@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <thread>
 #include <chrono>
@@ -1056,6 +1057,45 @@ static int RunUnicodePasswordListSelftest()
             if (!ArchivePasswordLoadList(list, error) || list.passwords.size() != 1 ||
                 list.passwords[0] != "archive-stream-test-password")
                 failures++;
+
+            // Multiple hosts can finish decoding at the same time. Test the
+            // actual file contents, not just LoadList's duplicate filtering.
+            std::atomic<int> writeFailures{ 0 };
+            std::vector<std::thread> writers;
+            for (int i = 0; i < 16; ++i)
+            {
+                writers.emplace_back([&writeFailures]()
+                {
+                    std::string writeError;
+                    if (!ArchivePasswordAppendIfMissing("concurrent-synthetic-password", writeError))
+                        writeFailures.fetch_add(1);
+                });
+            }
+            for (auto& thread : writers)
+                thread.join();
+            if (writeFailures.load() != 0)
+                failures++;
+
+            FILE* persisted = nullptr;
+            if (_wfopen_s(&persisted, file.c_str(), L"rb") != 0 || !persisted)
+                failures++;
+            else
+            {
+                std::string contents;
+                char block[1024]{};
+                size_t got = 0;
+                while ((got = fread(block, 1, sizeof(block), persisted)) != 0)
+                    contents.append(block, got);
+                fclose(persisted);
+                const std::string phrase = "concurrent-synthetic-password";
+                const size_t first = contents.find(phrase);
+                if (first == std::string::npos || contents.find(phrase, first + phrase.size()) != std::string::npos)
+                    failures++;
+            }
+            if (!ArchivePasswordLoadList(list, error) || list.passwords.size() != 2)
+                failures++;
+            if (failures == 0)
+                std::printf("UNICODE_PASSWORD_CONCURRENT_APPEND_DEDUP_PASS: writers=16 distinct_keys=2\n");
         }
     }
     ArchivePasswordSetListPath("");
@@ -1065,6 +1105,89 @@ static int RunUnicodePasswordListSelftest()
         failures++;
     std::printf("UNICODE_PASSWORD_LIST_SELFTEST_%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
+}
+
+static std::atomic<bool> g_parallelPasswordPromptEntered{ false };
+static std::atomic<bool> g_parallelPasswordPromptRelease{ false };
+
+static bool BackendParallelPasswordPrompt(const char*, const char*, char*, size_t, bool*)
+{
+    g_parallelPasswordPromptEntered.store(true);
+    // The QA thread controls the release. A fixed upper bound ensures a
+    // broken test cannot leave a credential dialog waiting indefinitely.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+    while (!g_parallelPasswordPromptRelease.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    return false;
+}
+
+static int RunPasswordPromptIsolationRegression(const wchar_t* promptArchive, const wchar_t* savedArchive, const wchar_t* passwordListPath)
+{
+    if (!promptArchive || !savedArchive || !passwordListPath)
+        return 1;
+    const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, nullptr, 0, nullptr, nullptr);
+    if (needed <= 1)
+        return 1;
+    std::string path(static_cast<size_t>(needed), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, passwordListPath, -1, path.data(), needed, nullptr, nullptr) != needed)
+        return 1;
+    ArchivePasswordSetListPath(path.c_str());
+    g_parallelPasswordPromptEntered.store(false);
+    g_parallelPasswordPromptRelease.store(false);
+    ArchivePasswordSetPromptCallback(BackendParallelPasswordPrompt);
+    std::atomic<bool> savedFinished{ false };
+    bool promptSucceeded = false;
+    bool savedSucceeded = false;
+    size_t savedBytes = 0;
+    std::thread promptThread([&]()
+    {
+        std::vector<unsigned char> data;
+        std::string error;
+        promptSucceeded = RarNativeExtractEncryptedEntryToMemory(promptArchive, 0, 8 * 1024 * 1024, data, error);
+    });
+    bool entered = false;
+    const auto enterDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(7);
+    while (std::chrono::steady_clock::now() < enterDeadline)
+    {
+        if (g_parallelPasswordPromptEntered.load())
+        {
+            entered = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!entered)
+    {
+        g_parallelPasswordPromptRelease.store(true);
+        promptThread.join();
+        ArchivePasswordSetPromptCallback(nullptr);
+        std::printf("PASSWORD_PARALLEL_PROMPT_NOT_ENTERED\n");
+        return 1;
+    }
+    std::thread savedThread([&]()
+    {
+        std::vector<unsigned char> data;
+        std::string error;
+        savedSucceeded = RarNativeExtractEncryptedEntryToMemory(savedArchive, 0, 8 * 1024 * 1024, data, error);
+        savedBytes = data.size();
+        savedFinished.store(true);
+    });
+    const auto decodeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (!savedFinished.load() && std::chrono::steady_clock::now() < decodeDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const bool completedBeforePromptRelease = savedFinished.load();
+    g_parallelPasswordPromptRelease.store(true);
+    savedThread.join();
+    promptThread.join();
+    ArchivePasswordSetPromptCallback(nullptr);
+    if (!completedBeforePromptRelease || !savedSucceeded || savedBytes == 0 || promptSucceeded)
+    {
+        std::printf("PASSWORD_PARALLEL_ISOLATION_FAIL: before_release=%d saved_ok=%d bytes=%zu blocked_prompt_ok=%d\n",
+            completedBeforePromptRelease ? 1 : 0, savedSucceeded ? 1 : 0, savedBytes, promptSucceeded ? 1 : 0);
+        return 1;
+    }
+    std::printf("PASSWORD_PARALLEL_ISOLATION_PASS: saved_decode_bytes=%zu prompt_blocked=1 saved_finished_before_release=1\n", savedBytes);
+    return 0;
 }
 
 int wmain(int argc, wchar_t* argv[])
@@ -1077,6 +1200,16 @@ int wmain(int argc, wchar_t* argv[])
 
     if (argc >= 2 && _wcsicmp(argv[1], L"pwlistselftest") == 0)
         return RunUnicodePasswordListSelftest();
+
+    if (argc >= 2 && _wcsicmp(argv[1], L"pwparallelprompt") == 0)
+    {
+        if (argc != 5)
+        {
+            std::printf("pwparallelprompt requires prompt-only RAR, saved-password RAR, and password list\n");
+            return 1;
+        }
+        return RunPasswordPromptIsolationRegression(argv[2], argv[3], argv[4]);
+    }
 
     if (argc >= 2 && _wcsicmp(argv[1], L"pwfiletest") == 0)
     {
@@ -1132,6 +1265,7 @@ int wmain(int argc, wchar_t* argv[])
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
         std::printf("  archive_backend_test.exe pwlistselftest (isolated Unicode password list)\n");
+        std::printf("  archive_backend_test.exe pwparallelprompt pending.rar other.rar passwords.txt\n");
         std::printf("  archive_backend_test.exe pwfiletest archive.rar-or-7z passwords.txt index extracted.file\n");
         std::printf("  archive_backend_test.exe pwstreamtest archive.7z passwords.txt index\n");
         std::printf("  archive_backend_test.exe pwcancelopentest archive.7z passwords.txt\n");
