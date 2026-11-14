@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Archive,
     [string]$PlayerExe = '',
+    [string]$ReadyFile = '',
     [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
@@ -70,6 +71,17 @@ try {
     }
     Trace-Adapter "SESSION_READY entries=$entries"
 
+    if ($ReadyFile) {
+        # A private temp manifest allows the JavaScript addon to insert tracks
+        # using MediaMonkey's native player API. Never write passwords or URLs
+        # into this manifest; only an internal temporary playlist filename.
+        $handoff = @{ ok = $true; playlist = $playlist; entries = $entries } | ConvertTo-Json -Compress
+        $partial = $ReadyFile + '.partial'
+        [System.IO.File]::WriteAllText($partial, $handoff, (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $partial -Destination $ReadyFile -Force
+        Trace-Adapter "HOST_HANDOFF_READY entries=$entries"
+    }
+
     if ($NoLaunch) {
         $lines = @(Get-Content -LiteralPath $playlist)
         if (@($lines | Where-Object { $_ -like '#EXTINF:*' }).Count -ne $entries -or $entries -lt 1) {
@@ -80,8 +92,27 @@ try {
         return
     }
 
-    Start-Process -FilePath $PlayerExe -ArgumentList @('/NoSplash', '/Add', ('"' + $playlist + '"'))
-    Trace-Adapter "PLAYLIST_IMPORT_DISPATCHED entries=$entries"
+    if ($ReadyFile) {
+        $ack = $ReadyFile + '.ack'
+        for ($attempt = 0; $attempt -lt 120; $attempt++) {
+            if (Test-Path -LiteralPath $ack -PathType Leaf) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (!(Test-Path -LiteralPath $ack -PathType Leaf)) {
+            throw 'MediaMonkey did not acknowledge insertion of archive tracks.'
+        }
+        $ackText = Get-Content -LiteralPath $ack -Raw
+        Remove-Item -LiteralPath $ack -Force -ErrorAction SilentlyContinue
+        if ($ackText -notmatch '^QUEUED=[1-9][0-9]*s*$') {
+            throw 'MediaMonkey returned an invalid archive queue acknowledgement.'
+        }
+        Trace-Adapter "HOST_QUEUE_ACCEPTED entries=$entries"
+    }
+    else {
+        # External bridge clients retain the documented CLI import fallback.
+        Start-Process -FilePath $PlayerExe -ArgumentList @('/NoSplash', '/Add', ('"' + $playlist + '"'))
+        Trace-Adapter "PLAYLIST_IMPORT_DISPATCHED entries=$entries"
+    }
     # Keep the bridge and its stdout handle alive while MediaMonkey plays the URLs.
     # Its 2-hour upper lifetime is enforced by the bridge itself; close sooner
     # when the host exits. The bridge owns and deletes its temporary playlist.
@@ -103,6 +134,17 @@ try {
 }
 catch {
     Trace-Adapter ('LAUNCH_FAIL type=' + $_.Exception.GetType().Name) 'ERROR'
+    # Report bridge startup errors immediately to the in-process addon
+    # instead of making its menu command wait for the full ready timeout.
+    if ($ReadyFile -and !(Test-Path -LiteralPath $ReadyFile -PathType Leaf)) {
+        try {
+            $failure = @{ ok = $false; playlist = ''; entries = 0 } | ConvertTo-Json -Compress
+            $partial = $ReadyFile + '.partial'
+            [System.IO.File]::WriteAllText($partial, $failure, (New-Object System.Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath $partial -Destination $ReadyFile -Force
+        }
+        catch { }
+    }
     throw
 }
 finally {

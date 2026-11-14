@@ -1,6 +1,5 @@
-// Host-free MediaMonkey 5 native action API contract tests.
-// This checks official action/menu wiring, Windows picker, package paths,
-// safe argument composition and shared settings routing; not real host playback.
+// Host-independent contracts for MediaMonkey 5 native Tools actions and
+// native in-process queue handoff. Real player UI needs separate acceptance.
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,103 +7,152 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const code = fs.readFileSync(path.join(__dirname, 'native_addon', 'actions_add.js'), 'utf8');
+const tempFile = 'C:\\Temp\\asp-unique.tmp';
+const readyFile = tempFile + '.archive-stream-ready.json';
+const ackFile = readyFile + '.ack';
+const playlistFile = 'C:\\Temp\\ArchiveBridge-unique\\archive-stream.m3u8';
+const secret = '0123456789abcdef0123456789abcdef';
+const validPlaylist = '#EXTM3U\r\n#EXTINF:-1,Custom Archive Title 1\r\n' +
+    'http://127.0.0.1:12345/' + secret + '/entry/0.mp3\r\n' +
+    '#EXTINF:-1,Custom Archive Title 2\r\n' +
+    'http://127.0.0.1:12345/' + secret + '/entry/1.ogg\r\n';
 
-async function exercise(choice, available = true, exitCode = 33, installMode = 'user') {
+async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
+                         available = true, exitCode = 42, playlist = validPlaylist,
+                         manifest = {ok: true, playlist: playlistFile, entries: 2},
+                         queueFailure = false, settings = false} = {}) {
     const calls = [];
     const messages = [];
+    const files = {[playlistFile]: playlist};
     const actions = {};
-    const submenu = [];
-    const sandbox = {
+    const menu = [];
+    const toolbox = {
         actions,
+        URL,
+        setTimeout,
         window: {
-            _menuItems: { tools: { action: { submenu } } },
+            _menuItems: {tools: {action: {submenu: menu}}},
             localPromise: value => Promise.resolve(value)
         },
         app: {
             filesystem: {
                 getScriptsPath: () => 'C:\\Users\\Test\\AppData\\Roaming\\MediaMonkey5\\Scripts\\',
-                getApplicationPath: () => 'C:\\MediaMonkey5\\MediaMonkey.exe',
+                // Real MM2024 SDK reports the folder, not the .exe.
+                getApplicationPath: () => 'C:\\MediaMonkey5\\',
                 fileExistsAsync: async candidate => {
                     calls.push(['exists', candidate]);
-                    return available && (installMode === 'user' || !candidate.startsWith('C:\\Users\\Test\\AppData\\Roaming\\MediaMonkey5\\Scripts\\'));
+                    if (candidate === readyFile)
+                        return Object.hasOwn(files, readyFile);
+                    return available && (install === 'user' ||
+                        !candidate.startsWith('C:\\Users\\Test\\AppData\\Roaming\\MediaMonkey5\\Scripts\\'));
+                },
+                loadTextFromFileAsync: async candidate => {
+                    calls.push(['read', candidate]);
+                    if (!(candidate in files))
+                        throw new Error('Absent handoff file');
+                    return files[candidate];
+                },
+                saveTextToFileAsync: async (candidate, value) => {
+                    files[candidate] = value;
+                    calls.push(['save', candidate]);
+                },
+                deleteFileAsync: async candidate => {
+                    delete files[candidate];
+                    calls.push(['delete', candidate]);
                 }
             },
             utils: {
                 dialogOpenFile: (...args) => {
-                    calls.push(['dialog', args]);
+                    calls.push(['picker', args]);
                     return Promise.resolve(choice);
                 },
-                shellExecute: (file, params) => {
-                    calls.push(['shell', file, params]);
+                getTempFilePathAsync: async () => tempFile,
+                shellExecute: (exe, args) => {
+                    calls.push(['shell', exe, args]);
+                    if (exitCode > 32 && args.includes('launch-mediamonkey.ps1'))
+                        files[readyFile] = JSON.stringify(manifest);
                     return exitCode;
+                },
+                createTracklist: loaded => ({
+                    tracks: [],
+                    add(track) { this.tracks.push(track); },
+                    loaded
+                }),
+                createEmptyTrack: () => ({})
+            },
+            player: {
+                addTracksAsync: async (list, options) => {
+                    calls.push(['queue', list, options]);
+                    if (queueFailure)
+                        throw new Error('Host rejected queue insertion');
                 }
             }
         },
-        uitools: {
-            toastMessage: {
-                show: (message, options) => messages.push({message, options})
-            }
-        }
+        uitools: {toastMessage: {show: (message, options) => messages.push({message, options})}}
     };
-    vm.runInNewContext(code, sandbox, {filename:'actions_add.js'});
-    assert.equal(submenu.length, 2, 'Two Tools menu commands registered');
-    assert.equal(submenu[0].action, actions.archiveStreamNativeAdd);
-    assert.equal(submenu[1].action, actions.archiveStreamNativeSettings);
-    await actions.archiveStreamNativeAdd.execute();
-    return {actions, submenu, calls, messages};
+    vm.runInNewContext(code, toolbox, {filename: 'actions_add.js'});
+    assert.equal(menu.length, 2);
+    assert.equal(menu[0].action, actions.archiveStreamNativeAdd);
+    assert.equal(menu[1].action, actions.archiveStreamNativeSettings);
+    if (settings)
+        await actions.archiveStreamNativeSettings.execute();
+    else
+        await actions.archiveStreamNativeAdd.execute();
+    return {calls, files, messages, menu};
 }
 
-(async function main() {
-    const valid = await exercise('C:\\Audio\\album.zip');
-    const picker = valid.calls.find(x => x[0] === 'dialog');
-    assert(picker && picker[1][4] === false, 'Single-archive file picker');
-    const launched = valid.calls.find(x => x[0] === 'shell');
-    assert(launched && launched[1] === 'powershell.exe', 'Native Windows launcher');
-    assert(launched[2].includes('launch-mediamonkey.ps1'), 'Addon launcher selected');
-    assert(launched[2].includes('-Archive "C:\\Audio\\album.zip"'), 'Exact archive argument');
-    assert(launched[2].includes('-PlayerExe "C:\\MediaMonkey5\\MediaMonkey.exe"'), 'Correct MediaMonkey executable');
-    assert(!launched[2].includes('gen_archive_stream'), 'Unsupported Winamp general plugin excluded');
-    assert(valid.messages.some(x => x.message.includes('Starting archive playback')), 'Nonterminal launch feedback');
-    console.log('MEDIAMONKEY_NATIVE_ADDON_ACTION_AND_MENU_PASS');
+(async () => {
+    const normal = await exercise();
+    const picker = normal.calls.find(x => x[0] === 'picker');
+    assert.equal(picker[1][4], false);
+    const shell = normal.calls.find(x => x[0] === 'shell');
+    assert.equal(shell[1], 'powershell.exe');
+    assert(shell[2].includes('-Archive "C:\\Audio\\album.zip"'));
+    assert(shell[2].includes('-PlayerExe "C:\\MediaMonkey5\\MediaMonkey.exe"'));
+    assert(shell[2].includes('-ReadyFile "C:\\Temp\\asp-unique.tmp.archive-stream-ready.json"'));
+    assert(!shell[2].includes('/Add'), 'Do not spawn second MediaMonkey exe');
+    const queued = normal.calls.find(x => x[0] === 'queue');
+    assert(queued && queued[1].tracks.length === 2, 'Two archive URLs inserted through native API');
+    assert.equal(queued[1].tracks[0].title, 'Custom Archive Title 1');
+    assert.equal(queued[1].tracks[1].title, 'Custom Archive Title 2');
+    assert(queued[1].tracks[1].path.includes('/entry/1.ogg'));
+    assert.equal(queued[2].withClear, false);
+    assert.equal(queued[2].startPlayback, false);
+    assert.equal(normal.files[ackFile], 'QUEUED=2');
+    assert(!Object.hasOwn(normal.files, readyFile), 'Delete manifest after queue handoff');
+    assert(normal.messages.some(x => x.message.includes('Added 2 archive tracks')));
+    console.log('MEDIAMONKEY_NATIVE_ADDON_IN_PROCESS_QUEUE_AND_TITLES_PASS');
 
-    const portable = await exercise('D:\\Music\\collection.7z', true, 33, 'portable');
-    const portableLaunch = portable.calls.find(x => x[0] === 'shell');
-    assert(portableLaunch, 'App-local addon fallback found');
-    assert(portableLaunch[2].includes('C:\\MediaMonkey5\\Scripts\\archiveStreamPlayerNative\\launch-mediamonkey.ps1'), 'Local Scripts path');
+    const portable = await exercise({install: 'portable'});
+    assert(portable.calls.some(x => x[0] === 'queue'), 'Application-local addon dispatches native queue');
+    assert(portable.calls.some(x => x[0] === 'exists' &&
+        x[1] === 'C:\\MediaMonkey5\\Scripts\\archiveStreamPlayerNative\\launch-mediamonkey.ps1'));
     console.log('MEDIAMONKEY_NATIVE_ADDON_PORTABLE_PATH_FALLBACK_PASS');
 
-    const invalid = await exercise('C:\\Audio\\track"escape.zip');
-    assert(!invalid.calls.some(x => x[0] === 'shell'), 'Invalid path must not launch');
-    const cancelled = await exercise('');
-    assert(!cancelled.calls.some(x => x[0] === 'shell'), 'Cancelled file picker must not launch');
-    const missing = await exercise('C:\\Audio\\album.zip', false);
-    assert(!missing.calls.some(x => x[0] === 'shell'), 'Missing installed assets must not launch');
-    console.log('MEDIAMONKEY_NATIVE_ADDON_CANCEL_AND_MISSING_ASSETS_PASS');
+    const canceled = await exercise({choice: ''});
+    assert(!canceled.calls.some(x => x[0] === 'shell'));
+    const invalid = await exercise({choice: 'C:\\Album\\bad"name.zip'});
+    assert(!invalid.calls.some(x => x[0] === 'shell'));
+    const missing = await exercise({available: false});
+    assert(!missing.calls.some(x => x[0] === 'shell'));
+    const processFailure = await exercise({exitCode: 2});
+    assert(!processFailure.calls.some(x => x[0] === 'queue'));
+    console.log('MEDIAMONKEY_NATIVE_ADDON_CANCEL_MALFORMED_MISSING_AND_LAUNCH_FAILURE_PASS');
 
-    const settingsCalls = [];
-    const settingsSandbox = {
-        actions: {},
-        window: {
-            _menuItems: { tools: { action: { submenu: [] } } },
-            localPromise: value => Promise.resolve(value)
-        },
-        app: {
-            filesystem: {
-                getScriptsPath: () => 'C:\\MediaMonkey5\\Scripts',
-                getApplicationPath: () => 'C:\\MediaMonkey5\\MediaMonkey.exe',
-                fileExistsAsync: async () => true
-            },
-            utils: {
-                dialogOpenFile: () => Promise.resolve(''),
-                shellExecute: (exe, args) => {settingsCalls.push([exe, args]); return 33;}
-            }
-        },
-        uitools: {toastMessage: {show: () => {}}}
-    };
-    vm.runInNewContext(code, settingsSandbox);
-    await settingsSandbox.actions.archiveStreamNativeSettings.execute();
-    assert.equal(settingsCalls.length, 1, 'Settings must start exactly one process');
-    assert(settingsCalls[0][1].includes('configure-adapters.ps1'), 'Existing shared settings reused');
-    assert(settingsCalls[0][1].includes('-ShowSettings'), 'Settings opens the GUI');
+    const remote = await exercise({playlist: validPlaylist.replace('127.0.0.1:12345', 'example.net')});
+    assert(!remote.calls.some(x => x[0] === 'queue'), 'Reject nonloopback playlist URLs');
+    assert(!Object.hasOwn(remote.files, ackFile), 'No bridge acknowledgement after rejection');
+    const mismatched = await exercise({manifest: {ok: true, playlist: playlistFile, entries: 3}});
+    assert(!mismatched.calls.some(x => x[0] === 'queue'), 'Reject playlist mismatch');
+    const rejected = await exercise({queueFailure: true});
+    assert(!Object.hasOwn(rejected.files, ackFile), 'No acknowledgement on player rejection');
+    assert(rejected.messages.some(x => x.message.includes('Host rejected')));
+    console.log('MEDIAMONKEY_NATIVE_ADDON_UNTRUSTED_PLAYLIST_AND_QUEUE_FAILURE_PASS');
+
+    const settings = await exercise({settings: true});
+    assert.equal(settings.calls.filter(x => x[0] === 'shell').length, 1);
+    assert(settings.calls.find(x => x[0] === 'shell')[2].includes('configure-adapters.ps1'));
+    assert(settings.calls.find(x => x[0] === 'shell')[2].includes('-ShowSettings'));
+    assert(!settings.calls.some(x => x[0] === 'queue'));
     console.log('MEDIAMONKEY_NATIVE_ADDON_SHARED_SETTINGS_PASS');
-})().catch(err => {console.error(err);process.exitCode=1;});
+})().catch(e => { console.error(e); process.exitCode = 1; });

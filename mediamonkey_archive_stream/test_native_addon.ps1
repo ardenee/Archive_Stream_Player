@@ -41,13 +41,19 @@ try {
     finally { $zip.Dispose() }
 
     $runner = Join-Path $installed 'launch-mediamonkey.ps1'
-    $result = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $runner -Archive $archive -NoLaunch 2>&1
+    $ready = Join-Path $folder 'addon.ready.json'
+    $result = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $runner -Archive $archive -ReadyFile $ready -NoLaunch 2>&1
     $exit = $LASTEXITCODE
     $result | ForEach-Object { Write-Output $_ }
     if ($exit -ne 0 -or @($result | Where-Object { $_ -match 'MEDIAMONKEY_NATIVE_ADDON_DRY_RUN_PASS' }).Count -ne 1) {
         throw 'MediaMonkey native addon bridge session failed its dry-run contract.'
     }
-    Write-Output 'MEDIAMONKEY_NATIVE_ADDON_PACKAGED_BRIDGE_PASS'
+    if (!(Test-Path -LiteralPath $ready -PathType Leaf)) { throw 'Native queue handoff manifest was not published.' }
+    $manifest = Get-Content -LiteralPath $ready -Raw | ConvertFrom-Json
+    if (!$manifest.ok -or $manifest.entries -ne 1 -or !$manifest.playlist) {
+        throw 'Native queue handoff manifest failed its contract.'
+    }
+    Write-Output 'MEDIAMONKEY_NATIVE_ADDON_PACKAGED_BRIDGE_AND_HANDOFF_PASS'
 }
 finally {
     Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue

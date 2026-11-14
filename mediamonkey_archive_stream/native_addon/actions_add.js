@@ -1,7 +1,8 @@
-// MediaMonkey 5/2024 general addon. Registers archive actions in its Tools menu.
-// Uses the single shared archive bridge; does not decode or modify archive files.
+// MediaMonkey 5/2024 native Tools addon. Audio decoding stays in the shared
+// statically linked archive bridge; native JS queues its authenticated URLs.
 (function () {
     'use strict';
+
     const folderName = 'archiveStreamPlayerNative';
     const title = 'Archive Stream Player';
 
@@ -9,48 +10,126 @@
         uitools.toastMessage.show(title + ': ' + message, { disableUndo: true });
     }
 
-    async function launch(script, extraArguments, confirmation) {
-        // Installed addons may live under the per-user Scripts directory,
-        // while portable and bundled addons can live beside MediaMonkey.exe.
+    function applicationExe() {
+        const location = app.filesystem.getApplicationPath();
+        if (!location)
+            return '';
+        return /\.exe$/i.test(location) ? location :
+            location.replace(/[\\/]+$/, '') + '\\MediaMonkey.exe';
+    }
+
+    async function addonFile(name) {
+        // Installed addons can use the user-profile Scripts folder or the
+        // application-local Scripts folder used by portable installations.
         const roots = [];
         const userScripts = app.filesystem.getScriptsPath();
         if (userScripts)
             roots.push(userScripts);
-        let applicationPath = app.filesystem.getApplicationPath();
-        if (applicationPath) {
-            if (/\.exe$/i.test(applicationPath))
-                applicationPath = applicationPath.replace(/[\\/][^\\/]+$/, '');
-            roots.push(applicationPath.replace(/[\\/]+$/, '') + '\\Scripts');
-        }
-        let launcher = '';
-        for (const root of roots) {
-            const directory = root.replace(/[\\/]+$/, '') + '\\' + folderName + '\\';
-            const scriptPath = directory + script;
-            const bridgePath = directory + 'archive_player_bridge.exe';
-            if ((await app.filesystem.fileExistsAsync(scriptPath)) &&
-                (await app.filesystem.fileExistsAsync(bridgePath))) {
-                launcher = scriptPath;
-                break;
-            }
-        }
-        if (!launcher) {
-            notice('The bridge or launcher is missing from the installed addon.');
-            return;
-        }
+        const executable = applicationExe();
+        if (executable)
+            roots.push(executable.replace(/[\\/][^\\/]+$/, '') + '\\Scripts');
 
-        if (script === 'launch-mediamonkey.ps1') {
-            const exe = app.filesystem.getApplicationPath();
-            if (exe && exe.indexOf('"') < 0)
-                extraArguments += ' -PlayerExe "' + exe + '"';
+        for (const root of roots) {
+            const folder = root.replace(/[\\/]+$/, '') + '\\' + folderName + '\\';
+            const file = folder + name;
+            if ((await app.filesystem.fileExistsAsync(file)) &&
+                (await app.filesystem.fileExistsAsync(folder + 'archive_player_bridge.exe')))
+                return file;
         }
-        const argumentsList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
-            launcher + '" ' + extraArguments;
-        const result = app.utils.shellExecute('powershell.exe', argumentsList);
-        if (result <= 32) {
-            notice('Windows could not start the Archive Stream launcher (code ' + result + ').');
-            return;
+        throw new Error('Archive Stream bridge or launcher is missing from the installed addon.');
+    }
+
+    function quote(value) {
+        if (!value || value.includes('"') || /[\r\n]/.test(value))
+            throw new Error('Invalid archive or launcher path.');
+        return '"' + value + '"';
+    }
+
+    async function spawn(script, argumentsList) {
+        const file = await addonFile(script);
+        const command = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' +
+            quote(file) + ' ' + argumentsList;
+        const result = app.utils.shellExecute('powershell.exe', command);
+        if (typeof result === 'number' && result <= 32)
+            throw new Error('Windows could not start the Archive Stream launcher (code ' + result + ').');
+    }
+
+    async function awaitReady(path) {
+        // The PowerShell launcher publishes a tiny manifest atomically once the
+        // bridge has initialized. No shell process, archive bytes or tokens are
+        // read through a network service from this JavaScript addon.
+        for (let attempt = 0; attempt < 120; ++attempt) {
+            if (await app.filesystem.fileExistsAsync(path))
+                return JSON.parse(await app.filesystem.loadTextFromFileAsync(path));
+            await new Promise(resolve => setTimeout(resolve, 250));
         }
-        notice(confirmation);
+        throw new Error('Timed out waiting for archive decoding to initialize.');
+    }
+
+    function archiveTrackList(text, expectedCount) {
+        const rows = text.split(/\r?\n/);
+        const list = app.utils.createTracklist(true);
+        let label = '';
+        let count = 0;
+        for (const raw of rows) {
+            const row = raw.trim();
+            if (row.startsWith('#EXTINF:')) {
+                const comma = row.indexOf(',');
+                label = comma >= 0 ? row.slice(comma + 1).trim() : '';
+                continue;
+            }
+            if (!row || row.startsWith('#'))
+                continue;
+            let url;
+            try { url = new URL(row); }
+            catch (error) { throw new Error('Invalid archive bridge playlist URL.'); }
+            if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' ||
+                !/^\/[0-9a-f]{32}\/entry\/[0-9]+\.[a-z0-9]+$/i.test(url.pathname))
+                throw new Error('Archive bridge playlist has an untrusted URL.');
+            const track = app.utils.createEmptyTrack();
+            track.path = row;
+            if (label)
+                track.title = label;
+            list.add(track);
+            ++count;
+            label = '';
+            if (count > 10000)
+                throw new Error('Archive playlist exceeds the safe entry limit.');
+        }
+        if (!count || count !== expectedCount)
+            throw new Error('Archive playlist entry count does not match the bridge.');
+        return {list, count};
+    }
+
+    async function addArchive(archive) {
+        const tempFile = await app.utils.getTempFilePathAsync();
+        const ready = tempFile + '.archive-stream-ready.json';
+        const acknowledge = ready + '.ack';
+        const player = applicationExe();
+        if (!player)
+            throw new Error('MediaMonkey application location is unavailable.');
+        try {
+            await spawn('launch-mediamonkey.ps1',
+                '-Archive ' + quote(archive) +
+                ' -PlayerExe ' + quote(player) +
+                ' -ReadyFile ' + quote(ready));
+            const manifest = await awaitReady(ready);
+            if (!manifest || !manifest.ok || !manifest.playlist ||
+                !Number.isInteger(manifest.entries) || manifest.entries < 1)
+                throw new Error('Archive Stream could not open the archive or prepare media.');
+            const playlist = await app.filesystem.loadTextFromFileAsync(manifest.playlist);
+            const tracks = archiveTrackList(playlist, manifest.entries);
+            // Native MediaMonkey API, not a second MediaMonkey.exe /Add process.
+            // Keep existing Now Playing entries and do not interrupt playback.
+            await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});
+            // The launcher terminates its bridge unless the player acknowledged
+            // successful queue insertion. This avoids orphaned bridge sessions.
+            await app.filesystem.saveTextToFileAsync(acknowledge, 'QUEUED=' + tracks.count);
+            notice('Added ' + tracks.count + ' archive tracks to Now Playing.');
+        }
+        finally {
+            try { await app.filesystem.deleteFileAsync(ready); } catch (error) {}
+        }
     }
 
     actions.archiveStreamNativeAdd = {
@@ -58,21 +137,15 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                const choice = await window.localPromise(app.utils.dialogOpenFile('',
+                const archive = await window.localPromise(app.utils.dialogOpenFile('',
                     'zip;7z;rar;001', 'Archives (*.zip;*.7z;*.rar;*.001)|*.zip;*.7z;*.rar;*.001',
                     'Choose audio archive', false));
-                if (!choice || typeof choice !== 'string')
+                if (!archive)
                     return;
-                // Windows file paths cannot contain a quote; reject it explicitly.
-                if (choice.indexOf('"') >= 0 || /[\r\n]/.test(choice)) {
-                    notice('The selected archive path is invalid.');
-                    return;
-                }
-                await launch('launch-mediamonkey.ps1', '-Archive "' + choice + '"',
-                    'Starting archive playback using the shared bridge.');
+                await addArchive(quote(archive).slice(1, -1));
             }
             catch (error) {
-                notice('Archive selection or launch failed.');
+                notice(error && error.message ? error.message : 'Archive selection or playback failed.');
             }
         }
     };
@@ -82,10 +155,11 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                await launch('configure-adapters.ps1', '-ShowSettings', 'Opening shared settings.');
+                await spawn('configure-adapters.ps1', '-ShowSettings');
+                notice('Opening shared settings.');
             }
             catch (error) {
-                notice('Could not open shared settings.');
+                notice(error && error.message ? error.message : 'Could not open shared settings.');
             }
         }
     };
