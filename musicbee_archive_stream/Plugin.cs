@@ -104,10 +104,14 @@ namespace MusicBeePlugin
                 try
                 {
                     string[] tracks = await Task.Run(() => StartArchiveSession(dialog.FileName));
-                    if (tracks.Length == 0 || api.NowPlayingList_QueueFilesLast == null ||
-                        !api.NowPlayingList_QueueFilesLast(tracks))
+                    bool queued = tracks.Length > 0 && api.NowPlayingList_QueueFilesLast != null &&
+                        api.NowPlayingList_QueueFilesLast(tracks);
+                    Trace("QUEUE_RESULT accepted=" + (queued ? "1" : "0") + " tracks=" + tracks.Length);
+                    if (!queued)
+                    {
                         MessageBox.Show("MusicBee did not accept the decoded archive track URLs.",
                             "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
                 }
                 catch (Exception e)
                 {

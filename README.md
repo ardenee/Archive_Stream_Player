@@ -29,7 +29,7 @@ Not every feature above has been verified in every player or with every archive.
 | **WACUP** | Native plugins (32-bit); playlist bridge (64-bit) | x86 expansion and playback progression verified; x64 archive playlist and playback progression verified; native x64 plugins unsupported |
 | **AIMP** | Native 32/64-bit plugin | Native ZIP, non-solid 7z and RAR streaming and seeking pass x86/x64 host-contract tests; real-player expansion verified; audible playback still to verify |
 | **XMPlay** | Native 32-bit archive plugin or streaming playlist bridge | Archive callback returns buffered bytes; isolated XMPlay process requested a live archive-backed HTTP stream (no cache); audible playback and player-level seeking still to verify |
-| **MusicBee** | Native 32-bit menu plugin with playback bridge | Plugin registers and serves playable track URLs; complete interactive playback still to verify |
+| **MusicBee** | Native 32-bit menu plugin with playback bridge | Actual MusicBee Tools-menu archive queue, MP3 playback and seeking verified; OGG track playback remains unresolved |
 | **MediaMonkey** | Winamp-compatible DLLs and playlist bridge | DLLs load and playlist playback reaches the archive stream; native expansion still to verify |
 | **VLC** | Local playlist/HTTP playback bridge | Two-track playback verified with a test audio output; audible output still to verify |
 | **Windows Media Player (classic)** | Local ASX/HTTP playback bridge | Stream requests verified; actual player playback remains unverified |
@@ -56,7 +56,8 @@ The following have passed tests in at least one supported player or in the share
 ## To do before the project is complete
 
 - [ ] Finish **audible-speaker playback** and player-level seeking tests on real audio hardware across all players and supported music formats. Winamp 5.9/WACUP x86 now pass **silent PCM output and 18-second host IPC seeking** for WAV/MP3/FLAC/OGG/WMA/M4A/AAC; this is not an audible-output test.
-- [ ] Complete MusicBee's interactive queue/playback workflow and MediaMonkey's native playlist-expansion validation.
+- [x] Verify MusicBee's real Tools-menu archive selection, two-track Now Playing queue, MP3 playback and GUI seeking through a local archive bridge.
+- [ ] Fix MusicBee's OGG HTTP track playback/title handling and certify other codecs; complete MediaMonkey's native playlist-expansion validation.
 - [ ] Confirm Windows Media Player's complete playback path on a system with a working audio output.
 - [x] Investigate WACUP 64-bit: confirm the current native-plugin limitation and provide tested archive playback through the local playlist bridge.
 - [x] Add shared password prompts, settings, managed-cache controls, background solid-archive preparation and title templates to AIMP, XMPlay, MusicBee, Winamp, foobar2000 and playlist-bridge clients.

@@ -1,6 +1,6 @@
 # Archive Stream Player — feature matrix
 
-**Snapshot:** 13 November 2026, updated after real Winamp 5.9 and WACUP x86 password, PCM-output and seek tests, plus the previous native/bridge credential tests. Base matrix published at `96c55b7`. This is a **verification matrix**, not a claim that every function has passed real-player acceptance tests. The [main README](README.md) describes the project; [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md) contains implementation detail and test evidence.
+**Snapshot:** 14 November 2026, updated after real MusicBee 3.7 menu/queue, MP3 playback and in-player seek tests, as well as Winamp 5.9/WACUP x86 PCM/password regressions and earlier native/bridge credential tests. Base matrix published at `96c55b7`. This is a **verification matrix**, not a claim that every function has passed real-player acceptance tests. The [main README](README.md) describes the project; [PLAYER-ADAPTERS.md](PLAYER-ADAPTERS.md) contains implementation detail and test evidence.
 
 ## Status legend
 
@@ -26,7 +26,7 @@ A player can have **H** for obtaining archive audio and **?** for audible output
 | **AIMP 5.40 x86 / x64** — native plugin | **H** | **H** | **H** (archive route requested) | **T** (native COM read/seek, not GUI seek) | **T** (virtual-file metadata) | **I** (host redraw unverified) | **?** |
 | **XMPlay x86** — native XMPARC | **H** | **H** | **H** (host invokes extraction) | **T** (partial probes; GUI seek unverified) | **T** (reversible indexed aliases) | **L** (reimport archive tracks) | **?** |
 | **XMPlay** — local HTTP bridge | **—** | **H** (M3U8) | **H** (live HTTP archive stream) | **T** (HTTP ranges) | **T** (M3U8 labels) | **L** (reload playlist) | **?** |
-| **MusicBee 3.7** — menu plugin + bridge | **—** | **I** (Now Playing queue not certified) | **T** (URLs tested outside complete UI workflow) | **T** (bridge HTTP ranges) | **T** (bridge labels) | **L** (requeue/reload; display host-dependent) | **?** |
+| **MusicBee 3.7** — menu plugin + bridge | **—** | **H** (two URLs queued through Tools menu) | **H** (MP3 playback and HTTP reads) | **H** (in-player MP3 seek, nonzero HTTP range) | **T** (bridge labels; host presentation varies) | **L** (reload/requeue; display host-dependent) | **?** |
 | **MediaMonkey 2024** — bridge; Winamp DLLs also load | **I** (native expander not certified) | **H** (bridge playlist /Add) | **H** (archive HTTP request) | **T** (bridge ranges) | **T** (bridge labels) | **L** (reload playlist) | **?** |
 | **VLC** — M3U8 + local HTTP bridge | **—** | **H** | **H** (two-track test with dummy audio output) | **T** (bridge ranges, not GUI seek) | **T** (M3U8 labels) | **L** (reload playlist) | **?** (dummy output only) |
 | **Windows Media Player 12** — ASX + HTTP bridge | **—** | **T** (ASX generated; full host playback unverified) | **H** (URL requested only) | **T** (bridge ranges; host seek unverified) | **T** (ASX labels) | **L** (reload ASX) | **?** |
@@ -62,7 +62,7 @@ Every adapter uses the **same static archive backend**, but host formats and rec
 | AIMP x86 / x64 native | **T** | **H** | **T** | **T** (encrypted 7z native COM read/seek + prompt) | **H** (solid 7z); **T** (other) | **T** | **T** | **T** | **T** |
 | XMPlay x86 native | **T** | **H** | **T** | **T** (encrypted 7z XMPARC full/partial reads + prompt) | **H** (solid 7z); **T** (other) | **L** (internal stream, then host memory block) | **T** | **T** | **T** |
 | XMPlay bridge | **H** | **T** | **T** | **T** (shared bridge) | **T** | **H** (HTTP) | **T** | **T** | **T** |
-| MusicBee bridge | **T** | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **T** (transport only) | **T** | **T** | **T** |
+| MusicBee bridge | **H** (MP3 from ZIP in real MusicBee) | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **H** (MP3 host HTTP stream) | **T** | **T** | **T** |
 | MediaMonkey bridge | **H** | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **H** (HTTP request) | **T** | **T** | **T** |
 | VLC bridge | **H** | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **H** (HTTP request) | **T** | **T** | **T** |
 | WMP bridge | **T** | **T** | **T** | **T** (bridge only) | **T** (bridge only) | **T** (transport; not confirmed playing) | **T** | **T** | **T** |
@@ -80,7 +80,7 @@ Here **T** in a bridge row can mean **the bridge itself passed a transport/backe
 | AIMP x86 / x64 | **H** (Options service registered); common GUI **H** standalone | **T** (backend) | **T** (Win32/x64 native COM harness + Windows CredUI; in-player UI pending) | **H** (common GUI) | **T** (native log regression) | **T** title in virtual metadata; host row repaint pending |
 | XMPlay x86 native | **T** (Config callback); common GUI **H** standalone | **T** (backend) | **T** (Win32 XMPARC harness + Windows CredUI; in-player UI pending) | **H** (common GUI) | **T** (native log regression) | **T** new indexed titles; **L** reimport old rows |
 | XMPlay bridge | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; XMPlay UI not tested) | **H** (common GUI) | **T** (bridge) | Reload playlist |
-| MusicBee | **H** (Tools menu registers); dialog launch **I** | **T** (bridge) | **T** (bridge CredUI Win32/x64; MusicBee UI not tested) | **H** (common GUI) | **T** (x86 adapter logging) | Bridge labels; in-player presentation unverified |
+| MusicBee | **H** (Tools menu & Add Archive dialog) | **T** (bridge) | **T** (bridge CredUI Win32/x64; MusicBee prompt UI not tested) | **H** (common GUI) | **H** (session and queue-result logs in real host) | **L** (MP3 embedded tags display; OGG URL currently shows `1` and fails to play) |
 | MediaMonkey | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; MediaMonkey UI not tested) | **H** (common GUI) | **T** (bridge) | Reload playlist |
 | VLC | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; VLC UI not tested) | **H** (common GUI) | **T** (bridge) | Reload playlist |
 | WMP | **T** (launcher) | **T** (bridge) | **T** (bridge CredUI Win32/x64; WMP UI not tested) | **H** (common GUI) | **T** (bridge) | Reload ASX |
@@ -94,7 +94,7 @@ Here **T** in a bridge row can mean **the bridge itself passed a transport/backe
 - **WACUP x64:** Its tested preview does not load third-party Winamp plugin DLLs. Use the bridge; this is not a permanent claim about future WACUP versions.
 - **XMPlay native:** `XMPARC` hands a decoded memory block to XMPlay, so actual host-on-demand streaming requires the optional HTTP bridge. Indexed display aliases retain decoding compatibility, but existing playlist row labels cannot be repainted by the archive plugin's API.
 - **foobar2000:** The live title field is `%archive_stream_title%`. An existing playlist column must use that field (for example `$if2(%archive_stream_title%,%title%)`); the plugin intentionally does not rewrite `%title%` or file tags.
-- **MusicBee / MediaMonkey:** Native plugin load/menu registration is not the same as an end-to-end in-player queue and playback certification. Their loopback bridge functionality has stronger backend coverage than their native UI workflow.
+- **MusicBee:** Real MusicBee 3.7 now passes Tools-menu insertion of two archive URLs, MP3 playback and GUI seeking with a nonzero HTTP range. **The second OGG URL is still faulty in this host**: MusicBee shows `1` with an error icon and displays a source-file-not-found error when selected. Its HTTP archive route is not yet certified for every codec, nor are native title presets/prompt windows. **MediaMonkey:** Its native Winamp-style list expansion remains unverified; bridge playlist imports and HTTP requests are certified separately.
 - **VLC / WMP:** Both use playlists/HTTP rather than native archive decoder plugins. VLC passed a dummy audio-output test; WMP full playback has not passed.
 - **All players:** Audible-speaker output, all codecs, every encryption layout, GUI seek behavior, bridge-client/player-level prompt handling and automatic title repaint still need per-host verification where marked **?** or **I**. Native foobar2000 password cancellation is now verified; do not extrapolate it to other hosts.
 
@@ -104,6 +104,7 @@ Here **T** in a bridge row can mean **the bridge itself passed a transport/backe
 | --- | --- | --- |
 | Shared Win32/x64 HTTP transport and routes | [`archive_player_bridge/test_bridge.py`](archive_player_bridge/test_bridge.py), [`test_stream_priority.py`](archive_player_bridge/test_stream_priority.py) | ZIP/7z/RAR stream, memory/cache fallback, byte-for-byte HTTP ranges |
 | Passwords/encrypted 7z | [`archive_backend_test/test_7z_encrypted_layouts.py`](archive_backend_test/test_7z_encrypted_layouts.py), [`archive_player_bridge/test_passwords.py`](archive_player_bridge/test_passwords.py) | AES 7z layouts, split/solid fallback, wrong passwords and cancellation |
+| Real MusicBee Tools menu, queue and seek | [`musicbee_archive_stream/test_host_queue_ui.py`](musicbee_archive_stream/test_host_queue_ui.py) | Actual isolated MusicBee 3.7: two-track ZIP accepted into Now Playing; MP3 played; GUI seek produced HTTP range start greater than zero; in-host queue-result and bridge logging verified; OGG playback remains an open defect |
 | Real Winamp 5.9 / WACUP x86 password, PCM and seek | [`in_archive_stream/test_password_prompt_ui.py`](in_archive_stream/test_password_prompt_ui.py), [`test-only silent output SDK plugin`](in_archive_stream/test_support/out_archive_stream_test.cpp) | Real isolated hosts: synthetic AES 7z WAV prompt acceptance/cancel; ZIP MP3/FLAC/OGG/WMA/M4A/AAC decoded PCM delivered to silent output; 18-second host IPC seek, PCM flush and resumed writes; no user configuration changes |
 | Real foobar2000 native password UI | [`foo_archive_stream/test_password_prompt_ui.py`](foo_archive_stream/test_password_prompt_ui.py) | Portable foobar2000 x86/x64: successful synthetic password, declined storage, cancellation and no user password-list changes |
 | AIMP/XMPlay native adapter password UI | [`aimp_archive_stream/test_password_prompt_ui.py`](aimp_archive_stream/test_password_prompt_ui.py), [`xmp_archive_stream/test_password_prompt_ui.py`](xmp_archive_stream/test_password_prompt_ui.py) | Actual Windows CredUI within official native AIMP COM and XMPlay XMPARC test harnesses; encrypted 7z read/seek/partial parity, declined storage |
