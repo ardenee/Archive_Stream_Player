@@ -10,6 +10,10 @@ and AST_MM5_QA_ARCHIVE=7z|rar (default 7z). Enable GUI seek acceptance with
 AST_MM5_VERIFY_GUI_SEEK=1. Set AST_MM5_QA_RAR_HEADERS=1 for first-use RAR5
 encrypted filenames (with no saved password). Only the archive picker result
 is substituted for the test; the packaged bridge and native queue run as-is.
+Set AST_MM5_QA_RAR_MULTIPART=1 to create >=3 adjacent RAR5 volumes and
+verify that the first .part1.rar file decodes across their boundaries.
+Set AST_MM5_QA_RAR_SOLID=1 for a two-track solid RAR5 fixture; the test
+plays and seeks both archive entries, including the second solid item.
 No persistent personal player database or password file is read or changed.
 """
 import hashlib
@@ -54,6 +58,12 @@ SOURCES = (
 AES_MODE = os.environ.get("AST_MM5_QA_AES", "").lower()
 ARCHIVE_KIND = os.environ.get("AST_MM5_QA_ARCHIVE", "7z").lower()
 RAR_HEADERS = os.environ.get("AST_MM5_QA_RAR_HEADERS", "0") == "1"
+RAR_MULTIPART = os.environ.get("AST_MM5_QA_RAR_MULTIPART", "0") == "1"
+RAR_SOLID = os.environ.get("AST_MM5_QA_RAR_SOLID", "0") == "1"
+if RAR_SOLID and (ARCHIVE_KIND != "rar" or not AES_MODE):
+    raise SystemExit("AST_MM5_QA_RAR_SOLID requires encrypted RAR5 host QA")
+if RAR_MULTIPART and (ARCHIVE_KIND != "rar" or not AES_MODE):
+    raise SystemExit("AST_MM5_QA_RAR_MULTIPART requires AST_MM5_QA_AES and AST_MM5_QA_ARCHIVE=rar")
 TEST_SAVE_CONSENT = os.environ.get("AST_MM5_QA_SAVE", "0") == "1"
 if TEST_SAVE_CONSENT and (not RAR_HEADERS or AES_MODE != "accept"):
     raise SystemExit("AST_MM5_QA_SAVE requires RAR encrypted headers and accepted password")
@@ -64,7 +74,7 @@ if ARCHIVE_KIND not in ("7z", "rar"):
 if AES_MODE:
     if AES_MODE not in ("accept", "cancel", "wrong"):
         raise SystemExit("AST_MM5_QA_AES must be accept, cancel, or wrong")
-    SOURCES = (("AAC", "07.AACFile.aac"),)
+    SOURCES = (("MP3", "01.MP3File.mp3"), ("AAC", "07.AACFile.aac")) if RAR_SOLID else (("AAC", "07.AACFile.aac"),)
 
 if os.environ.get("AST_MM5_QA_ONLY"):
     keep = {x.strip().upper() for x in os.environ["AST_MM5_QA_ONLY"].split(",")}
@@ -104,7 +114,7 @@ def dismiss_first_run_wizard(window):
     def wizard_control():
         return next((c for c in window.descendants()
                      if c.element_info.control_type == "Window" and
-                     c.window_text().strip() == "Setup Wizard"), None)
+                     c.window_text().strip() == "Setup Wizard" and c.is_visible()), None)
     wizard = wait_for(wizard_control, 40, "portable first-run Setup Wizard")
     cancel = next((c for c in wizard.descendants()
                    if c.element_info.control_type == "Button" and
@@ -112,7 +122,28 @@ def dismiss_first_run_wizard(window):
     if not cancel:
         raise AssertionError("Fresh portable setup wizard has no safe Cancel button")
     cancel.click_input()
-    wait_for(lambda: not wizard_control(), 25, "first-run wizard dismissal")
+    try:
+        wait_for(lambda: not wizard_control(), 8, "first-run wizard dismissal")
+    except AssertionError:
+        # First-run UI sometimes animates its cancellation and exposes a
+        # second modal. Diagnose only visible controls; never click Next,
+        # Scan or Finish since they could import personal media folders.
+        print("MM5_FIRST_RUN_CANCEL_STILL_VISIBLE",
+              [(c.element_info.control_type,c.window_text()[:100],str(c.rectangle()))
+               for c in window.descendants()
+               if c.is_visible() and c.element_info.control_type in ("Window","Button")][-30:],
+              flush=True)
+        print("MM5_FIRST_RUN_WINDOWS",
+              [(w.window_text(),w.class_name()) for w in Desktop(backend="uia").windows()
+               if w.process_id()==window.process_id() and w.is_visible()],flush=True)
+        # Retry the same safe Cancel action if the setup panel is still open.
+        wizard=wizard_control()
+        if wizard:
+            buttons=[c for c in wizard.descendants() if c.element_info.control_type=="Button"
+                     and c.window_text().strip().upper()=="CANCEL" and c.is_visible()]
+            if buttons:
+                buttons[-1].click_input()
+        wait_for(lambda: not wizard_control(), 12, "first-run wizard dismissal after retry")
     print("MM5_PORTABLE_WIZARD_CANCELED_WITHOUT_MEDIA_SCAN",flush=True)
 
 
@@ -246,25 +277,37 @@ def main():
             synthetic_password="MM5HostQA-"+secrets.token_hex(18)
             isolated_password_list=workspace/"test-empty-password-list.txt"
             isolated_password_list.write_bytes(b"")
-            source=workspace/"AST_MM5_QA_AAC.aac"
-            shutil.copyfile(AUDIO/"07.AACFile.aac", source)
+            source_files=[]
+            for codec, fixture in SOURCES:
+                source=workspace/("AST_MM5_QA_"+codec+"."+fixture.rsplit(".",1)[-1].lower())
+                shutil.copyfile(AUDIO/fixture,source)
+                source_files.append(str(source.name))
             archive_path=workspace/("host-encrypted-nonsolid."+ARCHIVE_KIND)
             if ARCHIVE_KIND == "7z":
                 binary=Path(r"C:\Program Files\7-Zip\7z.exe")
                 arguments=[str(binary),"a","-t7z","-m0=LZMA2","-ms=off",
-                           "-mhe=off","-p"+synthetic_password,str(archive_path),str(source.name)]
+                           "-mhe=off","-p"+synthetic_password,str(archive_path),*source_files]
             else:
                 binary=Path(r"C:\Program Files\WinRAR\Rar.exe")
-                arguments=[str(binary),"a","-ma5","-m0","-s-","-ep",
+                arguments=[str(binary),"a","-ma5","-m3" if RAR_SOLID else "-m0",
+                           "-s" if RAR_SOLID else "-s-","-ep",
+                           *([] if not RAR_MULTIPART else ["-v1m"]),
                            ("-hp" if RAR_HEADERS else "-p")+synthetic_password,
-                           str(archive_path),str(source.name)]
+                           str(archive_path),*source_files]
             if not binary.is_file():
                 raise AssertionError("Missing DEV synthetic encrypted fixture builder")
             build=subprocess.run(arguments,cwd=workspace,capture_output=True,text=True,timeout=70)
+            if RAR_MULTIPART:
+                archive_path=archive_path.with_suffix(".part1.rar")
+                volumes=sorted(workspace.glob("host-encrypted-nonsolid.part*.rar"))
+                if len(volumes)<3:
+                    raise AssertionError("Expected at least three synthetic RAR5 volumes")
+                print("MM5_RAR_ENCRYPTED_MULTIPART_VOLUMES_STAGED",len(volumes),flush=True)
             if build.returncode != 0 or not archive_path.is_file():
                 raise AssertionError("Failed to create synthetic encrypted "+ARCHIVE_KIND+": "+build.stderr[-200:])
             print("MM5_SYNTHETIC_AES_"+ARCHIVE_KIND.upper()+"_TEST_FIXTURE_READY",
-                  "encrypted_headers="+str(RAR_HEADERS),flush=True)
+                  "encrypted_headers="+str(RAR_HEADERS),"multipart="+str(RAR_MULTIPART),
+                  "solid="+str(RAR_SOLID),flush=True)
             launcher=addons/"launch-mediamonkey.ps1"
             power=launcher.read_text(encoding="utf-8-sig")
             match="$start.Arguments = '--archive \"' + $Archive + '\" --lifetime 7200'"

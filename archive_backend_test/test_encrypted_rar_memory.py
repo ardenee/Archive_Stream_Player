@@ -27,13 +27,15 @@ def run(args, timeout=90):
     return result.stdout
 
 
-def bridge_check(platform, archive, original, passwords, folder):
+def bridge_check(platform, archive, original, passwords, folder, memory_mb=1, expected_route="memory", entry_index=0):
     binary = ROOT / "archive_player_bridge" / ("x64/Release" if platform == "x64" else "Release") / "archive_player_bridge.exe"
     assert binary.is_file(), f"Build bridge first: {binary}"
-    playlist_dir = folder / ("bridge-" + platform + "-" + archive.stem)
+    playlist_dir = folder / ("bridge-" + platform + "-" + archive.stem + "-memory-" + str(memory_mb) + "-entry-" + str(entry_index))
     playlist_dir.mkdir()
     process = subprocess.Popen([str(binary), "--archive", str(archive), "--password-list", str(passwords),
-                                "--playlist-dir", str(playlist_dir), "--memory-mb", "1", "--prompt-password", "0", "--lifetime", "15"],
+                                "--playlist-dir", str(playlist_dir), "--memory-mb", str(memory_mb),
+                                "--cache-limit-mb", "64" if expected_route == "cache" else "0",
+                                "--prompt-password", "0", "--lifetime", "15"],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
     try:
         details = {}
@@ -46,7 +48,9 @@ def bridge_check(platform, archive, original, passwords, folder):
                 break
         assert details.get("BRIDGE_READY") == "1", details
         playlist = Path(details["PLAYLIST_M3U8"]).read_text(encoding="utf-8-sig")
-        track = next(line for line in playlist.splitlines() if line.startswith("http://127.0.0.1:"))
+        tracks = [line for line in playlist.splitlines() if line.startswith("http://127.0.0.1:")]
+        assert len(tracks) > entry_index, (entry_index, len(tracks))
+        track = tracks[entry_index]
         with urllib.request.urlopen(urllib.request.Request(track, headers={"Range": "bytes=37-4096"}), timeout=20) as response:
             assert response.status == 206
             assert response.read() == original.read_bytes()[37:4097]
@@ -56,7 +60,10 @@ def bridge_check(platform, archive, original, passwords, folder):
         process.wait(timeout=10)
         log = process.stdout.read()
         assert process.returncode == 0 and "ROUTE_COUNTS" in log, log
-        assert "cache=0" in log and ("memory=1" in log or "stream=1" in log), log
+        if expected_route == "cache":
+            assert "cache=1" in log and "stream=0" in log and "memory=0" in log, log
+        else:
+            assert "cache=0" in log and ("memory=1" in log or "stream=1" in log), log
         print(f"PASS {archive.stem} bridge {platform}: " + log.strip(), flush=True)
     finally:
         if process.poll() is None:
