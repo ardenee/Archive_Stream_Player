@@ -103,9 +103,12 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-ui-", dir=r"D:\Temp") as l
     environment = os.environ.copy()
     environment["APPDATA"] = str(path / "Roaming")
     environment["LOCALAPPDATA"] = str(path / "Local")
+    environment["TEMP"] = str(path / "SessionTemp")
+    environment["TMP"] = str(path / "SessionTemp")
     environment["ARCHIVE_STREAM_ADAPTER_DEBUG"] = "1"
     (path / "Roaming").mkdir()
     (path / "Local").mkdir()
+    (path / "SessionTemp").mkdir()
     process = subprocess.Popen([str(staged / "MusicBee.exe")], cwd=str(staged), env=environment)
     print("MUSICBEE_ISOLATED_PID", process.pid, flush=True)
     try:
@@ -151,7 +154,13 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-ui-", dir=r"D:\Temp") as l
                       if c.class_name() == "Button" and "Open" in c.window_text())
         button.click_input()
         await_log(adapter_log, r"QUEUE_RESULT accepted=1 tracks=2", timeout=25)
+        await_log(adapter_log, r"OGG_LOCAL_READY index=1 bytes=", timeout=10)
+        copies = list((path / "SessionTemp").glob(
+            "ArchiveStreamMusicBee-*/archive-entry-000001.ogg"))
+        assert len(copies) == 1, ("Missing MusicBee isolated OGG materialization", copies)
+        assert copies[0].read_bytes() == OGG.read_bytes(), "MusicBee OGG bytes not preserved"
         print("MUSICBEE_NATIVE_QUEUE_ACCEPTED tracks=2", flush=True)
+        print("MUSICBEE_OGG_LOCAL_BYTE_PARITY_PASS", copies[0].stat().st_size, flush=True)
 
         # Real host dispatch, not a direct HTTP client: select first queued track,
         # muted before playback to avoid unexpected audio on the DEV machine.
@@ -175,6 +184,30 @@ with tempfile.TemporaryDirectory(prefix="asp-musicbee-ui-", dir=r"D:\Temp") as l
         offsets = [int(x) for x in re.findall(r"ROUTE_STREAM[^\n]*index=0[^\n]*start=(\d+)", trace)]
         assert any(offset > 100000 for offset in offsets), offsets
         print("MUSICBEE_REAL_HOST_SEEK_PASS", max(offsets), flush=True)
-        print("ALL_MUSICBEE_HOST_QUEUE_AND_MP3_SEEK_CHECKS_PASS", flush=True)
+
+        # MusicBee rejected this same Vorbis entry when queued over HTTP.
+        # The local-file fallback must open through the real host without
+        # displaying the "source file could not be found" error dialog.
+        main = await_window(process.pid, "MusicBee")
+        main.set_focus()
+        rect = main.rectangle()
+        mouse.double_click(coords=(rect.right - 200, rect.top + 135))
+        time.sleep(2.5)
+        capture_screen("ogg-playback")
+        unexpected = [w.window_text() for w in windows(process.pid)
+                      if w.window_text() in ("Error", "Archive Stream Player")]
+        assert not unexpected, ("MusicBee OGG playback displayed an error", unexpected)
+        print("MUSICBEE_OGG_HOST_NO_ERROR_PASS", flush=True)
+        main = await_window(process.pid, "MusicBee")
+        main.set_focus()
+        rect = main.rectangle()
+        click((rect.left + 895, rect.bottom - 14))
+        time.sleep(1.5)
+        capture_screen("ogg-after-seek")
+        unexpected = [w.window_text() for w in windows(process.pid)
+                      if w.window_text() == "Error"]
+        assert not unexpected, ("MusicBee OGG GUI seek displayed an error", unexpected)
+        print("MUSICBEE_OGG_GUI_SEEK_NO_ERROR_PASS", flush=True)
+        print("ALL_MUSICBEE_HOST_QUEUE_MP3_SEEK_AND_OGG_FALLBACK_CHECKS_PASS", flush=True)
     finally:
         cleanup(process)

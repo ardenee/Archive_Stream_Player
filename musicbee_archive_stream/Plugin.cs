@@ -120,6 +120,73 @@ namespace MusicBeePlugin
             }
         }
 
+        private static string[] PrepareMusicBeeOggTracks(string[] urls, string sessionFolder)
+        {
+            // MusicBee 3.7 plays OGG/Vorbis from disk but rejects the equivalent
+            // archive-backed HTTP OGG entry. Keep streamable MP3/other URLs intact.
+            int limitMb = 2048;
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
+            {
+                if (key != null)
+                {
+                    object configured = key.GetValue("CacheLimitMB", limitMb);
+                    if (configured is int && (int)configured >= 0 && (int)configured <= 20480)
+                        limitMb = (int)configured;
+                }
+            }
+
+            string[] prepared = (string[])urls.Clone();
+            long remaining = (long)limitMb * 1024 * 1024;
+            for (int index = 0; index < urls.Length; ++index)
+            {
+                Uri url;
+                if (!Uri.TryCreate(urls[index], UriKind.Absolute, out url) ||
+                    url.Scheme != Uri.UriSchemeHttp || !url.IsLoopback)
+                    throw new IOException("Archive Stream returned an unexpected media URL.");
+                if (!url.AbsolutePath.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (remaining == 0)
+                    throw new IOException("MusicBee 3.7 needs temporary disk materialization for archive OGG tracks. Enable a nonzero managed-cache limit in Archive Stream settings.");
+
+                string target = Path.Combine(sessionFolder, "archive-entry-" + index.ToString("D6") + ".ogg");
+                string partial = target + ".partial";
+                var request = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                request.Method = "GET";
+                request.Proxy = null;
+                request.AllowAutoRedirect = false;
+                request.KeepAlive = false;
+                request.Timeout = 60000;
+                request.ReadWriteTimeout = 60000;
+                long written = 0;
+                using (var response = (System.Net.HttpWebResponse)request.GetResponse())
+                {
+                    if (response.StatusCode != System.Net.HttpStatusCode.OK ||
+                        response.ContentLength <= 0 || response.ContentLength > remaining)
+                        throw new IOException("Archive OGG entry exceeds MusicBee's configured temporary cache budget or returned an invalid HTTP response.");
+                    using (var stream = response.GetResponseStream())
+                    using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        byte[] buffer = new byte[65536];
+                        int count;
+                        while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            written += count;
+                            if (written > response.ContentLength)
+                                throw new IOException("Archive OGG download exceeded its declared size.");
+                            output.Write(buffer, 0, count);
+                        }
+                    }
+                    if (written != response.ContentLength)
+                        throw new IOException("Archive OGG download ended prematurely.");
+                }
+                File.Move(partial, target);
+                remaining -= written;
+                prepared[index] = target;
+                Trace("OGG_LOCAL_READY index=" + index + " bytes=" + written);
+            }
+            return prepared;
+        }
+
         private string[] StartArchiveSession(string archive)
         {
             Trace("SESSION_REQUEST archive=" + archive);
@@ -164,17 +231,18 @@ namespace MusicBeePlugin
                 }
                 if (!ready || String.IsNullOrEmpty(playlist) || !File.Exists(playlist))
                     throw new IOException("Archive Stream could not open the archive. Check that it contains audio and the saved password list is correct.");
-                string[] tracks = File.ReadAllLines(playlist)
+                string[] transportUrls = File.ReadAllLines(playlist)
                     .Where(s => s.StartsWith("http://127.0.0.1:", StringComparison.Ordinal))
                     .ToArray();
-                if (tracks.Length == 0)
+                if (transportUrls.Length == 0)
                     throw new IOException("No audio entries were found in the selected archive.");
+                string[] tracks = PrepareMusicBeeOggTracks(transportUrls, folder);
                 lock (stateLock)
                 {
                     processes.Add(process);
                     directories.Add(folder);
-                    int entryPosition = tracks[0].IndexOf("/entry/", StringComparison.Ordinal);
-                    shutdownUrls.Add(entryPosition > 0 ? tracks[0].Substring(0, entryPosition) + "/shutdown" : "");
+                    int entryPosition = transportUrls[0].IndexOf("/entry/", StringComparison.Ordinal);
+                    shutdownUrls.Add(entryPosition > 0 ? transportUrls[0].Substring(0, entryPosition) + "/shutdown" : "");
                 }
                 Trace("SESSION_READY tracks=" + tracks.Length);
                 return tracks;

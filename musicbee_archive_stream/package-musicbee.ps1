@@ -27,6 +27,11 @@ Tools > Archive Stream: Settings...
 The bridge listens only on 127.0.0.1 while MusicBee is running.
 Default saved passwords use %LOCALAPPDATA%\WinampArchiveStream\keeps.txt.
 Shared settings are stored under HKCU\Software\ArchiveStreamPlayer\Adapters.
+MusicBee 3.7's tested OGG stream issue is handled by materializing OGG files
+in a temporary per-session folder, with size bounded by CacheLimitMB.
+A zero cache limit prevents this fallback. MP3 and unaffected formats remain HTTP.
+OGG temporary audio may remain on disk after a crash; clear stale sessions
+through the shared settings page. Files are removed on normal plugin shutdown.
 Do not share its temporary tokenized playlist URLs publicly.
 '@ | Set-Content -Path "$stage\INSTALL.txt" -Encoding ASCII
     New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
