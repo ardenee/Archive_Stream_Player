@@ -75,6 +75,86 @@ if ($Player -eq 'XMPlay' -and !$UseHttpBridge -and !$nativeXmplayDispatch) {
     Write-Host 'XMPLAY_BRIDGE_FALLBACK reason=real_host_native_dispatch_unverified mode=on_demand_http'
 }
 
+# VLC 3 x64 can play an original archive through our own statically linked
+# VLC access DLL. Build a native ast:// playlist instead of starting HTTP.
+# Preserve the bridge if native binaries are not installed or the caller
+# requested one-off bridge options that shared native settings cannot express.
+if ($Player -eq 'VLC' -and !$UseHttpBridge) {
+    # VLC 3's access-plugin ABI is 3_0_0f; this DLL is presently x64 only.
+    # Never load this build into VLC 4, VLC 32-bit, or another PE machine.
+    $vlcCompatible = $false
+    if ($playerExe) {
+        try {
+            $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($playerExe)
+            $stream = [IO.File]::OpenRead($playerExe)
+            $reader = [IO.BinaryReader]::new($stream)
+            try {
+                $stream.Position = 0x3C
+                $headerOffset = $reader.ReadInt32()
+                if ($headerOffset -ge 64 -and ($headerOffset + 6) -le $stream.Length) {
+                    $stream.Position = $headerOffset
+                    $signature = $reader.ReadUInt32()
+                    $machine = $reader.ReadUInt16()
+                    $vlcCompatible = ($version.FileMajorPart -eq 3 -and $signature -eq 17744 -and $machine -eq 34404)
+                }
+            }
+            finally {
+                $reader.Dispose()
+                $stream.Dispose()
+            }
+        }
+        catch {
+            $vlcCompatible = $false
+        }
+    }
+    $vlcFolder = if ($playerExe) { Split-Path -Path $playerExe -Parent } else { '' }
+    $vlcModule = if ($vlcFolder) { Join-Path $vlcFolder 'plugins\access\libarchive_stream_plugin.dll' } else { '' }
+    $nativeBuilderCandidates = @(
+        (Join-Path $PSScriptRoot 'vlc_native_playlist.exe'),
+        (Join-Path (Split-Path $PSScriptRoot -Parent) 'vlc_archive_stream\x64\Release\vlc_native_playlist.exe')
+    )
+    $nativeBuilder = $nativeBuilderCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    $oneOffOptions = $MemoryMB -gt 0 -or $CacheLimitMB -ge 0 -or $PasswordList -or $TitleTemplate
+    if ($oneOffOptions) {
+        Write-Host 'VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge'
+    }
+    elseif (!$vlcCompatible) {
+        Write-Host 'VLC_BRIDGE_FALLBACK reason=native_module_requires_VLC3_x64'
+    }
+    elseif (!$vlcModule -or !(Test-Path -LiteralPath $vlcModule -PathType Leaf) -or !$nativeBuilder) {
+        Write-Host 'VLC_BRIDGE_FALLBACK reason=native_dll_or_playlist_builder_not_installed'
+    }
+    else {
+        $nativeRoot = Join-Path $env:LOCALAPPDATA 'ArchiveStreamPlayer\NativePlaylists'
+        New-Item -ItemType Directory -Force -Path $nativeRoot | Out-Null
+        # Remove only our own generated playlists older than a week.
+        # This folder contains no audio payload or passwords.
+        $expiry = [DateTime]::UtcNow.AddDays(-7)
+        Get-ChildItem -LiteralPath $nativeRoot -Filter 'vlc-native-*.m3u8' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTimeUtc -lt $expiry } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        $nativePlaylist = Join-Path $nativeRoot ('vlc-native-' + [Guid]::NewGuid().ToString('N') + '.m3u8')
+        & $nativeBuilder --archive $Archive --playlist $nativePlaylist
+        if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $nativePlaylist -PathType Leaf)) {
+            throw 'VLC native archive enumeration failed; no HTTP fallback after a password or listing error.'
+        }
+        $nativeContents = Get-Content -LiteralPath $nativePlaylist -Raw -Encoding UTF8
+        if (!$nativeContents -or !$nativeContents.Contains('ast://') -or $nativeContents.Contains('http://127.0.0.1:')) {
+            Remove-Item -LiteralPath $nativePlaylist -Force -ErrorAction SilentlyContinue
+            throw 'VLC native archive playlist does not contain valid ast:// entries.'
+        }
+        Write-Host "NATIVE_VLC_READY=1 playlist=$nativePlaylist"
+        if ($NoLaunch) {
+            Remove-Item -LiteralPath $nativePlaylist -Force -ErrorAction SilentlyContinue
+            Write-Host 'DRY_RUN_PASS player=VLC mode=native_sdk http=0'
+            return
+        }
+        Start-Process -FilePath $playerExe -WorkingDirectory $vlcFolder -ArgumentList @('--no-one-instance', ('"' + $nativePlaylist + '"'))
+        Write-Host 'VLC native archive playback requested; no HTTP bridge was started.'
+        return
+    }
+}
+
 $bridge = Join-Path $PSScriptRoot 'x64\Release\archive_player_bridge.exe'
 if (!(Test-Path $bridge)) {
     throw 'Bridge not built; compile archive_player_bridge.vcxproj Release|x64.'

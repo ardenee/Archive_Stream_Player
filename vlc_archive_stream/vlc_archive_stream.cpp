@@ -1,0 +1,344 @@
+// Archive Stream Player - VLC 3 native seekable "ast://" access module.
+// Original code MIT; VLC SDK headers and all third-party libraries keep their licences.
+// Never link or load a separate archive runtime DLL.
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+struct pollfd;
+extern "C" int poll(struct pollfd*, unsigned, int);
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#define VLC_MODULE_COPYRIGHT "Copyright (c) 2026 Archive Stream Player"
+#define VLC_MODULE_LICENSE "MIT original code; retained third-party licenses"
+#define __PLUGIN__ 1
+#define MODULE_NAME archive_stream
+#define MODULE_STRING "archive_stream"
+#include <vlc_common.h>
+#include <vlc_plugin.h>
+#include <vlc_access.h>
+#include "archive_backend.h"
+#include "archive_common.h"
+#include "archive_format.h"
+#include "archive_passwords.h"
+#include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_adapter_logging.h"
+#include "../shared/archive_unified_cache.h"
+#include <algorithm>
+#include <charconv>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <wincred.h>
+#pragma comment(lib, "credui.lib")
+
+namespace
+{
+enum class Route { None, Stream, Memory, Cache };
+struct State
+{
+    std::wstring archive;
+    ArchiveEntry entry;
+    ArchiveAdapterPreferences prefs;
+    ArchiveBackendStream stream{};
+    std::vector<unsigned char> memory;
+    HANDLE cache = INVALID_HANDLE_VALUE;
+    uint64_t position = 0;
+    Route route = Route::None;
+};
+
+bool DecodeLocation(std::string_view loc, std::wstring& archive, uint32_t& index)
+{
+    // ast://<UTF-8 path in ASCII hex>/<unsigned index>/track.wav
+    // Hex encoding avoids VLC MRL delimiters, unicode normalization and
+    // ambiguous path/entry separators. Only a pre-existing local archive opens.
+    const auto slash = loc.find('/');
+    if (slash == std::string_view::npos || !slash || (slash & 1) || slash > 8190)
+        return false;
+    auto digit = [](char c) -> int
+    {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return -1;
+    };
+    std::string utf8;
+    for (size_t i = 0; i < slash; i += 2)
+    {
+        const int a = digit(loc[i]), b = digit(loc[i + 1]);
+        if (a < 0 || b < 0 || (a == 0 && b == 0))
+            return false;
+        utf8.push_back(static_cast<char>(a * 16 + b));
+    }
+    auto suffix = loc.substr(slash + 1);
+    auto end = suffix.find('/');
+    auto digits = suffix.substr(0, end);
+    if (digits.empty() || digits.size() > 10)
+        return false;
+    const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+    if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+        return false;
+    const int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (chars < 3 || chars > 4095)
+        return false;
+    archive.resize(chars);
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), archive.data(), chars) != chars)
+        return false;
+    if (!(archive[1] == L':' && (archive[2] == L'\\' || archive[2] == L'/')) &&
+        !(archive[0] == L'\\' && archive[1] == L'\\'))
+        return false;
+    return DetectArchiveFormatFromPath(archive.c_str()) != ArchiveFormat::Unknown;
+}
+
+bool AskPassword(const char* path, const char*, char* output, size_t capacity, bool* save)
+{
+    if (!output || !capacity)
+        return false;
+    output[0] = '\0';
+    if (save)
+        *save = false;
+    const auto prefs = ArchiveAdapterPreferencesLoad();
+    if (!prefs.promptPasswords)
+        return false;
+    CREDUI_INFOW ui{};
+    ui.cbSize = sizeof(ui);
+    ui.pszCaptionText = L"Archive Stream Player - VLC Password";
+    ui.pszMessageText = L"Enter the archive password. Windows will not store it.";
+    wchar_t user[CREDUI_MAX_USERNAME_LENGTH + 1]{};
+    wchar_t password[CREDUI_MAX_PASSWORD_LENGTH + 1]{};
+    BOOL persist = FALSE;
+    const std::wstring target = ArchiveAdapterUtf8ToWide(path ? path : "");
+    const DWORD rc = CredUIPromptForCredentialsW(&ui, target.empty() ? L"Archive Stream" : target.c_str(),
+        nullptr, 0, user, CREDUI_MAX_USERNAME_LENGTH + 1, password, CREDUI_MAX_PASSWORD_LENGTH + 1,
+        &persist, CREDUI_FLAGS_GENERIC_CREDENTIALS | CREDUI_FLAGS_ALWAYS_SHOW_UI | CREDUI_FLAGS_DO_NOT_PERSIST);
+    if (rc != NO_ERROR)
+    {
+        SecureZeroMemory(password, sizeof(password));
+        return false;
+    }
+    const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, password, -1, nullptr, 0, nullptr, nullptr);
+    const bool good = count > 1 && static_cast<size_t>(count) <= capacity &&
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, password, -1, output, static_cast<int>(capacity), nullptr, nullptr) == count;
+    SecureZeroMemory(password, sizeof(password));
+    if (!good)
+        output[0] = '\0';
+    if (good && save && prefs.askToSavePassword)
+        *save = MessageBoxW(nullptr, L"Save verified password to the configured plaintext password list?",
+            L"Archive Stream Player - VLC", MB_YESNO | MB_ICONQUESTION) == IDYES;
+    return good;
+}
+
+void Release(State& s)
+{
+    if (s.route == Route::Stream)
+        ArchiveCloseEntryStream(s.stream);
+    if (s.cache != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(s.cache);
+        s.cache = INVALID_HANDLE_VALUE;
+    }
+    s.memory.clear();
+    s.route = Route::None;
+}
+
+bool MemoryOrCache(State& s)
+{
+    Release(s);
+    std::string error;
+    if (s.entry.size <= static_cast<uint64_t>(s.prefs.memoryMb) * 1048576ULL &&
+        ArchiveExtractEntryToMemory(s.archive.c_str(), s.entry.index, s.memory, error) &&
+        s.memory.size() == s.entry.size)
+    {
+        s.route = Route::Memory;
+        DebugLogWrite("INFO", "VLC", "ROUTE_MEMORY", "index=%u | size=%llu", s.entry.index, static_cast<unsigned long long>(s.entry.size));
+        return true;
+    }
+    s.memory.clear();
+    std::wstring cached;
+    if (!ArchiveUnifiedCache::Prepare(s.archive, s.entry, s.prefs, cached, error))
+    {
+        DebugLogWrite("WARN", "VLC", "ROUTE_FAIL", "index=%u | reason=%s", s.entry.index, error.c_str());
+        return false;
+    }
+    s.cache = CreateFileW(cached.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
+    if (s.cache == INVALID_HANDLE_VALUE)
+        return false;
+    s.route = Route::Cache;
+    DebugLogWrite("INFO", "VLC", "ROUTE_CACHE", "index=%u | size=%llu", s.entry.index, static_cast<unsigned long long>(s.entry.size));
+    return true;
+}
+
+bool SeekState(State& s, uint64_t position)
+{
+    if (position > s.entry.size)
+        return false;
+    if (s.route == Route::Stream)
+    {
+        ArchivePasswordSetPromptAllowedForCurrentThread(s.prefs.promptPasswords);
+        if (!ArchiveSeekEntryStream(s.stream, position) && !MemoryOrCache(s))
+            return false;
+    }
+    if (s.route == Route::Cache)
+    {
+        LARGE_INTEGER absolute{};
+        absolute.QuadPart = static_cast<LONGLONG>(position);
+        if (!SetFilePointerEx(s.cache, absolute, nullptr, FILE_BEGIN))
+            return false;
+    }
+    s.position = position;
+    return true;
+}
+
+ssize_t Read(stream_t* access, void* out, size_t requested)
+{
+    auto* s = static_cast<State*>(access->p_sys);
+    if (!s || !out || !requested || s->position >= s->entry.size)
+        return 0;
+    const size_t needed = static_cast<size_t>((std::min)(static_cast<uint64_t>(requested), s->entry.size - s->position));
+    if (s->route == Route::Stream)
+    {
+        ArchivePasswordSetPromptAllowedForCurrentThread(s->prefs.promptPasswords);
+        const auto got = ArchiveReadEntryStreamDetailed(s->stream, out, needed);
+        if (got.bytesRead)
+        {
+            s->position += got.bytesRead;
+            return static_cast<ssize_t>(got.bytesRead);
+        }
+        if (!MemoryOrCache(*s) || !SeekState(*s, s->position))
+            return 0;
+    }
+    if (s->route == Route::Memory)
+    {
+        memcpy(out, s->memory.data() + s->position, needed);
+        s->position += needed;
+        return static_cast<ssize_t>(needed);
+    }
+    if (s->route == Route::Cache)
+    {
+        DWORD got = 0;
+        if (!ReadFile(s->cache, out, static_cast<DWORD>((std::min)(needed, static_cast<size_t>(0x400000))), &got, nullptr))
+            return 0;
+        s->position += got;
+        return static_cast<ssize_t>(got);
+    }
+    return 0;
+}
+
+int Seek(stream_t* access, uint64_t position)
+{
+    auto* s = static_cast<State*>(access->p_sys);
+    if (!s || !SeekState(*s, position))
+        return VLC_EGENERIC;
+    DebugLogWrite("INFO", "VLC", "ACCESS_SEEK", "index=%u | offset=%llu | route=%u", s->entry.index, static_cast<unsigned long long>(position), static_cast<unsigned>(s->route));
+    return VLC_SUCCESS;
+}
+
+int Control(stream_t* access, int query, va_list args)
+{
+    auto* s = static_cast<State*>(access->p_sys);
+    if (!s)
+        return VLC_EGENERIC;
+    switch (query)
+    {
+    case STREAM_CAN_SEEK:
+    case STREAM_CAN_FASTSEEK:
+    case STREAM_CAN_PAUSE:
+    case STREAM_CAN_CONTROL_PACE:
+        *va_arg(args, bool*) = query != STREAM_CAN_FASTSEEK;
+        return VLC_SUCCESS;
+    case STREAM_GET_SIZE:
+        *va_arg(args, uint64_t*) = s->entry.size;
+        return VLC_SUCCESS;
+    case STREAM_GET_PTS_DELAY:
+        *va_arg(args, int64_t*) = DEFAULT_PTS_DELAY;
+        return VLC_SUCCESS;
+    case STREAM_SET_PAUSE_STATE:
+        return VLC_SUCCESS;
+    default:
+        return VLC_EGENERIC;
+    }
+}
+
+int Open(vlc_object_t* object)
+{
+    auto* access = reinterpret_cast<stream_t*>(object);
+    if (!access || !access->psz_location)
+        return VLC_EGENERIC;
+    std::wstring archive;
+    uint32_t index = 0;
+    if (!DecodeLocation(access->psz_location, archive, index))
+        return VLC_EGENERIC;
+    try
+    {
+        auto s = std::make_unique<State>();
+        s->archive = archive;
+        s->prefs = ArchiveAdapterPreferencesLoad();
+        ArchiveSetDataDirectoryName("VLCArchiveStream");
+        char debug[8]{};
+        const bool forced = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", debug, sizeof(debug)) == 1 && debug[0] == '1';
+        ArchiveAdapterLogging::Configure(L"vlc", s->prefs.debugLogging || forced);
+        ArchivePasswordSetPromptCallback(s->prefs.promptPasswords ? AskPassword : nullptr);
+        ArchivePasswordSetPromptAllowedForCurrentThread(s->prefs.promptPasswords);
+        if (!s->prefs.passwordListPath.empty())
+        {
+            const auto path = ArchiveAdapterWideToUtf8(s->prefs.passwordListPath);
+            if (!path.empty())
+                ArchivePasswordSetListPath(path.c_str());
+        }
+        std::vector<ArchiveEntry> entries;
+        std::string error;
+        if (!ArchiveListEntries(archive.c_str(), entries, error))
+            return VLC_EGENERIC;
+        const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& e)
+        {
+            return e.index == index && !e.isFolder && e.isSupportedAudio && e.size != 0;
+        });
+        if (found == entries.end())
+            return VLC_EGENERIC;
+        s->entry = *found;
+        if (!s->entry.isSolid && ArchiveOpenEntryStream(archive.c_str(), index, s->stream, error))
+        {
+            s->route = Route::Stream;
+            DebugLogWrite("INFO", "VLC", "ROUTE_STREAM", "index=%u | bytes=%llu", index, static_cast<unsigned long long>(s->entry.size));
+        }
+        else if (!MemoryOrCache(*s))
+            return VLC_EGENERIC;
+        access->pf_read = Read;
+        access->pf_block = nullptr;
+        access->pf_seek = Seek;
+        access->pf_control = Control;
+        access->p_sys = s.release();
+        DebugLogWrite("INFO", "VLC", "ACCESS_OPEN_OK", "index=%u", index);
+        return VLC_SUCCESS;
+    }
+    catch (...)
+    {
+        return VLC_EGENERIC;
+    }
+}
+
+void Close(vlc_object_t* object)
+{
+    auto* access = reinterpret_cast<stream_t*>(object);
+    auto* s = static_cast<State*>(access->p_sys);
+    if (s)
+    {
+        Release(*s);
+        DebugLogWrite("INFO", "VLC", "ACCESS_CLOSE", "index=%u", s->entry.index);
+        delete s;
+        access->p_sys = nullptr;
+    }
+}
+} // namespace
+
+vlc_module_begin()
+    set_shortname("Archive Stream Player")
+    set_description("Archive Stream native ZIP/7z/RAR seekable access")
+    set_capability("access", 210)
+    add_shortcut("ast")
+    set_callbacks(Open, Close)
+vlc_module_end()
