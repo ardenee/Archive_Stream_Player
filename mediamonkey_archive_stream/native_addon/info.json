@@ -2,7 +2,7 @@
   "title": "Archive Stream Player",
   "id": "archiveStreamPlayerNative",
   "description": "Add ZIP, 7z and RAR music directly from MediaMonkey 5's Tools menu using the shared local Archive Stream backend.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "type": "general",
   "author": "Archive Stream Player",
   "minAppVersion": "5.0.0"

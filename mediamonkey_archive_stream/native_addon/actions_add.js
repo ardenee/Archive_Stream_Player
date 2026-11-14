@@ -70,12 +70,16 @@
         const rows = text.split(/\r?\n/);
         const list = app.utils.createTracklist(true);
         let label = '';
+        let durationSeconds = -1;
         let count = 0;
         for (const raw of rows) {
             const row = raw.trim();
             if (row.startsWith('#EXTINF:')) {
                 const comma = row.indexOf(',');
                 label = comma >= 0 ? row.slice(comma + 1).trim() : '';
+                const duration = Number(row.slice(8, comma >= 0 ? comma : undefined));
+                durationSeconds = Number.isInteger(duration) && duration > 0 && duration <= 86400 ?
+                    duration : -1;
                 continue;
             }
             if (!row || row.startsWith('#'))
@@ -90,9 +94,15 @@
             track.path = row;
             if (label)
                 track.title = label;
+            // Shared backend supplies a bounded duration for supported OGG
+            // streams. MediaMonkey needs it to seek rather than ending the
+            // track when its HTTP Vorbis decoder reports an unknown length.
+            if (durationSeconds > 0)
+                track.songLength = durationSeconds * 1000;
             list.add(track);
             ++count;
             label = '';
+            durationSeconds = -1;
             if (count > 10000)
                 throw new Error('Archive playlist exceeds the safe entry limit.');
         }

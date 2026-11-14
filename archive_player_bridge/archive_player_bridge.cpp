@@ -14,6 +14,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -61,6 +62,7 @@ std::atomic<unsigned> g_clients{0}, g_stream{0}, g_memory{0}, g_cacheCount{0};
 std::mutex g_fileMutex;
 std::mutex g_decryptMutex;
 std::unordered_map<uint32_t, std::wstring> g_fileCache;
+std::unordered_map<uint32_t, uint32_t> g_audioDurationMs;
 
 std::string Utf8(const std::wstring &w)
 {
@@ -157,6 +159,89 @@ std::string Title(const ArchiveEntry& e, const std::wstring& titleTemplate)
     const auto value = ArchiveAdapterFormatTitle(g_settings.archive, Wide(e.path), e.index + 1, titleTemplate);
     return Utf8(value);
 }
+uint64_t OggLittleEndian(const unsigned char* source, size_t bytes)
+{
+    uint64_t value = 0;
+    for (size_t i = 0; i < bytes; ++i)
+        value |= (uint64_t)source[i] << (8 * i);
+    return value;
+}
+bool OggReadExactly(ArchiveStreamOwner& reader, unsigned char* output, size_t length)
+{
+    size_t read = 0;
+    while (read < length)
+    {
+        auto result = reader.ReadDetailed(output + read, length - read);
+        if (result.bytesRead == 0 || result.errorKind != ArchiveStreamErrorKind::None)
+            return false;
+        read += result.bytesRead;
+    }
+    return true;
+}
+uint32_t OggVorbisDurationMs(const ArchiveEntry& entry)
+{
+    // Read only bounded prefix and suffix windows from a streamable, unencrypted
+    // Ogg/Vorbis entry. The shared archive stream backend handles ZIP/7z/RAR;
+    // never extract an album or prompt for a password while making playlists.
+    constexpr uint64_t maxProbeEntry = 64ULL * 1024 * 1024;
+    if (Extension(entry) != "ogg" || entry.isFolder || entry.isEncrypted || entry.isSolid ||
+        entry.size < 64 || entry.size > maxProbeEntry)
+        return 0;
+
+    ArchiveStreamOwner reader;
+    std::string error;
+    if (!reader.Open(g_settings.archive.c_str(), entry.index, error))
+        return 0;
+
+    std::array<unsigned char, 2048> prefix{};
+    const size_t prefixBytes = static_cast<size_t>((std::min)(entry.size, static_cast<uint64_t>(prefix.size())));
+    if (!OggReadExactly(reader, prefix.data(), prefixBytes))
+        return 0;
+    if (std::memcmp(prefix.data(), "OggS", 4) != 0 || prefix[4] != 0 || !(prefix[5] & 0x02))
+        return 0;
+    const uint32_t serial = static_cast<uint32_t>(OggLittleEndian(prefix.data() + 14, 4));
+    const size_t segmentCount = prefix[26];
+    const size_t payloadAt = 27 + segmentCount;
+    if (payloadAt + 16 > prefixBytes || std::memcmp(prefix.data() + payloadAt, "\x01vorbis", 7) != 0)
+        return 0;
+    if (OggLittleEndian(prefix.data() + payloadAt + 7, 4) != 0)
+        return 0; // Unsupported Vorbis stream header version
+    const uint32_t sampleRate = static_cast<uint32_t>(OggLittleEndian(prefix.data() + payloadAt + 12, 4));
+    if (sampleRate < 8000 || sampleRate > 384000 || prefix[payloadAt + 11] == 0)
+        return 0;
+
+    constexpr uint64_t tailWindow = 65536;
+    const size_t tailBytes = static_cast<size_t>((std::min)(entry.size, tailWindow));
+    if (!reader.Seek(entry.size - tailBytes))
+        return 0;
+    std::vector<unsigned char> tail(tailBytes);
+    if (!OggReadExactly(reader, tail.data(), tailBytes))
+        return 0;
+    // A complete final EOS page is at most 65307 bytes. Require its serial
+    // to match the first Vorbis page: chained/multiplexed streams are not
+    // assigned an incorrect partial-chain duration.
+    for (size_t at = 0; at + 27 <= tail.size(); ++at)
+    {
+        if (std::memcmp(tail.data() + at, "OggS", 4) != 0 || tail[at + 4] != 0 || !(tail[at + 5] & 0x04))
+            continue;
+        const size_t segments = tail[at + 26];
+        if (at + 27 + segments > tail.size())
+            continue;
+        size_t payload = 0;
+        for (size_t i = 0; i < segments; ++i)
+            payload += tail[at + 27 + i];
+        if (at + 27 + segments + payload != tail.size())
+            continue;
+        if (OggLittleEndian(tail.data() + at + 14, 4) != serial)
+            continue;
+        const uint64_t granule = OggLittleEndian(tail.data() + at + 6, 8);
+        if (granule == 0 || granule > static_cast<uint64_t>(sampleRate) * 86400)
+            continue;
+        const uint64_t milliseconds = (granule * 1000 + sampleRate / 2) / sampleRate;
+        return static_cast<uint32_t>(milliseconds);
+    }
+    return 0;
+}
 std::string Link(const ArchiveEntry &e)
 {
     return "http://127.0.0.1:" + std::to_string(g_port) + "/" + g_secret + "/entry/" + std::to_string(e.index) + "." + Extension(e);
@@ -172,8 +257,10 @@ std::string Playlist(bool asx)
         if (e.isFolder || !e.isSupportedAudio)
             continue;
         const std::string title = Title(e, titleTemplate);
+        const auto duration = g_audioDurationMs.find(e.index);
+        const int seconds = duration == g_audioDurationMs.end() ? -1 : (std::max)(1, static_cast<int>((duration->second + 500) / 1000));
         text += asx ? "<entry><title>" + Xml(title) + "</title><ref href=\"" + Link(e) + "\"/></entry>\r\n"
-                    : "#EXTINF:-1," + title + "\r\n" + Link(e) + "\r\n";
+                    : "#EXTINF:" + std::to_string(seconds) + "," + title + "\r\n" + Link(e) + "\r\n";
     }
     if (asx)
         text += "</asx>\r\n";
@@ -778,6 +865,15 @@ int wmain(int argc, wchar_t **argv)
     // Encrypted entry credentials are resolved only when playback requests
     // decoded data. Serialized HTTP worker opens avoid duplicate prompts.
     ArchivePasswordSetPromptAllowedForCurrentThread(false);
+    for (const auto& entry : g_entries)
+    {
+        const uint32_t duration = OggVorbisDurationMs(entry);
+        if (duration)
+        {
+            g_audioDurationMs.emplace(entry.index, duration);
+            DebugLogWrite("INFO", "BRIDGE", "OGG_DURATION", "index=%u | milliseconds=%u", entry.index, duration);
+        }
+    }
     std::array<unsigned char, 16> random{};
     if (BCryptGenRandom(nullptr, random.data(), (ULONG)random.size(), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
         return 5;

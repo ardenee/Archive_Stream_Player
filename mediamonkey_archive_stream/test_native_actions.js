@@ -14,7 +14,7 @@ const playlistFile = 'C:\\Temp\\ArchiveBridge-unique\\archive-stream.m3u8';
 const secret = '0123456789abcdef0123456789abcdef';
 const validPlaylist = '#EXTM3U\r\n#EXTINF:-1,Custom Archive Title 1\r\n' +
     'http://127.0.0.1:12345/' + secret + '/entry/0.mp3\r\n' +
-    '#EXTINF:-1,Custom Archive Title 2\r\n' +
+    '#EXTINF:199,Custom Archive Title 2\r\n' +
     'http://127.0.0.1:12345/' + secret + '/entry/1.ogg\r\n';
 
 async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
@@ -115,6 +115,8 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
     assert(queued && queued[1].tracks.length === 2, 'Two archive URLs inserted through native API');
     assert.equal(queued[1].tracks[0].title, 'Custom Archive Title 1');
     assert.equal(queued[1].tracks[1].title, 'Custom Archive Title 2');
+    assert.equal(queued[1].tracks[1].songLength, 199000, 'Bridge duration is supplied to native player');
+    assert.equal(queued[1].tracks[0].songLength, undefined, 'Unknown duration remains unset');
     assert(queued[1].tracks[1].path.includes('/entry/1.ogg'));
     assert.equal(queued[2].withClear, false);
     assert.equal(queued[2].startPlayback, false);

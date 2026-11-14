@@ -15,6 +15,16 @@ ROOT = Path(__file__).resolve().parent
 ORIGINALS = [Path(r"C:\audiotest\01.MP3File.mp3"), Path(r"C:\audiotest\02.OGGFile.ogg")]
 SEVENZIP = Path(r"C:\Program Files\7-Zip\7z.exe")
 
+def vorbis_seconds(source):
+    data = source.read_bytes()
+    ident = data.find(b"\x01vorbis")
+    assert ident >= 0, "DEV Ogg fixture lacks Vorbis identification"
+    rate = int.from_bytes(data[ident + 12:ident + 16], "little")
+    last_page = data.rfind(b"OggS")
+    assert rate > 0 and last_page >= 0
+    granule = int.from_bytes(data[last_page + 6:last_page + 14], "little")
+    return max(1, (granule * 1000 // rate + 500) // 1000)
+
 def make_fixtures(folder):
     assert all(item.is_file() for item in ORIGINALS), "Missing C:\\audiotest fixtures"
     zip_path = folder / "bridge-test.zip"
@@ -62,7 +72,11 @@ def check(platform, archive, folder, memory_mb=50, title_template="<filename>", 
             title = title.replace("<filetype>", original.suffix.lstrip("."))
             title = title.replace("<archive>", archive.stem)
             title = title.replace("<#>", str(index + 1))
-            assert "#EXTINF:-1," + title in playlist, (title, playlist)
+            # Ogg/Vorbis duration is probed from bounded archive stream
+            # windows for non-solid, unencrypted entries. Solid archive
+            # layouts intentionally retain an unknown duration at startup.
+            seconds = vorbis_seconds(original) if original.suffix.lower() == ".ogg" and archive.suffix == ".zip" else -1
+            assert "#EXTINF:{},".format(seconds) + title in playlist, (title, seconds, playlist)
             assert "<title>" + title + "</title>" in asx_text, (title, asx_text)
         for index, (track, original) in enumerate(zip(tracks, ORIGINALS)):
             start = 1111

@@ -46,8 +46,10 @@ install the obsolete Winamp general-purpose expander. The addon's JavaScript
 loads a temporary authenticated M3U8 from the shared bridge and adds the
 individual ZIP/7z/RAR track URLs through MediaMonkey's native Now Playing API.
 The original audio files and their embedded tags are not modified.
-MP3 and other host-supported codecs stream as the player requests bytes.
-Other archive routes use the same shared memory/cache policy.
+MP3/OGG/FLAC/WAV/WMA/M4A/AAC ZIP streams pass real-host playback and
+GUI seek/resume acceptance. Vorbis duration is obtained via bounded archive
+stream header/tail reads when safe, allowing direct OGG seeking without
+extracting. Other archive routes use the shared memory/cache policy.
 
 Bridge sessions end when MediaMonkey closes (after a short grace period),
 or automatically after at most two hours. Host playback is not yet certified
