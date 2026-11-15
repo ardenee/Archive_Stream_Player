@@ -285,6 +285,29 @@ int Open(vlc_object_t* object)
         auto s = std::make_unique<State>();
         s->archive = archive;
         s->prefs = ArchiveAdapterPreferencesLoad();
+        // Native launcher v1.2 may supply a password-list path for its VLC
+        // child process only. The CLI never changes HKCU/shared preferences.
+        // Ignore the environment unless a complete absolute path is given;
+        // an invalid override MUST fail closed, not fall back to the user's
+        // real password list and persist a password in the wrong location.
+        const DWORD overrideChars = GetEnvironmentVariableW(L"ARCHIVE_STREAM_VLC_PASSWORD_LIST", nullptr, 0);
+        if (overrideChars)
+        {
+            if (overrideChars > 4096)
+                return VLC_EGENERIC;
+            std::wstring overridePath(static_cast<size_t>(overrideChars), L'\0');
+            const DWORD copied = GetEnvironmentVariableW(L"ARCHIVE_STREAM_VLC_PASSWORD_LIST", overridePath.data(), overrideChars);
+            if (!copied || copied >= overrideChars)
+                return VLC_EGENERIC;
+            overridePath.resize(copied);
+            const bool drivePath = overridePath.size() >= 3 &&
+                ((overridePath[0] >= L'A' && overridePath[0] <= L'Z') || (overridePath[0] >= L'a' && overridePath[0] <= L'z')) &&
+                overridePath[1] == L':' && (overridePath[2] == L'\\' || overridePath[2] == L'/');
+            const bool networkPath = overridePath.size() >= 5 && overridePath[0] == L'\\' && overridePath[1] == L'\\';
+            if (!drivePath && !networkPath)
+                return VLC_EGENERIC;
+            s->prefs.passwordListPath = std::move(overridePath);
+        }
         ArchiveSetDataDirectoryName("VLCArchiveStream");
         char debug[8]{};
         const bool forced = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", debug, sizeof(debug)) == 1 && debug[0] == '1';

@@ -25,6 +25,15 @@ def main():
       valid.returncode,valid.stdout,valid.stderr)
   assert "NATIVE_VLC_READY=1 mode=in_process http=0" in valid.stdout and "NATIVE_VLC_PLAYLIST_ENTRIES" not in valid.stdout,valid.stdout
   print("VLC_VERSIONED_INPROCESS_NATIVE_LAUNCHER_NO_HTTP_PASS",flush=True)
+  qa_password_list=qa/"temporary-password-list"/"keeps.txt"
+  qa_password_list.parent.mkdir()
+  native_list=run(player,"-PasswordList",str(qa_password_list))
+  assert native_list.returncode==0 and "NATIVE_VLC_PASSWORD_LIST_OVERRIDE=1" in native_list.stdout and "NATIVE_VLC_READY=1 mode=in_process http=0" in native_list.stdout,(native_list.returncode,native_list.stdout,native_list.stderr)
+  print("VLC_V12_NATIVE_PER_LAUNCH_PASSWORD_LIST_NO_HTTP_PASS",flush=True)
+  missing_parent=run(player,"-PasswordList",str(qa/"nonexistent-password-folder"/"keeps.txt"))
+  assert missing_parent.returncode!=0 or "VLC native password-list parent directory must exist" in (missing_parent.stdout+missing_parent.stderr),(missing_parent.returncode,missing_parent.stdout,missing_parent.stderr)
+  assert "DRY_RUN_PASS player=VLC mode=native_sdk http=0" not in missing_parent.stdout
+  print("VLC_V12_INVALID_PASSWORD_LIST_FAIL_CLOSED_PASS",flush=True)
   forced=run(player,"-UseHttpBridge")
   assert forced.returncode==0 and "DRY_RUN_PASS player=VLC" in forced.stdout and "NATIVE_VLC_READY" not in forced.stdout,(
       forced.returncode,forced.stdout,forced.stderr)
@@ -47,6 +56,9 @@ def main():
    older=run(player)
    assert older.returncode==0 and "NATIVE_VLC_READY=1 mode=external_playlist" in older.stdout and "NATIVE_VLC_PLAYLIST_ENTRIES=21" in older.stdout,(older.returncode,older.stdout,older.stderr)
    print("VLC_LEGACY_UNVERSIONED_NATIVE_DLL_BUILDER_FALLBACK_PASS",flush=True)
+   old_with_list=run(player,"-PasswordList",str(qa_password_list))
+   assert old_with_list.returncode==0 and "VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge" in old_with_list.stdout and "DRY_RUN_PASS player=VLC" in old_with_list.stdout,(old_with_list.returncode,old_with_list.stdout,old_with_list.stderr)
+   print("VLC_OLD_NATIVE_DLL_PASSWORD_LIST_USES_HTTP_PASS",flush=True)
    plugin.unlink()
 
   # In a distributed copy with neither local DLL nor playlist builder,

@@ -42,7 +42,7 @@ def worker(pid,password,stop,events,mode):
    try:
     win=Desktop(backend="win32").window(handle=hwnd)
     if title=="Archive Stream Player - VLC Password":
-     if mode=="cancel" or (mode=="wrong" and "PASSWORD_WRONG_ENTERED" in events):
+     if mode=="cancel" or (mode in ("wrong","wrong-save") and "PASSWORD_WRONG_ENTERED" in events):
       next(c for c in win.descendants() if c.window_text()=="Cancel").click()
       time.sleep(.2)
       if win32gui.IsWindowVisible(hwnd):continue
@@ -51,16 +51,17 @@ def worker(pid,password,stop,events,mode):
       edits=[c for c in win.descendants() if c.class_name()=="Edit"]
       if len(edits)<2:continue
       edits[0].set_edit_text("ArchiveStream")
-      edits[-1].set_edit_text(("Incorrect-"+secrets.token_hex(8)) if mode=="wrong" else password)
+      edits[-1].set_edit_text(("Incorrect-"+secrets.token_hex(8)) if mode in ("wrong","wrong-save") else password)
       next(c for c in win.descendants() if c.window_text()=="OK").click()
       time.sleep(.2)
       if win32gui.IsWindowVisible(hwnd):continue
-      events.append("PASSWORD_WRONG_ENTERED" if mode=="wrong" else "PASSWORD_ENTERED")
+      events.append("PASSWORD_WRONG_ENTERED" if mode in ("wrong","wrong-save") else "PASSWORD_ENTERED")
     else:
-     next(c for c in win.descendants() if c.window_text().replace("&","")=="No").click()
+     consent="Yes" if mode in ("save","wrong-save") else "No"
+     next(c for c in win.descendants() if c.window_text().replace("&","")==consent).click()
      time.sleep(.2)
      if win32gui.IsWindowVisible(hwnd):continue
-     events.append("SAVE_DECLINED")
+     events.append("SAVE_AGREED" if consent=="Yes" else "SAVE_DECLINED")
     print("VLC_NATIVE_PASSWORD_GUI_HANDLED",title,flush=True)
     handled.add(hwnd)
    except Exception:

@@ -220,17 +220,25 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
     # Adapter 1.1+ supports playlist enumeration entirely inside VLC. Older
     # DLLs must continue to use the external playlist builder or HTTP.
     $nativeInProcess = $false
+    $nativePasswordOverride = $false
     if ($vlcModule) {
         try {
             $moduleVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($vlcModule)
             $nativeInProcess = ($moduleVersion.FileMajorPart -gt 1 -or
                 ($moduleVersion.FileMajorPart -eq 1 -and $moduleVersion.FileMinorPart -ge 1))
+            # v1.2+ accepts a child-process-only password list path. Older
+            # modules still need HTTP for -PasswordList, never silently
+            # writing a verified password into the persistent user list.
+            $nativePasswordOverride = ($moduleVersion.FileMajorPart -gt 1 -or
+                ($moduleVersion.FileMajorPart -eq 1 -and $moduleVersion.FileMinorPart -ge 2))
         }
         catch {
             $nativeInProcess = $false
+            $nativePasswordOverride = $false
         }
     }
-    $oneOffOptions = $MemoryMB -gt 0 -or $CacheLimitMB -ge 0 -or $PasswordList -or $TitleTemplate
+    $oneOffOptions = $MemoryMB -gt 0 -or $CacheLimitMB -ge 0 -or $TitleTemplate -or
+        ($PasswordList -and !$nativePasswordOverride)
     if ($oneOffOptions) {
         Write-Host 'VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge'
     }
@@ -274,6 +282,25 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
             $nativeSource = $nativePlaylist
             Write-Host "NATIVE_VLC_READY=1 mode=external_playlist playlist=$nativePlaylist"
         }
+        $nativePasswordList = ''
+        if ($nativePasswordOverride -and $PasswordList) {
+            # The native process sees only this one-launch list; do not
+            # mutate HKCU or overwrite the shared registry preferences.
+            try {
+                $nativePasswordList = [IO.Path]::GetFullPath($PasswordList)
+            }
+            catch {
+                throw 'VLC native password list must be a valid filesystem path.'
+            }
+            $passwordFolder = [IO.Path]::GetDirectoryName($nativePasswordList)
+            if (!$passwordFolder -or !(Test-Path -LiteralPath $passwordFolder -PathType Container)) {
+                throw 'VLC native password-list parent directory must exist.'
+            }
+            if (Test-Path -LiteralPath $nativePasswordList -PathType Container) {
+                throw 'VLC native password list must name a file, not a directory.'
+            }
+            Write-Host 'NATIVE_VLC_PASSWORD_LIST_OVERRIDE=1'
+        }
         if ($NoLaunch) {
             if (!$nativeInProcess) {
                 Remove-Item -LiteralPath $nativeSource -Force -ErrorAction SilentlyContinue
@@ -284,7 +311,14 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
         # VLC 3 officially loads modules from VLC_PLUGIN_PATH. Only this
         # process inherits the optional DLL folder, never the parent shell.
         $oldPluginPath = $env:VLC_PLUGIN_PATH
+        $oldNativePasswordPath = [Environment]::GetEnvironmentVariable('ARCHIVE_STREAM_VLC_PASSWORD_LIST', 'Process')
         try {
+            if ($nativePasswordList) {
+                $env:ARCHIVE_STREAM_VLC_PASSWORD_LIST = $nativePasswordList
+            }
+            else {
+                Remove-Item Env:\ARCHIVE_STREAM_VLC_PASSWORD_LIST -ErrorAction SilentlyContinue
+            }
             if ($vlcModule -ne $installedVlcModule) {
                 $nativeFolder = Split-Path -Path $vlcModule -Parent
                 $env:VLC_PLUGIN_PATH = if ($oldPluginPath) { $nativeFolder + ';' + $oldPluginPath } else { $nativeFolder }
@@ -294,6 +328,7 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
         }
         finally {
             $env:VLC_PLUGIN_PATH = $oldPluginPath
+            [Environment]::SetEnvironmentVariable('ARCHIVE_STREAM_VLC_PASSWORD_LIST', $oldNativePasswordPath, 'Process')
         }
         Write-Host 'VLC native archive playback requested; no HTTP bridge was started.'
         return
