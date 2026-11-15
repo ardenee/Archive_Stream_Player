@@ -56,17 +56,19 @@ Restart MusicBee, then use Tools > Archive Stream: Add Archive Audio...
 or Tools > Archive Stream: Settings...
 
 NATIVE MODE
-For an unencrypted ZIP containing only MP3 audio, MusicBee loads the native
-BASS archive decoder and reads the MP3 directly from the compressed archive.
-Seeking and playback need no HTTP listener and no extracted audio file.
-Small .ast reference files in a temporary session folder identify archive
-members; they contain no decoded audio and are cleaned up on normal exit.
-The native .ast route is enabled only after the BASS plug-in loads successfully.
+Unencrypted streamable MP3-only ZIP, non-solid 7z and non-solid RAR play
+through MusicBee's native BASS decoder directly from compressed archives.
+The native DLL itself enumerates entries; no external helper executable,
+HTTP listener or extracted decoded audio files are used in these cases.
+Small .ast path-only references are created in a temporary session folder
+and cleaned up at normal shutdown. Real host GUI seeking and two-track
+MP3 queue/Next playback have passed for the tested layouts.
 
 COMPATIBILITY MODE
-Other codecs, mixed-codec ZIP archives, 7z, RAR, encrypted archives, or a
-missing/unloadable native BASS add-on retain the previous MusicBee bridge
-behavior. MP3/AAC bridge playback uses local HTTP range requests; OGG/FLAC/
+Other codecs, mixed-codec ZIP archives, encrypted archives, solid entries,
+unsupported streaming layouts, or missing/unloadable BASS add-ons retain
+the established MusicBee compatibility bridge, which uses direct streaming
+first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; OGG/FLAC/
 WAV/WMA/M4A need bounded temporary local files due to MusicBee host
 limitations. The bridge only binds to 127.0.0.1. Temporary media may persist
 after a crash and should be cleared from shared settings. A zero cache limit

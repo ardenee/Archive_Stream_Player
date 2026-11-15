@@ -12,6 +12,9 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include "archive_backend.h"
 
 #include "bass-addon.h"
 #include "archive_common.h"
@@ -325,6 +328,112 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
         BASS_ChannelLock(stream, FALSE);
     Trace("OPEN_OK", "codec=MP3 route=STREAM_or_BUFFER");
     return stream;
+}
+
+// List-only native MusicBee integration: no separate helper executable, HTTP
+// listener, PCM extraction or BASS runtime redistribution is required.
+// The managed adapter calls this on its background archive-opening worker.
+extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    if (!archivePath || !*archivePath || !outputFolder || !*outputFolder)
+        return 0;
+    try
+    {
+        const std::filesystem::path archive(archivePath);
+        const std::wstring ext = archive.extension().wstring();
+        if (_wcsicmp(ext.c_str(), L".zip") != 0 && _wcsicmp(ext.c_str(), L".7z") != 0 &&
+            _wcsicmp(ext.c_str(), L".rar") != 0)
+            return 0;
+
+        const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, archivePath, -1, nullptr, 0, nullptr, nullptr);
+        if (required < 2 || required > MAX_PATH * 4)
+            return 0;
+        std::string archiveUtf8(static_cast<size_t>(required), '\0');
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, archivePath, -1,
+                                archiveUtf8.data(), required, nullptr, nullptr) != required)
+            return 0;
+        archiveUtf8.pop_back();
+        if (archiveUtf8.find('\r') != std::string::npos || archiveUtf8.find('\n') != std::string::npos)
+            return 0;
+
+        std::vector<ArchiveEntry> entries;
+        std::string error;
+        if (!ArchiveListEntries(archivePath, entries, error))
+        {
+            Trace("NATIVE_ENUM_FAIL", "reason=list_entries");
+            return 0;
+        }
+
+        std::vector<const ArchiveEntry*> selected;
+        for (const ArchiveEntry& entry : entries)
+        {
+            if (entry.isFolder || !entry.isSupportedAudio)
+                continue;
+            // Fail closed for mixed, encrypted and missing audio. The existing
+            // bridge handles unsupported layouts and their password prompts.
+            if (!entry.size || entry.isEncrypted ||
+                GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_MP3 ||
+                entry.path.empty() || entry.path.size() >= 1024 ||
+                entry.path.find('\r') != std::string::npos ||
+                entry.path.find('\n') != std::string::npos ||
+                entry.path.find('\0') != std::string::npos)
+                return 0;
+
+            // This native prototype has no disk-last recovery yet. Only queue
+            // entries that the shared backend can actually stream; all others
+            // retain the existing bridge's stream/RAM/disk-last recovery policy.
+            if (ArchiveGetEntryStreamCapability(archiveUtf8.c_str(), entry.index) != ARCHIVE_STREAM_CAPABILITY_SUPPORTED)
+            {
+                Trace("NATIVE_ENUM_FALLBACK", "reason=non_streamable_entry");
+                return 0;
+            }
+            std::string probeError;
+            if (!ArchiveValidateEntryStreamRead(archiveUtf8.c_str(), entry.index, 4096, &probeError))
+            {
+                Trace("NATIVE_ENUM_FALLBACK", "reason=stream_probe_failed");
+                return 0;
+            }
+
+            const std::string virtualPath = archiveUtf8 + ".archive_stream|" +
+                std::to_string(entry.index) + "|" + entry.path;
+            if (virtualPath.size() > 16300)
+                return 0;
+            selected.push_back(&entry);
+            if (selected.size() > 10000)
+                return 0;
+        }
+        if (selected.empty())
+            return 0;
+
+        std::error_code ec;
+        std::filesystem::create_directories(outputFolder, ec);
+        if (ec)
+            return 0;
+        for (const ArchiveEntry* entry : selected)
+        {
+            wchar_t name[32]{};
+            if (swprintf_s(name, L"entry-%08u.ast", static_cast<unsigned>(entry->index)) <= 0)
+                return 0;
+            const std::filesystem::path manifest = std::filesystem::path(outputFolder) / name;
+            const std::string contents = "ARCHIVE_STREAM_NATIVE_TRACK_V1\n" + archiveUtf8 +
+                ".archive_stream|" + std::to_string(entry->index) + "|" + entry->path + "\n";
+            if (contents.size() > 16384)
+                return 0;
+            std::ofstream file(manifest, std::ios::binary | std::ios::trunc);
+            if (!file)
+                return 0;
+            file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+            if (!file.good())
+                return 0;
+        }
+        Trace("NATIVE_ENUM_OK", "route=IN_PROCESS");
+        return static_cast<int>(selected.size());
+    }
+    catch (...)
+    {
+        Trace("NATIVE_ENUM_FAIL", "reason=exception");
+        return 0;
+    }
 }
 
 extern "C" const void* WINAPI BASSplugin(DWORD face)

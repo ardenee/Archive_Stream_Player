@@ -1,3 +1,4 @@
 LIBRARY bass_archive_stream
 EXPORTS
     BASSplugin
+    ArchiveStreamWriteNativeMp3TracksW=_ArchiveStreamWriteNativeMp3TracksW@8

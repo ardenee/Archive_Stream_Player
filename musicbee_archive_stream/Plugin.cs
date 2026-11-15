@@ -28,6 +28,10 @@ namespace MusicBeePlugin
         [DllImport("bass.dll", EntryPoint = "BASS_PluginLoad", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern uint BassPluginLoad([MarshalAs(UnmanagedType.LPWStr)] string path, uint flags);
 
+        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeMp3TracksW",
+            CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        private static extern int WriteNativeMp3Tracks(string archive, string folder);
+
 
         private static readonly object traceLock = new object();
 
@@ -140,7 +144,7 @@ namespace MusicBeePlugin
             info.Author = "Archive Stream Player";
             info.TargetApplication = "";
             info.VersionMajor = 1;
-            info.VersionMinor = 1;
+            info.VersionMinor = 2;
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
@@ -259,65 +263,48 @@ namespace MusicBeePlugin
             return prepared;
         }
 
-        private string[] TryStartNativeZipMp3Session(string bridge, string archive, string sessionFolder)
+        private string[] TryStartNativeMp3Session(string archive, string sessionFolder)
         {
-            // Only validated, unencrypted, MP3-only ZIP sessions use this route.
-            // Mixed codecs and other archives retain their existing bridge behavior.
-            if (!nativeMp3Loaded || !archive.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            // Only validated, unencrypted, MP3-only ZIP, 7z and RAR sessions use this route.
+            // Mixed codecs, encrypted or unsupported archives retain bridge compatibility.
+            if (!nativeMp3Loaded ||
+                !(archive.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                  archive.EndsWith(".7z", StringComparison.OrdinalIgnoreCase) ||
+                  archive.EndsWith(".rar", StringComparison.OrdinalIgnoreCase)))
                 return null;
 
             string folder = Path.Combine(sessionFolder, "Native");
-            string arguments = "--archive \"" + archive.Replace("\"", "") + "\" --native-manifest-dir \"" + folder + "\"";
-            var startup = new ProcessStartInfo(bridge, arguments);
-            startup.UseShellExecute = false;
-            startup.CreateNoWindow = true;
-            startup.RedirectStandardOutput = true;
-            startup.WorkingDirectory = Path.GetDirectoryName(bridge);
             try
             {
-                string report;
-                using (var builder = Process.Start(startup))
-                {
-                    if (builder == null)
-                        return null;
-                    if (!builder.WaitForExit(60000))
-                    {
-                        builder.Kill();
-                        Trace("NATIVE_MANIFEST_FAIL reason=timeout");
-                        return null;
-                    }
-                    report = builder.StandardOutput.ReadToEnd();
-                    if (builder.ExitCode != 0 || !report.Contains("NATIVE_MANIFEST_READY=1") ||
-                        !report.Contains("NATIVE_ENCRYPTED_AUDIO_ENTRIES=0"))
-                        return null;
-                }
-
-                string playlist = report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Where(line => line.StartsWith("NATIVE_PLAYLIST_M3U8=", StringComparison.Ordinal))
-                    .Select(line => line.Substring("NATIVE_PLAYLIST_M3U8=".Length))
-                    .FirstOrDefault();
-                if (String.IsNullOrEmpty(playlist) || !File.Exists(playlist))
+                // The statically-linked native BASS DLL enumerates the archive in
+                // this MusicBee process. No bridge executable, HTTP or playlist.
+                int count = WriteNativeMp3Tracks(archive, folder);
+                if (count <= 0 || count > 10000)
                     return null;
 
                 string allowed = Path.GetFullPath(folder).TrimEnd('\\') + Path.DirectorySeparatorChar;
+                string[] manifests = Directory.GetFiles(folder, "entry-*.ast", SearchOption.TopDirectoryOnly)
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (manifests.Length != count)
+                    return null;
+
                 var tracks = new List<string>();
-                foreach (string path in File.ReadAllLines(playlist, Encoding.UTF8))
+                foreach (string path in manifests)
                 {
-                    if (String.IsNullOrWhiteSpace(path) || path.StartsWith("#", StringComparison.Ordinal))
-                        continue;
                     string target = Path.GetFullPath(path);
-                    if (!target.StartsWith(allowed, StringComparison.OrdinalIgnoreCase) || !File.Exists(target) ||
-                        !target.EndsWith(".ast", StringComparison.OrdinalIgnoreCase))
+                    if (!target.StartsWith(allowed, StringComparison.OrdinalIgnoreCase))
                         return null;
                     string[] lines = File.ReadAllLines(target, Encoding.UTF8);
-                    if (lines.Length < 2 || lines[0] != "ARCHIVE_STREAM_NATIVE_TRACK_V1" ||
+                    if (lines.Length != 2 || lines[0] != "ARCHIVE_STREAM_NATIVE_TRACK_V1" ||
+                        !lines[1].StartsWith(archive + ".archive_stream|", StringComparison.OrdinalIgnoreCase) ||
                         !lines[1].EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
                         return null;
                     tracks.Add(target);
                 }
                 if (tracks.Count == 0)
                     return null;
-                Trace("NATIVE_MANIFEST_READY mode=ZIP_MP3 tracks=" + tracks.Count + " http=0 cache=0");
+                Trace("NATIVE_MANIFEST_READY mode=MP3 archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + tracks.Count + " helper=DLL http=0 cache=0");
                 return tracks.ToArray();
             }
             catch (Exception e)
@@ -331,9 +318,6 @@ namespace MusicBeePlugin
         {
             Trace("SESSION_REQUEST archive=" + archive);
             string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            string bridge = Path.Combine(baseDir, "archive_player_bridge.exe");
-            if (!File.Exists(bridge))
-                throw new FileNotFoundException("The Archive Stream bridge executable must be in the MusicBee Plugins folder.", bridge);
             lock (stateLock)
             {
                 if (processes.Count >= 8)
@@ -341,7 +325,7 @@ namespace MusicBeePlugin
             }
             string folder = Path.Combine(Path.GetTempPath(), "ArchiveStreamMusicBee-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(folder);
-            string[] nativeTracks = TryStartNativeZipMp3Session(bridge, archive, folder);
+            string[] nativeTracks = TryStartNativeMp3Session(archive, folder);
             if (nativeTracks != null)
             {
                 lock (stateLock)
@@ -349,6 +333,9 @@ namespace MusicBeePlugin
                 Trace("SESSION_READY route=NATIVE tracks=" + nativeTracks.Length);
                 return nativeTracks;
             }
+            string bridge = Path.Combine(baseDir, "archive_player_bridge.exe");
+            if (!File.Exists(bridge))
+                throw new FileNotFoundException("The Archive Stream compatibility bridge is missing from the MusicBee Plugins folder.", bridge);
             string arguments = "--archive \"" + archive.Replace("\"", "") + "\" --playlist-dir \"" +
                 folder + "\" --lifetime 86400";
             ProcessStartInfo startup = new ProcessStartInfo(bridge, arguments);
