@@ -10,6 +10,8 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <type_traits>
 #include <utility>
 
@@ -20,6 +22,7 @@
 #include "archive_passwords.h"
 #include "archive_rar_native_encrypted.h"
 #include "archive_reader.h"
+#include "mf_audio_decoder.h"
 
 static bool ParseUInt32Arg(const wchar_t* text, uint32_t& outValue)
 {
@@ -1190,6 +1193,96 @@ static int RunPasswordPromptIsolationRegression(const wchar_t* promptArchive, co
     return 0;
 }
 
+// Compare decoded PCM from borrowed bounded memory against Windows MF's
+// native file SourceReader, before and after a real 30-second seek.
+// No archive/password/cache access; only explicitly supplied local source file.
+static int RunMfMemoryParityTest(const wchar_t* filename)
+{
+    if (!filename || !*filename)
+        return 1;
+
+    const wchar_t* extension = wcsrchr(filename, L'.');
+    const AudioFormat format = extension && _wcsicmp(extension, L".aac") == 0 ? AUDIO_FORMAT_AAC :
+        extension && _wcsicmp(extension, L".m4a") == 0 ? AUDIO_FORMAT_M4A :
+        extension && _wcsicmp(extension, L".wma") == 0 ? AUDIO_FORMAT_WMA : AUDIO_FORMAT_UNKNOWN;
+
+    if (format == AUDIO_FORMAT_UNKNOWN)
+        return 1;
+
+    std::ifstream source(filename, std::ios::binary);
+    if (!source)
+        return 1;
+
+    source.seekg(0, std::ios::end);
+    const auto length = source.tellg();
+    if (length <= 0 || length > 100LL * 1024 * 1024)
+        return 1;
+    source.seekg(0, std::ios::beg);
+
+    std::vector<unsigned char> encoded(static_cast<size_t>(length));
+    if (!source.read(reinterpret_cast<char*>(encoded.data()), static_cast<std::streamsize>(encoded.size())))
+        return 1;
+    source.close();
+
+    const int utf8Length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, filename, -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Length <= 1)
+        return 1;
+    std::string utf8(static_cast<size_t>(utf8Length), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, filename, -1, utf8.data(), utf8Length, nullptr, nullptr) != utf8Length)
+        return 1;
+
+    MfAudioDecoder* memoryDecoder = nullptr;
+    MfAudioDecoder* fileDecoder = nullptr;
+    const bool openedMemory = MfOpenMemoryDecoder(encoded.data(), encoded.size(), format, &memoryDecoder);
+    const bool openedFile = MfOpenCacheFileDecoder(utf8.c_str(), format, &fileDecoder);
+    if (!openedMemory || !openedFile)
+    {
+        std::printf("MF_MEMORY_PARITY_FAIL open memory=%d file=%d\n", openedMemory ? 1 : 0, openedFile ? 1 : 0);
+        MfCloseDecoder(memoryDecoder);
+        MfCloseDecoder(fileDecoder);
+        return 1;
+    }
+
+    bool passed = MfGetSampleRate(memoryDecoder) == MfGetSampleRate(fileDecoder) &&
+        MfGetChannels(memoryDecoder) == MfGetChannels(fileDecoder) &&
+        MfGetBitsPerSample(memoryDecoder) == MfGetBitsPerSample(fileDecoder);
+
+    const auto comparePcm = [&](const char* phase)
+    {
+        unsigned char fromMemory[16384];
+        unsigned char fromFile[16384];
+        size_t compared = 0;
+        for (int i = 0; i < 32; ++i)
+        {
+            const size_t memoryRead = MfReadPcm(memoryDecoder, fromMemory, sizeof(fromMemory));
+            const size_t fileRead = MfReadPcm(fileDecoder, fromFile, sizeof(fromFile));
+            if (memoryRead == 0 || fileRead == 0 || memoryRead != fileRead || memcmp(fromMemory, fromFile, memoryRead) != 0)
+            {
+                std::printf("MF_MEMORY_PCM_PARITY_FAIL phase=%s chunk=%d read_memory=%zu read_file=%zu\n",
+                    phase, i, memoryRead, fileRead);
+                return false;
+            }
+            compared += memoryRead;
+        }
+        std::printf("MF_MEMORY_PCM_PARITY_PASS phase=%s bytes=%zu\n", phase, compared);
+        return true;
+    };
+
+    if (passed)
+        passed = comparePcm("initial");
+
+    if (passed)
+        passed = MfSeekMs(memoryDecoder, 30000) && MfSeekMs(fileDecoder, 30000);
+
+    if (passed)
+        passed = comparePcm("after_seek_30s");
+
+    MfCloseDecoder(memoryDecoder);
+    MfCloseDecoder(fileDecoder);
+    std::printf("MF_MEMORY_PARITY_%s format=%d source_bytes=%zu\n", passed ? "ALL_PASS" : "FAIL", static_cast<int>(format), encoded.size());
+    return passed ? 0 : 1;
+}
+
 int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
@@ -1197,6 +1290,9 @@ int wmain(int argc, wchar_t* argv[])
 
     if (argc >= 2 && _wcsicmp(argv[1], L"selftest") == 0)
         return RunApiValidationTests();
+
+    if (argc == 3 && _wcsicmp(argv[1], L"mfmemoryparity") == 0)
+        return RunMfMemoryParityTest(argv[2]);
 
     if (argc >= 2 && _wcsicmp(argv[1], L"pwlistselftest") == 0)
         return RunUnicodePasswordListSelftest();
@@ -1302,6 +1398,7 @@ int wmain(int argc, wchar_t* argv[])
     {
         std::printf("Usage:\n");
         std::printf("  archive_backend_test.exe selftest\n");
+        std::printf("  archive_backend_test.exe mfmemoryparity audio.aac|audio.m4a|audio.wma\n");
         std::printf("  archive_backend_test.exe pwlistselftest (isolated Unicode password list)\n");
         std::printf("  archive_backend_test.exe pwparallelprompt pending.rar other.rar passwords.txt\n");
         std::printf("  archive_backend_test.exe pwfiletest archive.rar-or-7z passwords.txt index extracted.file\n");

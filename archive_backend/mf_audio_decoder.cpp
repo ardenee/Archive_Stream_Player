@@ -235,6 +235,50 @@ static void MfLoadDuration(MfAudioDecoder* decoder)
     PropVariantClear(&var);
 }
 
+static bool MfOpenPreparedByteStreamReader(MfAudioDecoder* decoder, const char* source)
+{
+    if (!decoder || !decoder->byteStream)
+        return false;
+
+    IMFAttributes* readerAttrs = nullptr;
+    HRESULT hr = MFCreateAttributes(&readerAttrs, 2);
+
+    if (FAILED(hr))
+    {
+        DebugLogWrite("ERROR", "MF", "OPEN_BYTESTREAM_FAIL", "source=%s | format=%s | hr=0x%08lX | reason=create_reader_attributes_failed", source, MfAudioFormatName(decoder->format), (unsigned long)hr);
+        return false;
+    }
+
+    /*
+        Keep converter support enabled so MF can decode AAC/WMA to PCM.
+    */
+    readerAttrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+
+    hr = MFCreateSourceReaderFromByteStream(decoder->byteStream, readerAttrs, &decoder->reader);
+    readerAttrs->Release();
+
+    if (FAILED(hr) || !decoder->reader)
+    {
+        DebugLogWrite("ERROR", "MF", "OPEN_BYTESTREAM_FAIL", "source=%s | format=%s | hr=0x%08lX | reason=create_source_reader_from_bytestream_failed", source, MfAudioFormatName(decoder->format), (unsigned long)hr);
+        return false;
+    }
+
+    if (!MfConfigurePcmOutput(decoder->reader))
+    {
+        DebugLogWrite("ERROR", "MF", "OPEN_BYTESTREAM_FAIL", "source=%s | format=%s | reason=configure_pcm_failed", source, MfAudioFormatName(decoder->format));
+        return false;
+    }
+
+    if (!MfLoadCurrentWaveFormat(decoder))
+    {
+        DebugLogWrite("ERROR", "MF", "OPEN_BYTESTREAM_FAIL", "source=%s | format=%s | reason=load_wave_format_failed", source, MfAudioFormatName(decoder->format));
+        return false;
+    }
+
+    MfLoadDuration(decoder);
+    return true;
+}
+
 bool MfOpenArchiveDecoder(const char* archivePath, mz_uint index, mz_uint64 length, AudioFormat format, MfAudioDecoder** outDecoder)
 {
     if (outDecoder)
@@ -297,48 +341,61 @@ bool MfOpenArchiveDecoder(const char* archivePath, mz_uint index, mz_uint64 leng
 
     decoder->byteStream = byteStream;
 
-    IMFAttributes* readerAttrs = nullptr;
-    HRESULT hr = MFCreateAttributes(&readerAttrs, 2);
-
-    if (FAILED(hr))
+    if (!MfOpenPreparedByteStreamReader(decoder, archivePath))
     {
-        DebugLogWrite("ERROR", "MF", "OPEN_ARCHIVE_FAIL", "archive=%s | index=%u | format=%s | hr=0x%08lX | reason=create_reader_attributes_failed", archivePath, (unsigned int)index, MfAudioFormatName(format), (unsigned long)hr);
         MfCloseDecoder(decoder);
         return false;
     }
-
-    /*
-        Keep converter support enabled so MF can decode AAC/WMA to PCM.
-    */
-    readerAttrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
-
-    hr = MFCreateSourceReaderFromByteStream(decoder->byteStream, readerAttrs, &decoder->reader);
-    readerAttrs->Release();
-
-    if (FAILED(hr) || !decoder->reader)
-    {
-        DebugLogWrite("ERROR", "MF", "OPEN_ARCHIVE_FAIL", "archive=%s | index=%u | format=%s | hr=0x%08lX | reason=create_source_reader_from_bytestream_failed", archivePath, (unsigned int)index, MfAudioFormatName(format), (unsigned long)hr);
-        MfCloseDecoder(decoder);
-        return false;
-    }
-
-    if (!MfConfigurePcmOutput(decoder->reader))
-    {
-        DebugLogWrite("ERROR", "MF", "OPEN_ARCHIVE_FAIL", "archive=%s | index=%u | format=%s | reason=configure_pcm_failed", archivePath, (unsigned int)index, MfAudioFormatName(format));
-        MfCloseDecoder(decoder);
-        return false;
-    }
-
-    if (!MfLoadCurrentWaveFormat(decoder))
-    {
-        DebugLogWrite("ERROR", "MF", "OPEN_ARCHIVE_FAIL", "archive=%s | index=%u | format=%s | reason=load_wave_format_failed", archivePath, (unsigned int)index, MfAudioFormatName(format));
-        MfCloseDecoder(decoder);
-        return false;
-    }
-
-    MfLoadDuration(decoder);
 
     *outDecoder = decoder;
+    return true;
+}
+
+bool MfOpenMemoryDecoder(const void* data, size_t length, AudioFormat format, MfAudioDecoder** outDecoder)
+{
+    if (outDecoder)
+        *outDecoder = nullptr;
+
+    if (!outDecoder || !data || length == 0 || !MfIsNativeMediaFormat(format))
+    {
+        DebugLogWrite("ERROR", "MF", "OPEN_MEMORY_FAIL", "format=%s | length=%zu | reason=invalid_input", MfAudioFormatName(format), length);
+        return false;
+    }
+
+    if (!MfEnsureStarted())
+        return false;
+
+    MfAudioDecoder* decoder = new (std::nothrow) MfAudioDecoder();
+    if (!decoder)
+        return false;
+
+    decoder->format = format;
+    ArchiveMFByteStream* byteStream = new (std::nothrow) ArchiveMFByteStream();
+    if (!byteStream)
+    {
+        MfCloseDecoder(decoder);
+        return false;
+    }
+
+    wchar_t virtualUrl[260];
+    if (!MfBuildVirtualUrl(format, virtualUrl, sizeof(virtualUrl) / sizeof(virtualUrl[0])) ||
+        !byteStream->OpenMemory(data, length, virtualUrl, MfMimeTypeForFormat(format)))
+    {
+        byteStream->Release();
+        MfCloseDecoder(decoder);
+        DebugLogWrite("ERROR", "MF", "OPEN_MEMORY_FAIL", "format=%s | length=%zu | reason=bytestream_initialization_failed", MfAudioFormatName(format), length);
+        return false;
+    }
+
+    decoder->byteStream = byteStream;
+    if (!MfOpenPreparedByteStreamReader(decoder, "bounded_memory"))
+    {
+        MfCloseDecoder(decoder);
+        return false;
+    }
+
+    *outDecoder = decoder;
+    DebugLogWrite("INFO", "MF", "OPEN_MEMORY_OK", "format=%s | length=%zu | route=BUFFER | disk_cache=0", MfAudioFormatName(format), length);
     return true;
 }
 
@@ -480,7 +537,10 @@ static bool MfReadNextSampleToPending(MfAudioDecoder* decoder)
     LONGLONG timestamp = 0;
     IMFSample* sample = nullptr;
 
+    const ULONGLONG readStartTick = GetTickCount64();
     HRESULT hr = decoder->reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &streamIndex, &flags, &timestamp, &sample);
+    if (GetTickCount64() - readStartTick > 250)
+        DebugLogWrite("WARN", "MF", "READ_SAMPLE_SLOW", "format=%s | hr=0x%08lX | flags=%lu | got_sample=%d | elapsed_ms=%llu", MfAudioFormatName(decoder->format), (unsigned long)hr, (unsigned long)flags, sample ? 1 : 0, (unsigned long long)(GetTickCount64() - readStartTick));
 
     if (FAILED(hr))
     {

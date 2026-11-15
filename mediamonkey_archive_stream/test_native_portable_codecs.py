@@ -90,10 +90,12 @@ if AES_MODE:
         raise SystemExit("AST_MM5_QA_AES must be accept, cancel, or wrong")
     if RAR_SOLID:
         SOURCES = (("MP3", "01.MP3File.mp3"), ("AAC", "07.AACFile.aac"))
-    elif os.environ.get("AST_MM5_QA_AES_CODEC","AAC").upper() == "MP3":
-        SOURCES = (("MP3", "01.MP3File.mp3"),)
     else:
-        SOURCES = (("AAC", "07.AACFile.aac"),)
+        requested_codec=os.environ.get("AST_MM5_QA_AES_CODEC","AAC").upper()
+        matching=tuple(source for source in SOURCES if source[0]==requested_codec)
+        if len(matching)!=1:
+            raise SystemExit("AST_MM5_QA_AES_CODEC must be one of MP3, OGG, FLAC, WAV, WMA, M4A or AAC")
+        SOURCES=matching
 
 if os.environ.get("AST_MM5_QA_ONLY"):
     keep = {x.strip().upper() for x in os.environ["AST_MM5_QA_ONLY"].split(",")}
@@ -352,7 +354,16 @@ def main():
             source_files=[]
             for codec, fixture in SOURCES:
                 source=workspace/("AST_MM5_QA_"+codec+"."+fixture.rsplit(".",1)[-1].lower())
-                shutil.copyfile(AUDIO/fixture,source)
+                if os.environ.get("AST_MM5_QA_SHORT_MF") == "1" and codec in ("WMA","M4A"):
+                    # Small, valid test-only codec samples: real originals exceed
+                    # the normal memory-buffer cap. No production media modified.
+                    ffmpeg=Path(r"C:\Program Files\AudioBookConverter\app\external\ffmpeg.exe")
+                    trim=subprocess.run([str(ffmpeg),"-nostdin","-v","error","-y","-i",str(AUDIO/fixture),
+                        "-t","210","-map","0:a:0","-c:a","copy",str(source)],capture_output=True,text=True,timeout=50)
+                    assert trim.returncode==0 and 0<source.stat().st_size<=10*1024*1024,(trim.stderr[-700:],source.stat().st_size if source.exists() else -1)
+                    print("MM5_SHORT_MF_TEST_ONLY_SAMPLE",codec,source.stat().st_size,flush=True)
+                else:
+                    shutil.copyfile(AUDIO/fixture,source)
                 source_files.append(str(source.name))
             archive_path=workspace/("host-encrypted-nonsolid."+ARCHIVE_KIND)
             if ARCHIVE_KIND == "7z":
@@ -716,19 +727,27 @@ def main():
                 assert re.search(r"SEEK_READER_RETURN[^\n]*hr=0x00000000",native_trace),native_trace[-2500:]
                 sdk_played=elapsed(window,labels[0])
                 assert 150 <= sdk_played <= 260,sdk_played
-                print("MM5_NATIVE_RAR5_AAC_SDK_SEEK_CALLBACK_AND_RESUME_PASS",{"seek_target_ms":150000,"host_seconds":sdk_played,"reader_hr":"0x00000000"},flush=True)
-            # Encrypted RAR5 may not support direct streaming. The native MF
-            # decoder (AAC/WMA/M4A) cannot yet consume a bounded memory buffer,
-            # so managed cache is the legitimate final fallback after trying
-            # stream and memory. Never confuse this with HTTP playback.
-            encrypted_rar5_aac_cache=(AES_MODE=="accept" and ARCHIVE_KIND=="rar" and
-                                     not RAR_SOLID and len(SOURCES)==1 and SOURCES[0][0]=="AAC")
+                print("MM5_NATIVE_RAR5_"+SOURCES[0][0]+"_SDK_SEEK_CALLBACK_AND_RESUME_PASS",{"seek_target_ms":150000,"host_seconds":sdk_played,"reader_hr":"0x00000000"},flush=True)
+            # Encrypted RAR5 falls back to bounded memory when the entry fits;
+            # larger MF entries must use managed cache, never HTTP by default.
+            # Determine the bound from the native decoder, not fixture guesses.
+            encrypted_rar5_mf=(AES_MODE=="accept" and ARCHIVE_KIND=="rar" and
+                               not RAR_SOLID and len(SOURCES)==1 and SOURCES[0][0] in ("AAC","WMA","M4A"))
+            memory_bounds=re.search(r"ENTRY_SELECTED[^\n]*\bsize=(\d+) \| buffer_size=(\d+)",native_trace)
+            if encrypted_rar5_mf:
+                assert memory_bounds,"Missing trusted native memory capacity trace"
+            encrypted_rar5_mf_memory=(encrypted_rar5_mf and int(memory_bounds.group(1))<=int(memory_bounds.group(2)))
             encrypted_rar5_mp3_memory=(AES_MODE=="accept" and ARCHIVE_KIND=="rar" and
                                       not RAR_SOLID and len(SOURCES)==1 and SOURCES[0][0]=="MP3")
-            if encrypted_rar5_aac_cache:
-                assert native_counts["mode=CACHE"]>=1 and native_counts["mode=STREAM"]==0,native_counts
-                assert "route=CACHE" in native_trace and "mf_memory_decoder_unavailable" in native_trace,native_trace[-3000:]
-                print("MM5_NATIVE_ENCRYPTED_RAR5_AAC_LAST_RESORT_CACHE_NO_HTTP_PASS",flush=True)
+            if encrypted_rar5_mf_memory:
+                assert native_counts["mode=CACHE"]==0 and native_counts["mode=STREAM"]==0,native_counts
+                assert "route=BUFFER" in native_trace and "OPEN_MEMORY_OK" in native_trace,native_trace[-3000:]
+                assert "MFSTREAM" in native_trace and "OPEN_MEMORY" in native_trace,native_trace[-3000:]
+                print("MM5_NATIVE_ENCRYPTED_RAR5_"+SOURCES[0][0]+"_BOUNDED_MEMORY_NO_CACHE_NO_HTTP_PASS",flush=True)
+            elif encrypted_rar5_mf:
+                assert native_counts["mode=CACHE"]>=1 and "route=CACHE" in native_trace,native_counts
+                assert "entry_exceeds_memory_buffer" in native_trace,native_trace[-3000:]
+                print("MM5_NATIVE_ENCRYPTED_RAR5_"+SOURCES[0][0]+"_OVERSIZE_MANAGED_CACHE_LAST_RESORT_NO_HTTP_PASS",flush=True)
             elif encrypted_rar5_mp3_memory:
                 assert native_counts["mode=CACHE"]==0 and "route=BUFFER" in native_trace,native_counts
                 print("MM5_NATIVE_ENCRYPTED_RAR5_MP3_BOUNDED_MEMORY_NO_CACHE_NO_HTTP_PASS",flush=True)
@@ -757,8 +776,8 @@ def main():
                           {"request":native_counts["SEEK_REQUEST"],
                            "dispatched":native_counts["MF_SEEK_DISPATCH"],
                            "reader_returned":native_counts["SEEK_READER_RETURN"]},flush=True)
-            if encrypted_rar5_aac_cache:
-                print("MM5_NATIVE_INPUT_ENCRYPTED_RAR5_MF_CACHE_LAST_RESORT_ROUTE_PASS",flush=True)
+            if encrypted_rar5_mf_memory:
+                print("MM5_NATIVE_INPUT_ENCRYPTED_RAR5_MF_BOUNDED_MEMORY_ROUTE_PASS",flush=True)
             elif encrypted_rar5_mp3_memory:
                 print("MM5_NATIVE_INPUT_ENCRYPTED_RAR5_MEMORY_SECONDARY_ROUTE_PASS",flush=True)
             else:

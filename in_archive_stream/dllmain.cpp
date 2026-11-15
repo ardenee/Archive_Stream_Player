@@ -2491,10 +2491,9 @@ static int Play(const char* fn)
         }
     }
 
-    // Strict priority: direct stream, configured memory buffer, managed cache.
-    // Media Foundation's native decoder currently accepts a stream or file,
-    // not an in-memory source. It skips the memory route until implemented.
-    const bool nativeMediaFoundation = MfIsNativeMediaFormat(selectedFormat);
+    // Strict priority: validated archive stream, configured memory, managed cache.
+    // The Media Foundation byte stream can borrow the bounded playback buffer
+    // for AAC/M4A/WMA, so these formats follow exactly the same route policy.
     const bool solidCannotStream = (archiveIs7z || archiveIsRar) && selectedSolidKnown && selectedIsSolid;
     std::vector<unsigned char> bufferedEntry;
     bool streamReady = false;
@@ -2533,7 +2532,7 @@ static int Play(const char* fn)
     else
     {
         bool memoryReady = false;
-        if (!nativeMediaFoundation && uncompSize <= g_audioBufferSize)
+        if (uncompSize <= g_audioBufferSize)
         {
             std::string memoryError;
             if (ArchiveExtractEntryToMemory(actualZipPath, mp3Index, bufferedEntry, memoryError) &&
@@ -2556,7 +2555,6 @@ static int Play(const char* fn)
         else
         {
             const char* cacheReason = solidCannotStream ? (archiveIsRar ? "solid_rar_memory_unavailable" : "solid_7z_memory_unavailable") :
-                nativeMediaFoundation ? "mf_memory_decoder_unavailable" :
                 uncompSize > g_audioBufferSize ? "entry_exceeds_memory_buffer" : "stream_and_memory_failed";
             ClearPrevalidatedStream();
 

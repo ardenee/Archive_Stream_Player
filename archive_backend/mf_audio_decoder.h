@@ -10,6 +10,7 @@ const wchar_t* MfMimeTypeForFormat(AudioFormat format);
 const wchar_t* MfVirtualUrlExtensionForFormat(AudioFormat format);
 bool MfOpenArchiveDecoder(const char* archivePath, mz_uint index, mz_uint64 length, AudioFormat format, MfAudioDecoder** outDecoder);
 bool MfOpenCacheFileDecoder(const char* cachePath, AudioFormat format, MfAudioDecoder** outDecoder);
+bool MfOpenMemoryDecoder(const void* data, size_t length, AudioFormat format, MfAudioDecoder** outDecoder);
 size_t MfReadPcm(MfAudioDecoder* decoder, void* outBuffer, size_t outBufferBytes);
 bool MfSeekMs(MfAudioDecoder* decoder, int positionMs);
 void MfCloseDecoder(MfAudioDecoder* decoder);

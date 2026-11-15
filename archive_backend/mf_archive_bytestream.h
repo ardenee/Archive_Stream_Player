@@ -23,6 +23,10 @@ public:
         const wchar_t* mimeType
     );
 
+    // Borrow the already allocated playback buffer; caller keeps it valid until
+    // the Media Foundation reader and decoder are closed (Stop joins thread).
+    bool OpenMemory(const void* data, size_t length, const wchar_t* virtualUrl, const wchar_t* mimeType);
+
     void CloseInternal();
 
     // IUnknown
@@ -87,6 +91,8 @@ private:
     ArchiveStreamContext m_stream;
 
     bool m_streamOpen;
+    bool m_memoryOpen;
+    const unsigned char* m_memoryData;
     bool m_hardReadFailure;
     bool m_readZeroLogged;
 

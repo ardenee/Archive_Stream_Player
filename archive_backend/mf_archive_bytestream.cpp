@@ -70,6 +70,8 @@ ArchiveMFByteStream::ArchiveMFByteStream() :
     m_refCount(1),
     m_closed(false),
     m_streamOpen(false),
+    m_memoryOpen(false),
+    m_memoryData(nullptr),
     m_hardReadFailure(false),
     m_readZeroLogged(false),
     m_length(0),
@@ -145,6 +147,38 @@ bool ArchiveMFByteStream::Open(const char* archivePath, mz_uint index, mz_uint64
 }
 
 
+bool ArchiveMFByteStream::OpenMemory(const void* data, size_t length, const wchar_t* virtualUrl, const wchar_t* mimeType)
+{
+    if (!data || length == 0)
+    {
+        DebugLogWrite("ERROR", "MFSTREAM", "OPEN_MEMORY_FAIL", "reason=invalid_input | length=%zu", length);
+        return false;
+    }
+
+    EnterCriticalSection(&m_lock);
+    CloseInternal();
+    m_closed = false;
+    m_hardReadFailure = false;
+    m_readZeroLogged = false;
+    m_memoryData = static_cast<const unsigned char*>(data);
+    m_memoryOpen = true;
+    m_length = static_cast<QWORD>(length);
+    m_position = 0;
+
+    if (m_attributes)
+    {
+        if (virtualUrl && virtualUrl[0])
+            m_attributes->SetString(MF_BYTESTREAM_ORIGIN_NAME, virtualUrl);
+
+        if (mimeType && mimeType[0])
+            m_attributes->SetString(MF_BYTESTREAM_CONTENT_TYPE, mimeType);
+    }
+
+    LeaveCriticalSection(&m_lock);
+    DebugLogWrite("INFO", "MFSTREAM", "OPEN_MEMORY", "length=%zu | borrowed_buffer=1 | disk_cache=0", length);
+    return true;
+}
+
 void ArchiveMFByteStream::CloseInternal()
 {
     if (m_streamOpen)
@@ -153,6 +187,8 @@ void ArchiveMFByteStream::CloseInternal()
         m_streamOpen = false;
     }
 
+    m_memoryOpen = false;
+    m_memoryData = nullptr;
     m_closed = true;
     m_position = 0;
 }
@@ -264,7 +300,7 @@ STDMETHODIMP ArchiveMFByteStream::Read(BYTE* pb, ULONG cb, ULONG* pcbRead)
 
     EnterCriticalSection(&m_lock);
 
-    if (m_closed || !m_streamOpen)
+    if (m_closed || (!m_streamOpen && !m_memoryOpen))
     {
         LeaveCriticalSection(&m_lock);
         return MF_E_SHUTDOWN;
@@ -289,7 +325,17 @@ STDMETHODIMP ArchiveMFByteStream::Read(BYTE* pb, ULONG cb, ULONG* pcbRead)
         cb = (ULONG)remaining;
     }
 
-    size_t got = ArchiveReadEntryStream(&m_stream, pb, cb);
+    size_t got = 0;
+    if (m_memoryOpen)
+    {
+        // m_length is size_t bounded by OpenMemory; m_position never exceeds it.
+        memcpy(pb, m_memoryData + static_cast<size_t>(m_position), cb);
+        got = cb;
+    }
+    else
+    {
+        got = ArchiveReadEntryStream(&m_stream, pb, cb);
+    }
 
     if (got == 0 && cb > 0 && m_position < m_length)
     {
@@ -421,7 +467,7 @@ STDMETHODIMP ArchiveMFByteStream::Seek(MFBYTESTREAM_SEEK_ORIGIN SeekOrigin, LONG
 {
     EnterCriticalSection(&m_lock);
 
-    if (m_closed || !m_streamOpen)
+    if (m_closed || (!m_streamOpen && !m_memoryOpen))
     {
         LeaveCriticalSection(&m_lock);
         return MF_E_SHUTDOWN;
@@ -448,7 +494,7 @@ STDMETHODIMP ArchiveMFByteStream::Seek(MFBYTESTREAM_SEEK_ORIGIN SeekOrigin, LONG
         return E_INVALIDARG;
     }
 
-    bool ok = ArchiveSeekEntryStream(&m_stream, (mz_uint64)target);
+    bool ok = m_memoryOpen || ArchiveSeekEntryStream(&m_stream, (mz_uint64)target);
 
     if (!ok)
     {

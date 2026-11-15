@@ -907,6 +907,8 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
 
         if (playbackMode == ARCHIVE_PLAYBACK_CACHE_FILE)
             mfOk = MfOpenCacheFileDecoder(g_currentCachePath, format, &mf);
+        else if (playbackMode == ARCHIVE_PLAYBACK_MEMORY)
+            mfOk = MfOpenMemoryDecoder(g_audioBuffer, g_currentAudioSize, format, &mf);
         else
             mfOk = MfOpenArchiveDecoder(g_currentArchivePath, g_currentArchiveIndex, (mz_uint64)g_currentAudioSize, format, &mf);
 
@@ -995,6 +997,7 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
         }
 
         endedNaturally = false;
+        unsigned int mfPcmReadCounter = 0;
 
         while (InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0)
         {
@@ -1025,7 +1028,13 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
                 }
             }
 
+            const bool memoryReadTrace = playbackMode == ARCHIVE_PLAYBACK_MEMORY && (mfPcmReadCounter++ < 3 || mfPcmReadCounter % 256 == 0 || InterlockedCompareExchange(&g_seekRequested, 0, 0) != 0);
+            const ULONGLONG readStartTick = GetTickCount64();
+            if (memoryReadTrace)
+                DebugLogWrite("INFO", "MF", "MEMORY_PCM_READ_BEGIN", "seek_pending=%ld | pcm_capacity=%zu", InterlockedCompareExchange(&g_seekRequested, 0, 0), pcmBufferBytes);
             size_t bytesRead = MfReadPcm(mf, pcm, pcmBufferBytes);
+            if (memoryReadTrace || GetTickCount64() - readStartTick > 500)
+                DebugLogWrite("INFO", "MF", "MEMORY_PCM_READ_END", "seek_pending=%ld | bytes=%zu | elapsed_ms=%llu", InterlockedCompareExchange(&g_seekRequested, 0, 0), bytesRead, (unsigned long long)(GetTickCount64() - readStartTick));
 
             if (bytesRead == 0)
             {
@@ -1053,7 +1062,7 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
         MfCloseDecoder(mf);
         InterlockedExchange(&g_isPlaying, 0);
 
-        DebugLogWrite("INFO", "PLAYBACK", "THREAD_EXIT", "decoder=MP3 | archive=%s | index=%u | cache=%s | ended_naturally=%d | stop_requested=%ld", g_currentArchivePath, (unsigned int)g_currentArchiveIndex, g_currentCachePath, endedNaturally ? 1 : 0, InterlockedCompareExchange(&g_stopRequested, 0, 0));
+        DebugLogWrite("INFO", "PLAYBACK", "THREAD_EXIT", "decoder=MF | archive=%s | index=%u | cache=%s | ended_naturally=%d | stop_requested=%ld", g_currentArchivePath, (unsigned int)g_currentArchiveIndex, g_currentCachePath, endedNaturally ? 1 : 0, InterlockedCompareExchange(&g_stopRequested, 0, 0));
 
         if (endedNaturally && InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 && g_mod.hMainWindow)
             PostMessage(g_mod.hMainWindow, WM_WA_MPEG_EOF, 0, 0);
