@@ -38,7 +38,7 @@ namespace
 {
 struct Settings
 {
-    std::wstring archive, playlistDir;
+    std::wstring archive, playlistDir, nativeManifestDir;
     std::string passwordPath;
     size_t memoryLimit = 50ULL * 1024 * 1024;
     uint64_t cacheLimit = 2048ULL * 1024 * 1024;
@@ -709,6 +709,8 @@ bool Arguments(int argc, wchar_t **argv)
                 g_settings.archive = val;
             else if (key == L"--playlist-dir")
                 g_settings.playlistDir = val;
+            else if (key == L"--native-manifest-dir")
+                g_settings.nativeManifestDir = val;
             else if (key == L"--password-list")
                 g_settings.passwordPath = Utf8(val);
             else if (key == L"--prompt-password")
@@ -817,6 +819,61 @@ bool WriteText(const std::filesystem::path &p, const std::string &text)
     output.write(text.data(), (std::streamsize)text.size());
     return output.good();
 }
+bool WriteNativeManifestPlaylist()
+{
+    // Native MediaMonkey uses real .ast filenames for Winamp input dispatch.
+    // Only the archive-entry reference is written here, never decoded audio.
+    const std::string archive = Utf8(g_settings.archive);
+    if (archive.empty() || archive.find('\r') != std::string::npos || archive.find('\n') != std::string::npos)
+        return false;
+    std::error_code error;
+    const std::filesystem::path folder(g_settings.nativeManifestDir);
+    std::filesystem::create_directories(folder, error);
+    if (error)
+        return false;
+
+    std::string playlist = "#EXTM3U\r\n";
+    size_t count = 0;
+    for (const auto& entry : g_entries)
+    {
+        if (entry.isFolder || !entry.isSupportedAudio || !entry.size)
+            continue;
+        if (entry.path.empty() || entry.path.size() >= 1024 ||
+            entry.path.find('\r') != std::string::npos || entry.path.find('\n') != std::string::npos ||
+            entry.path.find('\0') != std::string::npos)
+            return false;
+        const std::string virtualPath = archive + ".archive_stream|" + std::to_string(entry.index) + "|" + entry.path;
+        if (virtualPath.size() > 16300)
+            return false;
+        const std::filesystem::path manifest = folder / (L"entry-" + std::to_wstring(entry.index) + L".ast");
+        if (!WriteText(manifest, "ARCHIVE_STREAM_NATIVE_TRACK_V1\n" + virtualPath + "\n"))
+            return false;
+        std::string title = Title(entry, g_settings.titleTemplate);
+        if (title.empty())
+            title = Name(entry);
+        for (char& value : title)
+            if (value == '\r' || value == '\n' || value == '\0')
+                value = ' ';
+        const std::string path = Utf8(manifest.wstring());
+        if (path.empty())
+            return false;
+        playlist += "#EXTINF:-1," + title + "\r\n" + path + "\r\n";
+        ++count;
+    }
+    if (!count || count > 10000 || playlist.size() > 16 * 1024 * 1024)
+        return false;
+
+    const auto playlistPath = folder / L"archive-stream-native.m3u8";
+    if (!WriteText(playlistPath, playlist))
+        return false;
+    DebugLogWrite("INFO", "BRIDGE", "NATIVE_MANIFEST_CREATED", "tracks=%zu | http=0", count);
+    std::printf("NATIVE_MANIFEST_MODE=1\r\n");
+    std::printf("ARCHIVE_AUDIO_ENTRIES=%zu\r\n", count);
+    std::printf("NATIVE_PLAYLIST_M3U8=%s\r\n", Utf8(playlistPath.wstring()).c_str());
+    std::printf("NATIVE_MANIFEST_READY=1\r\n");
+    std::fflush(stdout);
+    return true;
+}
 } // namespace
 
 int wmain(int argc, wchar_t **argv)
@@ -832,7 +889,7 @@ int wmain(int argc, wchar_t **argv)
     if (!Arguments(argc, argv))
     {
         std::fputs("Usage: archive_player_bridge.exe --archive FILE.zip|7z|rar [--password-list PATH] [--memory-mb 50] "
-                   "[--playlist-dir DIR] [--lifetime SECONDS] [--port PORT] [--cache-limit-mb N] "
+                   "[--playlist-dir DIR] [--native-manifest-dir DIR] [--lifetime SECONDS] [--port PORT] [--cache-limit-mb N] "
                    "[--title-template TEMPLATE] [--prompt-password 0|1]\r\n",
                    stderr);
         return 2;
@@ -869,6 +926,17 @@ int wmain(int argc, wchar_t **argv)
     {
         std::fputs("ARCHIVE_NO_AUDIO\r\n", stderr);
         return 4;
+    }
+    if (!g_settings.nativeManifestDir.empty())
+    {
+        // Local manifest mode terminates before WinSock initialization:
+        // genuine native player input dispatch without any HTTP listener.
+        if (!WriteNativeManifestPlaylist())
+        {
+            std::fputs("NATIVE_MANIFEST_WRITE_FAIL\r\n", stderr);
+            return 9;
+        }
+        return 0;
     }
     // Encrypted entry credentials are resolved only when playback requests
     // decoded data. Serialized HTTP worker opens avoid duplicate prompts.

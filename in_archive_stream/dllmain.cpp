@@ -20,6 +20,7 @@
 #include "winamp_bridge_protocol.h"
 #include "playback.h"
 #include "archive_reader.h"
+#include "native_track_manifest.h"
 #include "mf_support.h"
 #include "mf_audio_decoder.h"
 #include "debug_log.h"
@@ -73,6 +74,8 @@ static char g_fileExtensions[] =
 "RAR archive audio files (*.RAR)\0"
 "ARCHIVE_STREAM\0"
 "Archive Stream virtual track (*.ARCHIVE_STREAM)\0"
+"AST\0"
+"Archive Stream native track reference (*.AST)\0"
 "\0";
 
 HANDLE g_playThread = NULL;
@@ -417,6 +420,12 @@ static int IsOurFile(const char* filename)
     if (!filename)
     {
         return 0;
+    }
+
+    if (ArchiveNativeTrackHasExtension(filename))
+    {
+        std::string target;
+        return ArchiveNativeTrackRead(filename, target) ? 1 : 0;
     }
 
     if (IsVirtualArchivePath(filename))
@@ -1843,6 +1852,20 @@ static bool ShouldSkipBackgroundMetadataForSolid7z(const char* archivePath, mz_u
 
 static void GetFileInfo(const char* file, char* title, int* length_in_ms)
 {
+    std::string resolvedManifest;
+    if (ArchiveNativeTrackHasExtension(file))
+    {
+        if (!ArchiveNativeTrackRead(file, resolvedManifest))
+        {
+            if (title)
+                CopyBaseName(title, 1024, file);
+            if (length_in_ms)
+                *length_in_ms = -1000;
+            return;
+        }
+        file = resolvedManifest.c_str();
+    }
+
     /*
         Virtual archive playlist entries must be handled first.
         Do NOT use g_currentTitle / g_currentLengthMs for these,
@@ -2240,6 +2263,18 @@ static bool ExtractEntryToPlaybackCache(const char* archivePath, mz_uint index, 
 
 static int Play(const char* fn)
 {
+    std::string resolvedManifest;
+    if (ArchiveNativeTrackHasExtension(fn))
+    {
+        if (!ArchiveNativeTrackRead(fn, resolvedManifest))
+        {
+            DebugLogWrite("WARN", "PLAY", "NATIVE_MANIFEST_REJECTED", "file=%s", fn ? fn : "");
+            return 1;
+        }
+        DebugLogWrite("INFO", "PLAY", "NATIVE_MANIFEST_ACCEPTED", "file=%s | virtual=%s", fn, resolvedManifest.c_str());
+        fn = resolvedManifest.c_str();
+    }
+
     Stop();
     ClearPrevalidatedStream();
 

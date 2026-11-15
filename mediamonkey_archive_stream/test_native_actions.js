@@ -105,10 +105,11 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
         uitools: {toastMessage: {show: (message, options) => messages.push({message, options})}}
     };
     vm.runInNewContext(code, toolbox, {filename: 'actions_add.js'});
-    assert.equal(menu.length, 3);
+    assert.equal(menu.length, 4);
     assert.equal(menu[0].action, actions.archiveStreamNativeAdd);
-    assert.equal(menu[1].action, actions.archiveStreamNativeSettings);
-    assert.equal(menu[2].action, actions.archiveStreamNativeRefreshTitles);
+    assert.equal(menu[1].action, actions.archiveStreamNativeAddHttp);
+    assert.equal(menu[2].action, actions.archiveStreamNativeSettings);
+    assert.equal(menu[3].action, actions.archiveStreamNativeRefreshTitles);
     if (settings)
         await actions.archiveStreamNativeSettings.execute();
     else
@@ -143,6 +144,23 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
     assert(!Object.hasOwn(normal.files, readyFile), 'Delete manifest after queue handoff');
     assert(normal.messages.some(x => x.message.includes('Added 2 archive tracks')));
     console.log('MEDIAMONKEY_NATIVE_ADDON_IN_PROCESS_QUEUE_AND_TITLES_PASS');
+
+    const nativeRoot = 'C:\\Temp\\ArchiveStreamMM5Native-abc123';
+    const nativeList = '#EXTM3U\r\n#EXTINF:-1,Native One\r\n' + nativeRoot + '\\entry-0.ast\r\n' +
+        '#EXTINF:-1,Native Two\r\n' + nativeRoot + '\\entry-1.ast\r\n';
+    const nativeManifest = {ok: true, playlist: playlistFile, entries: 2, mode: 'native', nativeRoot};
+    const native = await exercise({playlist: nativeList, manifest: nativeManifest});
+    const nativeQueue = native.calls.find(x => x[0] === 'queue');
+    assert(nativeQueue && nativeQueue[1].tracks.length === 2);
+    assert.equal(nativeQueue[1].tracks[0].path, nativeRoot + '\\entry-0.ast');
+    assert.equal(nativeQueue[1].tracks[1].title, 'Native Two');
+    assert.equal(native.files[ackFile], 'QUEUED=2');
+    assert(native.messages.some(x => x.message.includes('native decoder, no HTTP')));
+    const forged = await exercise({playlist: nativeList.replace('entry-1.ast', '..\\foreign.ast'), manifest: nativeManifest});
+    assert(!forged.calls.some(x => x[0] === 'queue'), 'Reject escaped native manifest paths');
+    const foreignRoot = await exercise({playlist: nativeList, manifest: {...nativeManifest, nativeRoot: 'C:\\Elsewhere'}});
+    assert(!foreignRoot.calls.some(x => x[0] === 'queue'), 'Reject paths outside native session directory');
+    console.log('MEDIAMONKEY_NATIVE_ADDON_LOCAL_MANIFEST_SCOPE_AND_QUEUE_PASS');
 
     const singlePlaylist = validPlaylist.split('#EXTINF:199,')[0];
     const refreshed = await exercise({playlist: singlePlaylist,

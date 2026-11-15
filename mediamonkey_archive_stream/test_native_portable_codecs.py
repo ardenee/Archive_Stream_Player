@@ -65,6 +65,7 @@ if RAR_SOLID and (ARCHIVE_KIND != "rar" or not AES_MODE):
 if RAR_MULTIPART and (ARCHIVE_KIND != "rar" or not AES_MODE):
     raise SystemExit("AST_MM5_QA_RAR_MULTIPART requires AST_MM5_QA_AES and AST_MM5_QA_ARCHIVE=rar")
 TITLE_REFRESH_QA = os.environ.get("AST_MM5_QA_TITLE_REFRESH", "0") == "1"
+NATIVE_INPUT_QA = os.environ.get("AST_MM5_QA_NATIVE", "0") == "1"
 TEST_SAVE_CONSENT = os.environ.get("AST_MM5_QA_SAVE", "0") == "1"
 if TEST_SAVE_CONSENT and (not RAR_HEADERS or AES_MODE != "accept"):
     raise SystemExit("AST_MM5_QA_SAVE requires RAR encrypted headers and accepted password")
@@ -275,6 +276,11 @@ def main():
         if copied.returncode >= 8:
             raise RuntimeError("Could not stage MediaMonkey: " + copied.stdout[-1000:])
         portable = exe_dir / "Portable"
+        if NATIVE_INPUT_QA:
+            native_dll=REPO/"in_archive_stream"/"Release"/"in_archive_stream.dll"
+            assert native_dll.is_file(),native_dll
+            shutil.copy2(native_dll,exe_dir/"Plugins"/"in_archive_stream.dll")
+            print("MM5_NATIVE_MATCHING_DECODER_STAGED",flush=True)
         portable.mkdir(exist_ok=True)
         (portable / "MediaMonkey.ini").write_text(
             "[Portable]\nIsPortable=1\n[System]\nDBName="+str(portable / "MM5.DB")+"\n", encoding="utf-8")
@@ -397,7 +403,9 @@ def main():
             return
 
         def ready():
-            matches=list((workspace/"Temp").glob("ArchiveBridge-*/archive-stream.m3u8"))
+            matches=(list((workspace/"Temp").glob("ArchiveStreamMM5Native-*/archive-stream-native.m3u8"))
+                     if NATIVE_INPUT_QA else
+                     list((workspace/"Temp").glob("ArchiveBridge-*/archive-stream.m3u8")))
             for file in matches:
                 lines=file.read_text(encoding="utf-8-sig").splitlines()
                 labels=[row.split(",",1)[1] for row in lines if row.startswith("#EXTINF:") and "," in row]
@@ -533,6 +541,20 @@ def main():
             print("MM5_BRIDGE_CACHE_COUNT",data.count("ROUTE_CACHE"),flush=True)
         else:
             print("MM5_BRIDGE_LOG_MISSING",flush=True)
+        if NATIVE_INPUT_QA:
+            decoder_log=workspace/"Local"/"ArchiveStreamPlayer"/"Logs"/"archive_stream_winamp.log"
+            assert decoder_log.is_file(),"Missing production native input decoder trace"
+            native_trace=decoder_log.read_text(encoding="utf-8-sig",errors="replace")
+            native_counts={kind:native_trace.count(kind) for kind in
+                           ("NATIVE_MANIFEST_ACCEPTED","THREAD_ENTER","mode=STREAM","mode=CACHE","ROUTE_CACHE","SEEK_REQUEST")}
+            print("MM5_NATIVE_INPUT_STREAM_COUNTS",native_counts,flush=True)
+            assert native_counts["NATIVE_MANIFEST_ACCEPTED"]>=len(SOURCES),native_counts
+            assert native_counts["THREAD_ENTER"]>=len(SOURCES) and native_counts["mode=STREAM"]>=len(SOURCES),native_counts
+            assert native_counts["mode=CACHE"]==native_counts["ROUTE_CACHE"]==0,native_counts
+            assert "NATIVE_MANIFEST_REJECTED" not in native_trace and "DECODER_OPEN_FAIL" not in native_trace,native_trace[-2500:]
+            if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1":
+                assert native_counts["SEEK_REQUEST"]>=len(SOURCES),native_counts
+            print("MM5_NATIVE_INPUT_CODEC_ARCHIVE_STREAMING_WITHOUT_CACHE_PASS",flush=True)
 
         print("MM5_PORTABLE_CODEC_MATRIX",json.dumps(results),flush=True)
         if AES_MODE:

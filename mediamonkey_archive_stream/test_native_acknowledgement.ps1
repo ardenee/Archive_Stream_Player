@@ -34,7 +34,7 @@ try {
     $ready = Join-Path $folder 'ready.json'
     $p = New-Object System.Diagnostics.ProcessStartInfo
     $p.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $p.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '" -Archive "' + $archive + '" -PlayerExe "' + $player + '" -ReadyFile "' + $ready + '"'
+    $p.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '" -Archive "' + $archive + '" -PlayerExe "' + $player + '" -ReadyFile "' + $ready + '" -UseHttpBridge'
     $p.UseShellExecute = $false
     $p.CreateNoWindow = $true
     $session = [Diagnostics.Process]::Start($p)

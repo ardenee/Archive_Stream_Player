@@ -1,8 +1,8 @@
 {
   "title": "Archive Stream Player – Winamp-compatible ZIP/7z/RAR",
   "id": "archiveStreamPlayerWinamp",
-  "description": "Experimental Winamp-compatible input module only. MediaMonkey 5 does not support Winamp general-purpose playlist expanders; use the Archive Stream HTTP bridge for playable archive playlists.",
-  "version": "1.0.1",
+  "description": "Winamp-compatible native archive input decoder for MediaMonkey 5. Supports .ast entry manifests, shared archive streaming and seeking. Install with the matching Archive Stream Tools addon.",
+  "version": "1.1.0",
   "minAppVersion": "5.0.0",
   "type": "plugin",
   "author": "Archive Stream Player",

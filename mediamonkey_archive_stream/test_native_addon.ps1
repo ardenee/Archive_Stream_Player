@@ -17,7 +17,7 @@ try {
         throw 'MediaMonkey native addon package manifest is invalid.'
     }
     foreach ($file in @('actions_add.js', 'archive_player_bridge.exe',
-                        'launch-mediamonkey.ps1', 'configure-adapters.ps1',
+                        'in_archive_stream.dll', 'launch-mediamonkey.ps1', 'configure-adapters.ps1',
                         'LICENSE', 'LICENSING.md', 'THIRD-PARTY-NOTICES.md')) {
         if (!(Test-Path -LiteralPath (Join-Path $installed $file) -PathType Leaf)) {
             throw "Missing native addon entry: $file"
@@ -50,7 +50,7 @@ try {
     }
     if (!(Test-Path -LiteralPath $ready -PathType Leaf)) { throw 'Native queue handoff manifest was not published.' }
     $manifest = Get-Content -LiteralPath $ready -Raw | ConvertFrom-Json
-    if (!$manifest.ok -or $manifest.entries -ne 1 -or !$manifest.playlist) {
+    if (!$manifest.ok -or $manifest.entries -ne 1 -or !$manifest.playlist -or $manifest.mode -ne 'http') {
         throw 'Native queue handoff manifest failed its contract.'
     }
     Write-Output 'MEDIAMONKEY_NATIVE_ADDON_PACKAGED_BRIDGE_AND_HANDOFF_PASS'

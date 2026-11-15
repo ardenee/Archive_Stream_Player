@@ -70,9 +70,17 @@
         throw new Error('Timed out waiting for archive decoding to initialize.');
     }
 
-    function archiveTrackList(text, expectedCount) {
+    function archiveTrackList(text, expectedCount, mode, nativeRoot) {
         const rows = text.split(/\r?\n/);
         const list = app.utils.createTracklist(true);
+        const useNative = mode === 'native';
+        if (mode !== 'native' && mode !== 'http')
+            throw new Error('Unsupported archive playback handoff.');
+        const nativePrefix = useNative && typeof nativeRoot === 'string' &&
+            /^[a-z]:[\\/]/i.test(nativeRoot) ?
+            nativeRoot.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase() + '\\' : '';
+        if (useNative && !nativePrefix)
+            throw new Error('Native archive references have no validated session directory.');
         let label = '';
         let durationSeconds = -1;
         let count = 0;
@@ -88,12 +96,20 @@
             }
             if (!row || row.startsWith('#'))
                 continue;
-            let url;
-            try { url = new URL(row); }
-            catch (error) { throw new Error('Invalid archive bridge playlist URL.'); }
-            if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' ||
-                !/^\/[0-9a-f]{32}\/entry\/[0-9]+\.[a-z0-9]+$/i.test(url.pathname))
-                throw new Error('Archive bridge playlist has an untrusted URL.');
+            if (useNative) {
+                const file = row.replace(/\//g, '\\').toLowerCase();
+                if (!file.startsWith(nativePrefix) ||
+                    !/^entry-[0-9]+\.ast$/i.test(file.slice(nativePrefix.length)))
+                    throw new Error('Native archive playlist contains an unexpected reference path.');
+            }
+            else {
+                let url;
+                try { url = new URL(row); }
+                catch (error) { throw new Error('Invalid archive bridge playlist URL.'); }
+                if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' ||
+                    !/^\/[0-9a-f]{32}\/entry\/[0-9]+\.[a-z0-9]+$/i.test(url.pathname))
+                    throw new Error('Archive bridge playlist has an untrusted URL.');
+            }
             const track = app.utils.createEmptyTrack();
             track.path = row;
             if (label)
@@ -181,7 +197,7 @@
         }
     }
 
-    async function addArchive(archive) {
+    async function addArchive(archive, useHttpBridge = false) {
         const tempFile = await app.utils.getTempFilePathAsync();
         const ready = tempFile + '.archive-stream-ready.json';
         const acknowledge = ready + '.ack';
@@ -192,21 +208,24 @@
             await spawn('launch-mediamonkey.ps1',
                 '-Archive ' + quote(archive) +
                 ' -PlayerExe ' + quote(player) +
-                ' -ReadyFile ' + quote(ready));
+                ' -ReadyFile ' + quote(ready) +
+                (useHttpBridge ? ' -UseHttpBridge' : ''));
             const manifest = await awaitReady(ready);
             if (!manifest || !manifest.ok || !manifest.playlist ||
                 !Number.isInteger(manifest.entries) || manifest.entries < 1)
                 throw new Error('Archive Stream could not open the archive or prepare media.');
             const playlist = await app.filesystem.loadTextFromFileAsync(manifest.playlist);
-            const tracks = archiveTrackList(playlist, manifest.entries);
+            const tracks = archiveTrackList(playlist, manifest.entries, manifest.mode || 'http', manifest.nativeRoot);
             // Native MediaMonkey API, not a second MediaMonkey.exe /Add process.
             // Keep existing Now Playing entries and do not interrupt playback.
             await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});
             // The launcher terminates its bridge unless the player acknowledged
             // successful queue insertion. This avoids orphaned bridge sessions.
             await app.filesystem.saveTextToFileAsync(acknowledge, 'QUEUED=' + tracks.count);
-            queuedArchiveSessions.set(manifest.playlist, new Set(playlistTitles(playlist).keys()));
-            notice('Added ' + tracks.count + ' archive tracks to Now Playing.');
+            if (manifest.mode !== 'native')
+                queuedArchiveSessions.set(manifest.playlist, new Set(playlistTitles(playlist).keys()));
+            notice('Added ' + tracks.count + ' archive tracks to Now Playing (' +
+                (manifest.mode === 'native' ? 'native decoder, no HTTP' : 'HTTP compatibility') + ').');
         }
         finally {
             try { await app.filesystem.deleteFileAsync(ready); } catch (error) {}
@@ -224,6 +243,24 @@
                 if (!archive)
                     return;
                 await addArchive(quote(archive).slice(1, -1));
+            }
+            catch (error) {
+                notice(error && error.message ? error.message : 'Archive selection or playback failed.');
+            }
+        }
+    };
+
+    actions.archiveStreamNativeAddHttp = {
+        title: 'Archive Stream: Add Archive Audio (HTTP compatibility)...',
+        hotkeyAble: true,
+        execute: async function () {
+            try {
+                const archive = await window.localPromise(app.utils.dialogOpenFile('',
+                    'zip;7z;rar;001', 'Archives (*.zip;*.7z;*.rar;*.001)|*.zip;*.7z;*.rar;*.001',
+                    'Choose audio archive for HTTP compatibility', false));
+                if (!archive)
+                    return;
+                await addArchive(quote(archive).slice(1, -1), true);
             }
             catch (error) {
                 notice(error && error.message ? error.message : 'Archive selection or playback failed.');
@@ -269,6 +306,11 @@
     window._menuItems.tools.action.submenu.push({
         action: actions.archiveStreamNativeAdd,
         order: 10,
+        grouporder: 91
+    });
+    window._menuItems.tools.action.submenu.push({
+        action: actions.archiveStreamNativeAddHttp,
+        order: 15,
         grouporder: 91
     });
     window._menuItems.tools.action.submenu.push({

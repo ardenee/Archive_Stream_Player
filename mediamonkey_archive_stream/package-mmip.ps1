@@ -8,8 +8,9 @@ if ([string]::IsNullOrEmpty($OutputFolder)) {
     $OutputFolder = Join-Path $PSScriptRoot 'Release'
 }
 # MediaMonkey 5 supports Winamp input plugins, but not Winamp general-purpose
-# plugins. Never ship gen_archive_stream.dll in the MM5 MMIP: it cannot expand
-# archive playlists there. Use the bridge for real supported archive playback.
+# plugins. This MMIP installs the native .ast archive-entry decoder; install
+# the matching Tools addon MMIP for archive listing and native-first queueing.
+# Older/mismatched input modules retain authenticated HTTP compatibility.
 $inputPlugin = Join-Path $root "in_archive_stream\$Configuration\in_archive_stream.dll"
 $settings = Join-Path $root 'archive_player_bridge\configure-adapters.ps1'
 foreach ($file in @($inputPlugin, $settings)) {
@@ -31,7 +32,7 @@ try {
     Compress-Archive -Path "$stage\*" -DestinationPath $zip
     Move-Item $zip $file
     Write-Host "MediaMonkey 5+ Winamp input-plugin-only MMIP: $file"
-    Write-Host "Native archive playlist expansion is not available through Winamp general plugins in MediaMonkey 5. Use the playback bridge."
+    Write-Host "Install the matching ArchiveStreamPlayer-MediaMonkey5-Native.mmip Tools addon for native-first archive selection and queueing. HTTP compatibility remains available."
 } finally {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 }

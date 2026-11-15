@@ -8,11 +8,13 @@ if (!$OutputFolder) { $OutputFolder = Join-Path $PSScriptRoot 'Release' }
 $source = Join-Path $PSScriptRoot 'native_addon'
 $bridge = Join-Path $root ("archive_player_bridge\x64\" + $Configuration + "\archive_player_bridge.exe")
 $settings = Join-Path $root 'archive_player_bridge\configure-adapters.ps1'
+$nativeInput = Join-Path $root 'in_archive_stream\Release\in_archive_stream.dll'
 foreach ($file in @(
     (Join-Path $source 'info.json'),
     (Join-Path $source 'actions_add.js'),
     (Join-Path $source 'launch-mediamonkey.ps1'),
     $bridge,
+    $nativeInput,
     $settings,
     (Join-Path $root 'LICENSE'),
     (Join-Path $root 'LICENSING.md'),
@@ -27,6 +29,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $source 'actions_add.js') -Destination (Join-Path $stage 'actions_add.js')
     Copy-Item -LiteralPath (Join-Path $source 'launch-mediamonkey.ps1') -Destination (Join-Path $stage 'launch-mediamonkey.ps1')
     Copy-Item -LiteralPath $bridge -Destination (Join-Path $stage 'archive_player_bridge.exe')
+    Copy-Item -LiteralPath $nativeInput -Destination (Join-Path $stage 'in_archive_stream.dll')
     Copy-Item -LiteralPath $settings -Destination (Join-Path $stage 'configure-adapters.ps1')
     Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stage 'LICENSE')
     Copy-Item -LiteralPath (Join-Path $root 'LICENSING.md') -Destination (Join-Path $stage 'LICENSING.md')
@@ -37,15 +40,22 @@ Archive Stream Player - MediaMonkey 5/2024 JavaScript addon
 Install through MediaMonkey: Tools > Addons > Add, select the .mmip, then
 restart MediaMonkey (or reload the window when asked).
 
-Three Tools menu items:
-  Archive Stream: Add Archive Audio...
+Four Tools menu items:
+  Archive Stream: Add Archive Audio... (native-first)
+  Archive Stream: Add Archive Audio (HTTP compatibility)...
   Archive Stream: Settings...
   Archive Stream: Refresh Queued Titles
 
-The addon uses the x64 statically linked Archive Stream bridge. It does NOT
-install the obsolete Winamp general-purpose expander. The addon's JavaScript
-loads a temporary authenticated M3U8 from the shared bridge and adds the
-individual ZIP/7z/RAR track URLs through MediaMonkey's native Now Playing API.
+Native mode requires the MATCHING x86 in_archive_stream.dll installed in
+MediaMonkey's Plugins folder using the companion MediaMonkey5 input MMIP.
+The launcher checks its SHA-256 against the matching DLL bundled here.
+Missing/different DLLs retain the existing authenticated loopback HTTP mode.
+Native ZIP/7z/RAR listing uses the static backend to generate small .ast
+track references; MediaMonkey's native input decoder streams compressed
+archive entries directly, falling back to bounded RAM or managed cache only
+when required. No HTTP listener or extracted audio file in native mode.
+The addon never installs the obsolete Winamp general-purpose expander.
+Use the explicit HTTP compatibility menu action if needed.
 The original audio files and their embedded tags are not modified.
 Existing titles are refreshed from authenticated bridge playlists only for
 single-entry archive sessions. The third Tools action can refresh immediately.
@@ -63,8 +73,10 @@ First-use encrypted RAR5 filenames also pass host password entry, queue,
 playback/seek, cancellation and wrong-password rejection without saved keys.
 Other archive layouts use the shared stream -> memory -> cache policy.
 
-Bridge sessions end when MediaMonkey closes (after a short grace period),
-or automatically after at most two hours. Host playback is not yet certified
+Native manifest files and HTTP bridge sessions end when MediaMonkey closes
+(after a short grace period), or automatically after at most two hours.
+The native manifest helper exits before starting any listening socket.
+Host playback is not yet certified
 for every codec/archive/encryption format. Archive files are never modified.
 
 Shared preferences live at HKCU\Software\ArchiveStreamPlayer\Adapters.
