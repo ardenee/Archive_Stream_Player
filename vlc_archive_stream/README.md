@@ -18,6 +18,7 @@ are reused. No extra archive-related runtime DLL is introduced.
 - ZIP, non-solid 7z/LZMA2 and single-volume RAR5 each passed 264,600-frame
   44.1 kHz WAV decoding with exact original PCM byte parity, stream=1 and
   no managed disk cache. See test_real_vlc_native.py.
+- Seven synthetic audio codecs (MP3, OGG, FLAC, WAV, WMA, M4A, AAC) were encoded once and played both directly and from ZIP, non-solid 7z/LZMA2 and single-volume RAR5 in the real VLC 3.0.24 x64 host. All 21 source-vs-native-archive decoded-PCM samples matched byte-for-byte, including the lossy codecs compared against their *same compressed source files*. All 21 used ROUTE_STREAM, with zero RAM extraction, managed disk cache and HTTP. This uses the silent audio-file sink, not speakers. The test reads actual archive member order (7z can reorder entries): `test_real_vlc_seven_codecs.py`.
 - Two WAV tracks from each ZIP/7z/RAR archive played via the generated
   native M3U8, recording two access opens, two closes and two stream routes,
   with no HTTP. See test_real_vlc_playlist.py.
@@ -89,7 +90,7 @@ are reused. No extra archive-related runtime DLL is introduced.
   without that builder, missing-DLL and explicit HTTP/CLI overrides
   (`test_launcher_native.py`).
 
-Sound-speaker output and all codecs/encryption layouts are NOT certified. The four
+Sound-speaker output and additional codecs/encryption layouts are NOT certified beyond the seven unencrypted codec × three archive combinations above and separately tested encrypted WAV layouts. The four
 specific direct native encrypted 7z/RAR5 layouts passed correct password with
 Save=No, Cancel and wrong-password rejection; direct native Save=Yes passes all four layouts. The production v1.2 launcher now passes six separate Save=Yes/wrong+Yes/Cancel encrypted-header 7z/RAR5 album tests.
 For the versioned v1.1 module, the native album is enumerated **inside VLC**,
@@ -133,9 +134,10 @@ Example after copying, specifying the correct VLC installation:
 With a compatible v1.1+ DLL the launcher passes an in-process
 `ast://<hex-path>/list/album.m3u8` URL directly to VLC; no HTTP or M3U8
 file is produced. Older unversioned DLLs use the included external builder. Explicit -UseHttpBridge always keeps
-the prior route. Per-launch -MemoryMB, -CacheLimitMB, -TitleTemplate and
--PasswordList overrides use HTTP to preserve their semantics. Shared native
-settings can be changed through -Configure. Native playlists contain only
+the prior route. The v1.3 native DLL accepts per-launch -MemoryMB,
+-CacheLimitMB, -TitleTemplate and -PasswordList overrides directly without
+HTTP; older DLL versions may fall back to the bridge for overrides they do
+not support. Shared native settings can be changed through -Configure. Native playlists contain only
 source paths, indices and titles, not decoded audio or password values.
 Old generated VLC native playlists are removed after seven days.
 
