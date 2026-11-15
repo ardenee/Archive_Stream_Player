@@ -7,7 +7,7 @@
 using Enumerate = int (__stdcall *)(const wchar_t*, const wchar_t*);
 int wmain(int argc, wchar_t** argv)
 {
-    if (argc != 5)
+    if (argc != 5 && argc != 6)
         return 2;
     if (!BASS_Init(0, 44100, 0, nullptr, nullptr))
     {
@@ -23,12 +23,13 @@ int wmain(int argc, wchar_t** argv)
     HMODULE module = GetModuleHandleW(L"bass_archive_stream.dll");
     if (!module)
         return 5;
-    auto scan = reinterpret_cast<Enumerate>(GetProcAddress(module, "ArchiveStreamWriteNativeMp3TracksW"));
+    const bool allowWav = argc == 6 && wcscmp(argv[5], L"pcm") == 0;
+    auto scan = reinterpret_cast<Enumerate>(GetProcAddress(module, allowWav ? "ArchiveStreamWriteNativePcmTracksW" : "ArchiveStreamWriteNativeMp3TracksW"));
     if (!scan)
         return 6;
     const int n = scan(argv[2], argv[3]);
     int expected = _wtoi(argv[4]);
-    printf("QA_NATIVE_MP3_SCAN count=%d expected=%d\n", n, expected);
+    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowWav ? "pcm" : "mp3", n, expected);
     if (n != expected)
         return 7;
     int files = 0;

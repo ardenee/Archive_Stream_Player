@@ -1,4 +1,4 @@
-// Native BASS archive decoder prototype, x86 MusicBee first.
+// Native BASS archive PCM decoder for x86 MusicBee.
 // Proprietary BASS SDK headers/libs are external build-time inputs and must
 // never be redistributed. No HTTP server or runtime vendor DLL is bundled.
 #define NOMINMAX
@@ -21,6 +21,7 @@
 #include "archive_reader.h"
 #include "native_track_manifest.h"
 #include "dr_mp3.h"
+#include "dr_wav.h"
 #include "archive_adapter_preferences.h"
 
 const BASS_FUNCTIONS* bassfunc = nullptr;
@@ -48,13 +49,15 @@ static void Trace(const char* event, const char* note)
     CloseHandle(handle);
 }
 
-struct ArchiveMp3
+struct ArchivePcm
 {
     HSTREAM handle = 0;
     BASSFILE descriptor = nullptr;
     ArchiveStreamContext stream{};
     std::vector<unsigned char> encoded;
     drmp3 decoder{};
+    drwav wav{};
+    AudioFormat format = AUDIO_FORMAT_MP3;
     bool opened = false;
     bool isStreaming = false;
     bool firstRead = false;
@@ -94,7 +97,30 @@ static drmp3_bool32 TellEncoded(void* context, drmp3_int64* position)
     return DRMP3_TRUE;
 }
 
-const ADDON_FUNCTIONS ArchiveMp3::callbacks = {
+static drwav_bool32 WavSeekEncoded(void* context, int offset, drwav_seek_origin origin)
+{
+    // The archive reader has no generic SEEK_END callback. Reject it rather
+    // than pretending it means SEEK_CUR: dr_wav would mismeasure the file and
+    // clamp the WAV data chunk to zero.
+    if (origin == DRWAV_SEEK_END)
+        return DRWAV_FALSE;
+    auto* stream = static_cast<ArchiveStreamContext*>(context);
+    const int64_t current = static_cast<int64_t>(stream->position);
+    const int64_t position = origin == DRWAV_SEEK_SET ? static_cast<int64_t>(offset) : current + offset;
+    if (position < 0)
+        return DRWAV_FALSE;
+    return ArchiveSeekEntryStream(stream, static_cast<mz_uint64>(position)) ? DRWAV_TRUE : DRWAV_FALSE;
+}
+
+static drwav_bool32 WavTellEncoded(void* context, drwav_int64* position)
+{
+    if (!context || !position)
+        return DRWAV_FALSE;
+    *position = static_cast<drwav_int64>(static_cast<ArchiveStreamContext*>(context)->position);
+    return DRWAV_TRUE;
+}
+
+const ADDON_FUNCTIONS ArchivePcm::callbacks = {
     ADDON_LOCK,
     Free,
     Length,
@@ -112,36 +138,41 @@ const ADDON_FUNCTIONS ArchiveMp3::callbacks = {
     nullptr
 };
 
-void WINAPI ArchiveMp3::Free(void* ptr)
+void WINAPI ArchivePcm::Free(void* ptr)
 {
-    auto* state = static_cast<ArchiveMp3*>(ptr);
+    auto* state = static_cast<ArchivePcm*>(ptr);
     if (!state)
         return;
     if (state->opened)
-        drmp3_uninit(&state->decoder);
+    {
+        if (state->format == AUDIO_FORMAT_WAV)
+            drwav_uninit(&state->wav);
+        else
+            drmp3_uninit(&state->decoder);
+    }
     if (state->isStreaming)
         ArchiveCloseEntryStream(&state->stream);
     delete state;
     Trace("CLOSE", "");
 }
 
-QWORD WINAPI ArchiveMp3::Length(void* ptr, DWORD mode)
+QWORD WINAPI ArchivePcm::Length(void* ptr, DWORD mode)
 {
-    const auto* state = static_cast<ArchiveMp3*>(ptr);
+    const auto* state = static_cast<ArchivePcm*>(ptr);
     if (!state || (mode & 0xFF) != BASS_POS_BYTE)
         errorn(BASS_ERROR_NOTAVAIL);
     noerrorn(state->pcmBytes);
 }
 
-void WINAPI ArchiveMp3::Info(void* ptr, BASS_CHANNELINFO* info)
+void WINAPI ArchivePcm::Info(void* ptr, BASS_CHANNELINFO* info)
 {
     if (info)
         info->ctype = kArchiveCtype;
 }
 
-BOOL WINAPI ArchiveMp3::CanSeek(void* ptr, QWORD bytePosition, DWORD mode)
+BOOL WINAPI ArchivePcm::CanSeek(void* ptr, QWORD bytePosition, DWORD mode)
 {
-    const auto* state = static_cast<ArchiveMp3*>(ptr);
+    const auto* state = static_cast<ArchivePcm*>(ptr);
     if (!state || (mode & 0xFF) != BASS_POS_BYTE)
         error(BASS_ERROR_NOTAVAIL);
     if (!state->channels || bytePosition > state->pcmBytes ||
@@ -150,13 +181,16 @@ BOOL WINAPI ArchiveMp3::CanSeek(void* ptr, QWORD bytePosition, DWORD mode)
     return TRUE;
 }
 
-QWORD WINAPI ArchiveMp3::Seek(void* ptr, QWORD bytePosition, DWORD mode)
+QWORD WINAPI ArchivePcm::Seek(void* ptr, QWORD bytePosition, DWORD mode)
 {
-    auto* state = static_cast<ArchiveMp3*>(ptr);
+    auto* state = static_cast<ArchivePcm*>(ptr);
     if (!state || (mode & 0xFF) != BASS_POS_BYTE || !state->channels)
         errorn(BASS_ERROR_NOTAVAIL);
     const QWORD frame = bytePosition / (state->channels * sizeof(int16_t));
-    if (!drmp3_seek_to_pcm_frame(&state->decoder, frame))
+    const bool ok = state->format == AUDIO_FORMAT_WAV
+        ? drwav_seek_to_pcm_frame(&state->wav, frame) != 0
+        : drmp3_seek_to_pcm_frame(&state->decoder, frame) != 0;
+    if (!ok)
     {
         Trace("SEEK_FAIL", "");
         errorn(BASS_ERROR_POSITION);
@@ -165,9 +199,9 @@ QWORD WINAPI ArchiveMp3::Seek(void* ptr, QWORD bytePosition, DWORD mode)
     noerrorn(bytePosition);
 }
 
-DWORD CALLBACK ArchiveMp3::ReadPcm(HSTREAM, void* buffer, DWORD length, void* ptr)
+DWORD CALLBACK ArchivePcm::ReadPcm(HSTREAM, void* buffer, DWORD length, void* ptr)
 {
-    auto* state = static_cast<ArchiveMp3*>(ptr);
+    auto* state = static_cast<ArchivePcm*>(ptr);
     if (!state || !buffer || !state->channels)
         return BASS_STREAMPROC_END;
 
@@ -176,7 +210,9 @@ DWORD CALLBACK ArchiveMp3::ReadPcm(HSTREAM, void* buffer, DWORD length, void* pt
     if (!frames)
         return 0;
 
-    const drmp3_uint64 read = drmp3_read_pcm_frames_s16(&state->decoder, frames, static_cast<int16_t*>(buffer));
+    const uint64_t read = state->format == AUDIO_FORMAT_WAV
+        ? drwav_read_pcm_frames_s16(&state->wav, frames, static_cast<int16_t*>(buffer))
+        : drmp3_read_pcm_frames_s16(&state->decoder, frames, static_cast<int16_t*>(buffer));
     if (!state->firstRead && read > 0)
     {
         state->firstRead = true;
@@ -219,7 +255,7 @@ static bool ConvertDescriptorName(BASSFILE file, std::string& path)
 
 static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 {
-    Trace("CREATE_BEGIN", "codec=MP3");
+    Trace("CREATE_BEGIN", "codec=MP3_or_WAV");
     if (!descriptor)
         return 0;
 
@@ -242,18 +278,23 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     char archive[MAX_PATH * 4]{};
     char member[1024]{};
     mz_uint index = 0;
-    if (!ParseVirtualArchivePath(virtualTrack.c_str(), archive, sizeof(archive), &index, member, sizeof(member)) ||
-        GetAudioFormatFromPath(member) != AUDIO_FORMAT_MP3)
+    if (!ParseVirtualArchivePath(virtualTrack.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
+        return 0;
+    const AudioFormat format = GetAudioFormatFromPath(member);
+    if (format != AUDIO_FORMAT_MP3 && format != AUDIO_FORMAT_WAV)
         return 0;
 
-    Trace("MANIFEST_OK", "codec=MP3");
-    auto state = std::make_unique<ArchiveMp3>();
+    Trace("MANIFEST_OK", format == AUDIO_FORMAT_WAV ? "codec=WAV" : "codec=MP3");
+    auto state = std::make_unique<ArchivePcm>();
+    state->format = format;
     std::string error;
     state->isStreaming = ArchiveOpenValidatedEntryStream(&state->stream, archive, index, 4096, &error);
     Trace("STREAM_VALIDATED", state->isStreaming ? "route=STREAM" : "route=FALLBACK");
     if (state->isStreaming)
     {
-        state->opened = drmp3_init(&state->decoder, ReadEncoded, SeekEncoded, TellEncoded, nullptr, &state->stream, nullptr) != 0;
+        state->opened = state->format == AUDIO_FORMAT_WAV
+            ? drwav_init(&state->wav, ReadEncoded, WavSeekEncoded, WavTellEncoded, &state->stream, nullptr) != 0
+            : drmp3_init(&state->decoder, ReadEncoded, SeekEncoded, TellEncoded, nullptr, &state->stream, nullptr) != 0;
         if (!state->opened)
         {
             ArchiveCloseEntryStream(&state->stream);
@@ -277,29 +318,41 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
             Trace("OPEN_FAIL", "reason=memory_extract_failed");
             return 0;
         }
-        state->opened = drmp3_init_memory(&state->decoder, state->encoded.data(), state->encoded.size(), nullptr) != 0;
+        state->opened = state->format == AUDIO_FORMAT_WAV
+            ? drwav_init_memory(&state->wav, state->encoded.data(), state->encoded.size(), nullptr) != 0
+            : drmp3_init_memory(&state->decoder, state->encoded.data(), state->encoded.size(), nullptr) != 0;
     }
 
-    if (!state->opened || !state->decoder.sampleRate ||
-        (state->decoder.channels != 1 && state->decoder.channels != 2))
+    const DWORD rate = state->format == AUDIO_FORMAT_WAV ? state->wav.sampleRate : state->decoder.sampleRate;
+    const DWORD channels = state->format == AUDIO_FORMAT_WAV ? state->wav.channels : state->decoder.channels;
+    if (!state->opened || !rate || (channels != 1 && channels != 2))
     {
-        Trace("OPEN_FAIL", "reason=mp3_decoder_invalid");
+        Trace("OPEN_FAIL", "reason=decoder_invalid");
         if (state->opened)
-            drmp3_uninit(&state->decoder);
+        {
+            if (state->format == AUDIO_FORMAT_WAV)
+                drwav_uninit(&state->wav);
+            else
+                drmp3_uninit(&state->decoder);
+        }
         if (state->isStreaming)
             ArchiveCloseEntryStream(&state->stream);
         return 0;
     }
 
-    state->sampleRate = state->decoder.sampleRate;
-    state->channels = state->decoder.channels;
-    Trace("MP3_INIT_OK", "");
+    state->sampleRate = rate;
+    state->channels = channels;
+    Trace("DECODER_INIT_OK", state->format == AUDIO_FORMAT_WAV ? "codec=WAV" : "codec=MP3");
     Trace("DURATION_COUNT_BEGIN", "");
-    const uint64_t frames = drmp3_get_pcm_frame_count(&state->decoder);
+    const uint64_t frames = state->format == AUDIO_FORMAT_WAV
+        ? state->wav.totalPCMFrameCount : drmp3_get_pcm_frame_count(&state->decoder);
     Trace("DURATION_COUNT_DONE", "");
     if (!frames || frames > std::numeric_limits<QWORD>::max() / (state->channels * sizeof(int16_t)))
     {
-        drmp3_uninit(&state->decoder);
+        if (state->format == AUDIO_FORMAT_WAV)
+            drwav_uninit(&state->wav);
+        else
+            drmp3_uninit(&state->decoder);
         if (state->isStreaming)
             ArchiveCloseEntryStream(&state->stream);
         Trace("OPEN_FAIL", "reason=invalid_length");
@@ -310,11 +363,15 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 
     DWORD streamFlags = flags & (BASS_STREAM_DECODE | BASS_SAMPLE_SOFTWARE | BASS_SAMPLE_LOOP |
                                  BASS_STREAM_AUTOFREE | BASS_SAMPLE_3D | BASS_SAMPLE_FX | 0x3f000000);
+    Trace("BASS_CREATE_STREAM_BEGIN", state->format == AUDIO_FORMAT_WAV ? "codec=WAV" : "codec=MP3");
     HSTREAM stream = bassfunc->CreateStream(state->sampleRate, state->channels, streamFlags,
-                                           ArchiveMp3::ReadPcm, state.get(), &ArchiveMp3::callbacks);
+                                           ArchivePcm::ReadPcm, state.get(), &ArchivePcm::callbacks);
     if (!stream)
     {
-        drmp3_uninit(&state->decoder);
+        if (state->format == AUDIO_FORMAT_WAV)
+            drwav_uninit(&state->wav);
+        else
+            drmp3_uninit(&state->decoder);
         if (state->isStreaming)
             ArchiveCloseEntryStream(&state->stream);
         Trace("OPEN_FAIL", "reason=bass_stream_creation");
@@ -322,18 +379,19 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     }
 
     state->handle = stream;
+    const AudioFormat openedFormat = state->format;
     bassfunc->file.SetStream(descriptor, stream);
     state.release();
     if (BASS_GetVersion() >= 0x02041000)
         BASS_ChannelLock(stream, FALSE);
-    Trace("OPEN_OK", "codec=MP3 route=STREAM_or_BUFFER");
+    Trace("OPEN_OK", openedFormat == AUDIO_FORMAT_WAV ? "codec=WAV route=STREAM_or_BUFFER" : "codec=MP3 route=STREAM_or_BUFFER");
     return stream;
 }
 
 // List-only native MusicBee integration: no separate helper executable, HTTP
 // listener, PCM extraction or BASS runtime redistribution is required.
 // The managed adapter calls this on its background archive-opening worker.
-extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
+static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav)
 {
     if (!archivePath || !*archivePath || !outputFolder || !*outputFolder)
         return 0;
@@ -371,8 +429,9 @@ extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archi
                 continue;
             // Fail closed for mixed, encrypted and missing audio. The existing
             // bridge handles unsupported layouts and their password prompts.
+            const AudioFormat entryFormat = GetAudioFormatFromPath(entry.path.c_str());
             if (!entry.size || entry.isEncrypted ||
-                GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_MP3 ||
+                (entryFormat != AUDIO_FORMAT_MP3 && !(allowWav && entryFormat == AUDIO_FORMAT_WAV)) ||
                 entry.path.empty() || entry.path.size() >= 1024 ||
                 entry.path.find('\r') != std::string::npos ||
                 entry.path.find('\n') != std::string::npos ||
@@ -392,6 +451,31 @@ extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archi
             {
                 Trace("NATIVE_ENUM_FALLBACK", "reason=stream_probe_failed");
                 return 0;
+            }
+            if (entryFormat == AUDIO_FORMAT_WAV)
+            {
+                ArchiveStreamContext wavStream{};
+                if (!ArchiveOpenValidatedEntryStream(&wavStream, archiveUtf8.c_str(), entry.index, 4096, &probeError))
+                    return 0;
+                drwav wav{};
+                const bool initialized = drwav_init(&wav, ReadEncoded, WavSeekEncoded, WavTellEncoded, &wavStream, nullptr) != 0;
+                bool valid = false;
+                if (initialized)
+                {
+                    // Native WAV acceptance currently covers validated PCM16.
+                    // Other WAV variants retain the established host bridge
+                    // until their PCM parity and GUI seek tests are certified.
+                    valid = wav.translatedFormatTag == DR_WAVE_FORMAT_PCM && wav.bitsPerSample == 16 &&
+                        wav.sampleRate >= 8000 && wav.sampleRate <= 384000 &&
+                        (wav.channels == 1 || wav.channels == 2) && wav.totalPCMFrameCount > 0;
+                    drwav_uninit(&wav);
+                }
+                ArchiveCloseEntryStream(&wavStream);
+                if (!valid)
+                {
+                    Trace("NATIVE_ENUM_FALLBACK", "reason=wav_header_invalid");
+                    return 0;
+                }
             }
 
             const std::string virtualPath = archiveUtf8 + ".archive_stream|" +
@@ -434,6 +518,18 @@ extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archi
         Trace("NATIVE_ENUM_FAIL", "reason=exception");
         return 0;
     }
+}
+
+// The original ABI stays MP3-only for installed v1.2 clients. The new export
+// is used by v1.3+ for mixed MP3/WAV albums, without changing old clients.
+extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    return WriteNativeTracksInternal(archivePath, outputFolder, false);
+}
+
+extern "C" int __stdcall ArchiveStreamWriteNativePcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    return WriteNativeTracksInternal(archivePath, outputFolder, true);
 }
 
 extern "C" const void* WINAPI BASSplugin(DWORD face)
