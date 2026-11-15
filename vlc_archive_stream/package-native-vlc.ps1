@@ -58,7 +58,9 @@ working fallback (the bundled bridge EXE is included for this reason).
 Settings and passwords follow the project shared adapter preferences.
 Generated small playlists contain archive paths and titles, never audio
 payloads or passwords. They are under your local ArchiveStreamPlayer data.
-A speaker output or every encryption layout is not certified by this pack.
+Real VLC 3.0.24 passed synthetic AES+LZMA2 7z password entry, Save=No,
+exact PCM output and a separate Cancel-without-audio test. Speaker output, RAR password UI and every other
+encryption layout remain unverified.
 
 The VLC official SDK headers are not redistributed here.
 Source + build instructions: repository vlc_archive_stream/README.md
