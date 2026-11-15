@@ -1,0 +1,3 @@
+LIBRARY bass_archive_stream
+EXPORTS
+    BASSplugin

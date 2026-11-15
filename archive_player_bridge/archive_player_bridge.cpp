@@ -870,6 +870,10 @@ bool WriteNativeManifestPlaylist()
     std::printf("NATIVE_MANIFEST_MODE=1\r\n");
     std::printf("ARCHIVE_AUDIO_ENTRIES=%zu\r\n", count);
     std::printf("NATIVE_PLAYLIST_M3U8=%s\r\n", Utf8(playlistPath.wstring()).c_str());
+    const size_t protectedAudio = std::count_if(g_entries.begin(), g_entries.end(), [](const ArchiveEntry& entry) {
+        return !entry.isFolder && entry.isSupportedAudio && entry.size && entry.isEncrypted;
+    });
+    std::printf("NATIVE_ENCRYPTED_AUDIO_ENTRIES=%zu\r\n", protectedAudio);
     std::printf("NATIVE_MANIFEST_READY=1\r\n");
     std::fflush(stdout);
     return true;

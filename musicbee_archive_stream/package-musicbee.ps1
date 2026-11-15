@@ -1,47 +1,97 @@
-param([string]$OutputFolder = '')
+param(
+    [string]$OutputFolder = ''
+)
 $ErrorActionPreference = 'Stop'
-$root = Split-Path $PSScriptRoot -Parent
+$repo = Split-Path $PSScriptRoot -Parent
 if (!$OutputFolder) { $OutputFolder = Join-Path $PSScriptRoot 'Release' }
-$plugin = Join-Path $PSScriptRoot 'Release\MB_ArchiveStream.dll'
-$bridge = Join-Path $root 'archive_player_bridge\Release\archive_player_bridge.exe'
-$settings = Join-Path $root 'archive_player_bridge\configure-adapters.ps1'
-foreach ($path in @($plugin, $bridge, $settings)) {
+
+$native = Join-Path $PSScriptRoot 'Release\bass_archive_stream.dll'
+$managed = Join-Path $PSScriptRoot 'Release\MB_ArchiveStream.dll'
+$builder = Join-Path $repo 'archive_player_bridge\Release\archive_player_bridge.exe'
+$settings = Join-Path $repo 'archive_player_bridge\configure-adapters.ps1'
+foreach ($path in @($managed, $native, $builder, $settings)) {
     if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Build missing: $path" }
 }
+
 $stage = Join-Path $env:TEMP ('ArchiveStream-MusicBee-' + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $stage | Out-Null
+$plugins = Join-Path $stage 'Plugins'
+New-Item -ItemType Directory -Path $plugins -Force | Out-Null
 try {
-    Copy-Item $plugin "$stage\MB_ArchiveStream.dll"
-    Copy-Item $bridge "$stage\archive_player_bridge.exe"
-    Copy-Item $settings "$stage\configure-adapters.ps1"
+    Copy-Item -LiteralPath $native -Destination (Join-Path $stage 'bass_archive_stream.dll')
+    Copy-Item -LiteralPath $managed -Destination (Join-Path $plugins 'MB_ArchiveStream.dll')
+    Copy-Item -LiteralPath $builder -Destination (Join-Path $plugins 'archive_player_bridge.exe')
+    Copy-Item -LiteralPath $settings -Destination (Join-Path $plugins 'configure-adapters.ps1')
+    $noticeRoot = Join-Path $stage 'Notices'
+    $thirdPartyNotices = Join-Path $noticeRoot 'third_party'
+    New-Item -ItemType Directory -Path $thirdPartyNotices -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $noticeRoot
+    Copy-Item -LiteralPath (Join-Path $repo 'LICENSING.md') -Destination $noticeRoot
+    Copy-Item -LiteralPath (Join-Path $repo 'third_party\README.md') -Destination $thirdPartyNotices
+    foreach ($dependency in @('libarchive', 'lzma-sdk', 'unrar', 'zlib', 'dr_libs', 'stb')) {
+        $folder = Join-Path $thirdPartyNotices $dependency
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repo "third_party\$dependency\README.md") -Destination $folder
+    }
+    Copy-Item -LiteralPath (Join-Path $repo 'third_party\libarchive\COPYING') -Destination (Join-Path $thirdPartyNotices 'libarchive')
+    Copy-Item -LiteralPath (Join-Path $repo 'third_party\unrar\license.txt') -Destination (Join-Path $thirdPartyNotices 'unrar')
+    Copy-Item -LiteralPath (Join-Path $repo 'third_party\zlib\LICENSE') -Destination (Join-Path $thirdPartyNotices 'zlib')
     @'
-Archive Stream Player - MusicBee 3.7 x86 plugin
+Archive Stream Player - MusicBee 3.7 (32-bit only)
 
-Copy MB_ArchiveStream.dll, archive_player_bridge.exe and configure-adapters.ps1 into:
-C:\Program Files (x86)\MusicBee\Plugins
+INSTALL
+Extract the contents of this ZIP into the MusicBee application folder:
+C:\Program Files (x86)\MusicBee\
 
-Restart MusicBee, then use:
-Tools > Archive Stream: Add Archive Audio...
-Tools > Archive Stream: Settings...
+Main binaries have this layout (Notices includes required licence texts):
+  bass_archive_stream.dll
+  Plugins\MB_ArchiveStream.dll
+  Plugins\archive_player_bridge.exe
+  Plugins\configure-adapters.ps1
 
-The bridge listens only on 127.0.0.1 while MusicBee is running.
-Default saved passwords use %LOCALAPPDATA%\WinampArchiveStream\keeps.txt.
-Shared settings are stored under HKCU\Software\ArchiveStreamPlayer\Adapters.
-MusicBee 3.7 rejects tested OGG/WAV/WMA/M4A archive HTTP playback;
-FLAC streams but fails to resume after host GUI seek.
-OGG/FLAC/WAV/WMA/M4A use content-length-checked temporary local files,
-bounded per session by CacheLimitMB. MP3/AAC retain HTTP streaming and GUI seeking.
-The MusicBee queue API has no memory-stream input for these host-limited codecs.
-A zero cache limit blocks local fallback. Unencrypted temporary audio may remain
-after a crash; clear stale sessions in shared settings. Normal shutdown removes it.
-Do not share its temporary tokenized playlist URLs publicly.
-'@ | Set-Content -Path "$stage\INSTALL.txt" -Encoding ASCII
+Do not place bass_archive_stream.dll inside Plugins. The native add-on is
+loaded by the existing 32-bit BASS runtime inside MusicBee. Do not overwrite
+MusicBee's own bass.dll or install/redistribute a separate BASS runtime.
+
+Restart MusicBee, then use Tools > Archive Stream: Add Archive Audio...
+or Tools > Archive Stream: Settings...
+
+NATIVE MODE
+For an unencrypted ZIP containing only MP3 audio, MusicBee loads the native
+BASS archive decoder and reads the MP3 directly from the compressed archive.
+Seeking and playback need no HTTP listener and no extracted audio file.
+Small .ast reference files in a temporary session folder identify archive
+members; they contain no decoded audio and are cleaned up on normal exit.
+The native .ast route is enabled only after the BASS plug-in loads successfully.
+
+COMPATIBILITY MODE
+Other codecs, mixed-codec ZIP archives, 7z, RAR, encrypted archives, or a
+missing/unloadable native BASS add-on retain the previous MusicBee bridge
+behavior. MP3/AAC bridge playback uses local HTTP range requests; OGG/FLAC/
+WAV/WMA/M4A need bounded temporary local files due to MusicBee host
+limitations. The bridge only binds to 127.0.0.1. Temporary media may persist
+after a crash and should be cleared from shared settings. A zero cache limit
+prevents the bridge's local fallback when the host requires it.
+
+Default saved passwords: %LOCALAPPDATA%\WinampArchiveStream\keeps.txt
+Shared settings: HKCU\Software\ArchiveStreamPlayer\Adapters
+Avoid sharing temporary tokenized HTTP playlist URLs publicly.
+
+No BASS SDK headers/import library or bass.dll are included in this package.
+The Archive Stream source code uses MIT; third-party code retains its own
+licenses. See Notices/LICENSE, Notices/LICENSING.md and Notices/third_party.
+Libarchive, UnRAR and zlib upstream licence texts are included there.
+
+The tested native path verified host Playing state, advancing position, and
+streaming PCM delivery; a full audible speaker and native GUI seek certification
+for every codec and archive layout is not yet claimed.
+'@ | Set-Content -LiteralPath (Join-Path $stage 'INSTALL.txt') -Encoding ASCII
+
     New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
     $destination = Join-Path $OutputFolder 'ArchiveStreamPlayer-MusicBee-x86.zip'
-    if (Test-Path $destination) { Remove-Item $destination -Force }
-    Compress-Archive -Path "$stage\*" -DestinationPath $destination -CompressionLevel Optimal
+    if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $destination -CompressionLevel Optimal
     Write-Output "MUSICBEE_PACKAGE=$destination"
 }
 finally {
-    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
 }
