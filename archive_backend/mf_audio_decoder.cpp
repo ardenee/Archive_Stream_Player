@@ -598,7 +598,10 @@ bool MfSeekMs(MfAudioDecoder* decoder, int positionMs)
         return false;
     }
 
+    const ULONGLONG seekStartTick = GetTickCount64();
+    DebugLogWrite("INFO", "MF", "SEEK_BEGIN", "format=%s | position_ms=%d", MfAudioFormatName(decoder->format), positionMs);
     hr = decoder->reader->SetCurrentPosition(GUID_NULL, var);
+    DebugLogWrite(SUCCEEDED(hr) ? "INFO" : "WARN", "MF", "SEEK_READER_RETURN", "format=%s | position_ms=%d | hr=0x%08lX | elapsed_ms=%llu", MfAudioFormatName(decoder->format), positionMs, (unsigned long)hr, (unsigned long long)(GetTickCount64() - seekStartTick));
 
     PropVariantClear(&var);
 

@@ -76,7 +76,12 @@ if ARCHIVE_KIND not in ("7z", "rar"):
 if AES_MODE:
     if AES_MODE not in ("accept", "cancel", "wrong"):
         raise SystemExit("AST_MM5_QA_AES must be accept, cancel, or wrong")
-    SOURCES = (("MP3", "01.MP3File.mp3"), ("AAC", "07.AACFile.aac")) if RAR_SOLID else (("AAC", "07.AACFile.aac"),)
+    if RAR_SOLID:
+        SOURCES = (("MP3", "01.MP3File.mp3"), ("AAC", "07.AACFile.aac"))
+    elif os.environ.get("AST_MM5_QA_AES_CODEC","AAC").upper() == "MP3":
+        SOURCES = (("MP3", "01.MP3File.mp3"),)
+    else:
+        SOURCES = (("AAC", "07.AACFile.aac"),)
 
 if os.environ.get("AST_MM5_QA_ONLY"):
     keep = {x.strip().upper() for x in os.environ["AST_MM5_QA_ONLY"].split(",")}
@@ -584,15 +589,42 @@ def main():
             assert decoder_log.is_file(),"Missing production native input decoder trace"
             native_trace=decoder_log.read_text(encoding="utf-8-sig",errors="replace")
             native_counts={kind:native_trace.count(kind) for kind in
-                           ("NATIVE_MANIFEST_ACCEPTED","THREAD_ENTER","mode=STREAM","mode=CACHE","ROUTE_CACHE","SEEK_REQUEST")}
+                           ("NATIVE_MANIFEST_ACCEPTED","THREAD_ENTER","mode=STREAM","mode=CACHE","ROUTE_CACHE","SEEK_REQUEST","MF_SEEK_DISPATCH","SEEK_READER_RETURN")}
             print("MM5_NATIVE_INPUT_STREAM_COUNTS",native_counts,flush=True)
             assert native_counts["NATIVE_MANIFEST_ACCEPTED"]>=len(SOURCES),native_counts
-            assert native_counts["THREAD_ENTER"]>=len(SOURCES) and native_counts["mode=STREAM"]>=len(SOURCES),native_counts
-            assert native_counts["mode=CACHE"]==native_counts["ROUTE_CACHE"]==0,native_counts
+            assert native_counts["THREAD_ENTER"]>=len(SOURCES),native_counts
+            # Encrypted RAR5 may not support direct streaming. The native MF
+            # decoder (AAC/WMA/M4A) cannot yet consume a bounded memory buffer,
+            # so managed cache is the legitimate final fallback after trying
+            # stream and memory. Never confuse this with HTTP playback.
+            encrypted_rar5_aac_cache=(AES_MODE=="accept" and ARCHIVE_KIND=="rar" and
+                                     not RAR_SOLID and len(SOURCES)==1 and SOURCES[0][0]=="AAC")
+            encrypted_rar5_mp3_memory=(AES_MODE=="accept" and ARCHIVE_KIND=="rar" and
+                                      not RAR_SOLID and len(SOURCES)==1 and SOURCES[0][0]=="MP3")
+            if encrypted_rar5_aac_cache:
+                assert native_counts["mode=CACHE"]>=1 and native_counts["mode=STREAM"]==0,native_counts
+                assert "route=CACHE" in native_trace and "mf_memory_decoder_unavailable" in native_trace,native_trace[-3000:]
+                print("MM5_NATIVE_ENCRYPTED_RAR5_AAC_LAST_RESORT_CACHE_NO_HTTP_PASS",flush=True)
+            elif encrypted_rar5_mp3_memory:
+                assert native_counts["mode=CACHE"]==0 and "route=BUFFER" in native_trace,native_counts
+                print("MM5_NATIVE_ENCRYPTED_RAR5_MP3_BOUNDED_MEMORY_NO_CACHE_NO_HTTP_PASS",flush=True)
+            else:
+                assert native_counts["mode=STREAM"]>=len(SOURCES),native_counts
+                assert native_counts["mode=CACHE"]==native_counts["ROUTE_CACHE"]==0,native_counts
             assert "NATIVE_MANIFEST_REJECTED" not in native_trace and "DECODER_OPEN_FAIL" not in native_trace,native_trace[-2500:]
             if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1":
                 assert native_counts["SEEK_REQUEST"]>=len(SOURCES),native_counts
-            print("MM5_NATIVE_INPUT_CODEC_ARCHIVE_STREAMING_WITHOUT_CACHE_PASS",flush=True)
+                if AES_MODE == "accept" and SOURCES[0][0] == "AAC" and ARCHIVE_KIND == "7z":
+                    print("MM5_NATIVE_ENCRYPTED_AAC_MF_SEEK_HANDOFF",
+                          {"request":native_counts["SEEK_REQUEST"],
+                           "dispatched":native_counts["MF_SEEK_DISPATCH"],
+                           "reader_returned":native_counts["SEEK_READER_RETURN"]},flush=True)
+            if encrypted_rar5_aac_cache:
+                print("MM5_NATIVE_INPUT_ENCRYPTED_RAR5_MF_CACHE_LAST_RESORT_ROUTE_PASS",flush=True)
+            elif encrypted_rar5_mp3_memory:
+                print("MM5_NATIVE_INPUT_ENCRYPTED_RAR5_MEMORY_SECONDARY_ROUTE_PASS",flush=True)
+            else:
+                print("MM5_NATIVE_INPUT_CODEC_ARCHIVE_STREAMING_WITHOUT_CACHE_PASS",flush=True)
 
         print("MM5_PORTABLE_CODEC_MATRIX",json.dumps(results),flush=True)
         if AES_MODE:

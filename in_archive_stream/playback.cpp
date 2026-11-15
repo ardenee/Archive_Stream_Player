@@ -999,6 +999,7 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
                     seekMs = g_currentLengthMs;
 
                 InterlockedExchange(&g_seekRequested, 0);
+                DebugLogWrite("INFO", "PLAYBACK", "MF_SEEK_DISPATCH", "seek_ms=%ld | mode=%ld | archive_index=%u", seekMs, InterlockedCompareExchange(&g_playbackMode, 0, 0), (unsigned int)g_currentArchiveIndex);
 
                 if (MfSeekMs(mf, seekMs))
                 {
