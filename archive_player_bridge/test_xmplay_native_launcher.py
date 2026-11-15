@@ -71,10 +71,11 @@ def main():
         plugin=player_folder/"xmp-archive-stream.dll"
         plugin.unlink(missing_ok=True)
         if kind=="zip":
-            fallback=invoke(target,archive,"-NoLaunch",env=env)
-            assert fallback.returncode==0 and "XMPLAY_BRIDGE_FALLBACK" in fallback.stdout and \
-                "DRY_RUN_PASS player=XMPlay" in fallback.stdout,(fallback.stdout,fallback.stderr)
-            print("XMPLAY_ZIP_DEFAULT_HTTP_HOST_COMPATIBILITY_PASS",flush=True)
+            native_zip=invoke(target,archive,"-NoLaunch",env=env)
+            assert native_zip.returncode==0 and "DRY_RUN_PASS player=XMPlay mode=native_builtin_zip http=0" in native_zip.stdout,(native_zip.stdout,native_zip.stderr)
+            override=invoke(target,archive,"-UseHttpBridge","-NoLaunch",env=env)
+            assert override.returncode==0 and "DRY_RUN_PASS player=XMPlay" in override.stdout and "native_builtin_zip" not in override.stdout,(override.stdout,override.stderr)
+            print("XMPLAY_ZIP_NATIVE_BUILTIN_DEFAULT_AND_HTTP_OVERRIDE_PASS",flush=True)
             return
         missing=invoke(target,archive,"-NoLaunch",env=env)
         assert missing.returncode != 0 and "native Archive Stream XMPARC plugin is not installed" in (missing.stdout+missing.stderr),missing

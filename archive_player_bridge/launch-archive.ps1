@@ -43,10 +43,105 @@ if (!$NoLaunch -and !$playerExe) {
     throw "$Player is not installed at a supported path. Install it or update the script."
 }
 
+# XMPlay 4.1 handles ordinary stored/Deflate ZIP archives internally before
+# dispatching our XMPARC archive DLL. The native ZIP path is safe ONLY for a
+# simple, unencrypted, single-file ZIP with local size fields. All other ZIP
+# layouts retain the verified HTTP backend (including AES, descriptors, ZIP64,
+# split volumes, unsupported compression methods and corrupt headers).
+# Read only ZIP headers and filenames; never inflate/extract audio here.
+function Test-XmplayNativeSimpleZip {
+    param([string]$Path)
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        if ($stream.Length -lt 34) { return $false }
+        $reader = [IO.BinaryReader]::new($stream)
+        $count = 0
+        $audio = 0
+        while ($stream.Position -le $stream.Length - 4) {
+            $signature = $reader.ReadUInt32()
+            if ($signature -eq 0x02014B50) {
+                if ($count -eq 0 -or $audio -eq 0) { return $false }
+                # A local-header prefix followed by a truncated central
+                # directory must not be treated as a valid native ZIP.
+                $archive = $null
+                try {
+                    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
+                    $stream.Position = 0
+                    $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                    return $archive.Entries.Count -eq $count
+                }
+                finally {
+                    if ($archive) { $archive.Dispose() }
+                }
+            }
+            if ($signature -ne 0x04034B50 -or $stream.Length - $stream.Position -lt 26) {
+                return $false
+            }
+            [void]$reader.ReadUInt16() # required version
+            $flags = $reader.ReadUInt16()
+            $method = $reader.ReadUInt16()
+            [void]$reader.ReadUInt16() # modification time
+            [void]$reader.ReadUInt16() # modification date
+            [void]$reader.ReadUInt32() # CRC32
+            $compressed = $reader.ReadUInt32()
+            $uncompressed = $reader.ReadUInt32()
+            $nameLength = $reader.ReadUInt16()
+            $extraLength = $reader.ReadUInt16()
+            if (($flags -band 0x0009) -ne 0 -or ($flags -band 0x0040) -ne 0 -or
+                $compressed -eq 0xFFFFFFFF -or $uncompressed -eq 0xFFFFFFFF -or
+                ($method -ne 0 -and $method -ne 8) -or $nameLength -eq 0 -or
+                $count -ge 10000) {
+                return $false
+            }
+            $remaining = $stream.Length - $stream.Position
+            $skip = [int64]$nameLength + [int64]$extraLength + [int64]$compressed
+            if ($skip -gt $remaining) { return $false }
+            $nameBytes = $reader.ReadBytes($nameLength)
+            if ($nameBytes.Length -ne $nameLength) { return $false }
+            $name = [Text.Encoding]::ASCII.GetString($nameBytes)
+            if ($name -match '(?i)\.(mp3|ogg|flac|wav|aac|m4a|wma)$') { ++$audio }
+            $stream.Position += [int64]$extraLength + [int64]$compressed
+            ++$count
+        }
+        return $false
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        elseif ($stream) { $stream.Dispose() }
+    }
+}
+
+# Native ZIP and XMPARC use two independent host code paths. The builtin ZIP
+# archive decoder is preferred for proven simple unencrypted Store/Deflate.
+# Unsupported ZIP remains on Archive Stream HTTP to preserve AES/RAR/7z policy.
+$nativeXmplayZip = $Player -eq 'XMPlay' -and !$UseHttpBridge -and
+    $Archive.EndsWith('.zip', [StringComparison]::OrdinalIgnoreCase) -and
+    (Test-XmplayNativeSimpleZip -Path $Archive)
+if ($nativeXmplayZip) {
+    if (!$playerExe) {
+        throw 'XMPlay is not installed. Supply -PlayerPath for native ZIP playback.'
+    }
+    Write-Host "NATIVE_ARCHIVE_READY player=XMPlay archive=$Archive handler=xmplay_builtin_zip"
+    if ($NoLaunch) {
+        Write-Host 'DRY_RUN_PASS player=XMPlay mode=native_builtin_zip http=0'
+        return
+    }
+    $playerFolder = Split-Path -Path $playerExe -Parent
+    $nativeProcess = Start-Process -FilePath $playerExe -WorkingDirectory $playerFolder -ArgumentList @('-play', ('"' + $Archive + '"')) -PassThru
+    Write-Host "XMPLAY_NATIVE_PLAYER_PID=$($nativeProcess.Id)"
+    Write-Host 'XMPlay builtin ZIP playback requested; no HTTP bridge was started.'
+    return
+}
+
 # XMPlay's native XMPARC adapter has real-host playback acceptance for
 # single-file .7z and .rar archives. Its ZIP SDK contract passes, but XMPlay
-# did not dispatch tested ZIP playback to the plugin. Preserve the working
-# bridge for ZIP, split-volume and other unverified launch layouts.
+# did not dispatch tested ZIP playback to the plugin. Simple, unencrypted ZIP
+# is handled above by XMPlay itself; other ZIP and split layouts keep HTTP.
 # -UseHttpBridge always opts into host-on-demand HTTP streaming.
 $nativeXmplayDispatch = ($Archive -match '(?i)\.(?:7z|rar)$') -and ($Archive -notmatch '(?i)\.part[0-9]+\.rar$')
 if ($Player -eq 'XMPlay' -and !$UseHttpBridge -and $nativeXmplayDispatch) {
@@ -72,7 +167,8 @@ if ($Player -eq 'XMPlay' -and !$UseHttpBridge -and $nativeXmplayDispatch) {
     return
 }
 if ($Player -eq 'XMPlay' -and !$UseHttpBridge -and !$nativeXmplayDispatch) {
-    Write-Host 'XMPLAY_BRIDGE_FALLBACK reason=real_host_native_dispatch_unverified mode=on_demand_http'
+    $fallbackReason = if ($Archive -match '(?i)\.zip$') { 'unsupported_or_encrypted_zip_layout' } else { 'real_host_native_dispatch_unverified' }
+    Write-Host "XMPLAY_BRIDGE_FALLBACK reason=$fallbackReason mode=on_demand_http"
 }
 
 # VLC 3 x64 can play an original archive through our own statically linked

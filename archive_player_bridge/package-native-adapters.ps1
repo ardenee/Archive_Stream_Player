@@ -33,6 +33,8 @@ try {
         $install = "Extract the Plugins folder into AIMP's application root, then restart AIMP. Open AIMP Options > Archive Stream Player > Configure archive settings to edit shared preferences."
     } else {
         $install = "Copy xmp-archive-stream.dll and configure-adapters.ps1 to the XMPlay application root, then restart XMPlay. Open XMPlay's Archive Stream plugin Config button to edit shared preferences."
+        $install += " The separate launch-archive.ps1 native launcher passes 7z/RAR to XMPARC, but XMPlay handles verified simple unencrypted Store/Deflate ZIP internally before XMPARC."
+        $install += " Built-in ZIP playback does not use Archive Stream's password/cache/title settings. Use -UseHttpBridge for the shared backend or unsupported/encrypted ZIP."
     }
     $install += " Shared settings location: HKCU\Software\ArchiveStreamPlayer\Adapters."
     $install += " Winamp and foobar2000 offer native preference pages as well as this shared settings UI."
