@@ -81,7 +81,7 @@ namespace MusicBeePlugin
             {
                 try
                 {
-                    string source = api.NowPlaying_GetFileUrl == null ? "" : api.NowPlaying_GetFileUrl();
+                    string source = api.NowPlaying_GetFileUrl == null ? "" : (api.NowPlaying_GetFileUrl() ?? "");
                     Uri uri;
                     bool http = Uri.TryCreate(source, UriKind.Absolute, out uri) &&
                         uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback &&
