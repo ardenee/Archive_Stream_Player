@@ -77,9 +77,12 @@ resume to 228 seconds, bounded memory/no HTTP/cache, first accepted PCM write
 `AST_MM5_QA_AUTOPLAY=1` mode can avoid occasional missing accessibility rows
 in a fresh disposable MM5 surface without changing production queueing.
 
-**A user reported audible corruption before the fix.** Audibility is
-still pending a post-fix listening/loopback check with the originally
-affected archive. Advancing player time alone does not prove clean sound.
+**Real audible listening update (15 November 2026):** Following the PCM output
+fix, the user confirmed that playback sounded good for the entire observed
+session. Treat this as a **passed user listening check for that playback**, not
+as automated loopback capture or proof across all codecs, archives and seeks.
+The isolated host tests still run muted, so their clock progress alone is not
+audible evidence.
 
 ## Actual host verification — 15 November 2026
 
@@ -92,8 +95,10 @@ affected archive. Advancing player time alone does not prove clean sound.
   native ZIP MP3+OGG queue, title visibility, actual mouse-click seek and
   resumed playback. The individual ZIP WAV and AAC native GUI tests also
   passed. A combined seven-codec native ZIP test queued and played all seven;
-  five of seven combined GUI seeks passed, while WAV/AAC had intermittent
-  continuation-display failures requiring further multi-entry investigation.
+  the earlier combined sequence had WAV/AAC continuation-display failures,
+  but the post-PCM-fix **seven-track native ZIP run passed all 7/7 GUI seeks**
+  with 7 actual input decoder seek requests, all 3 MF seeks successful,
+  direct STREAM routing for each track, zero HTTP/cache and isolated cleanup.
   Test: `test_native_portable_codecs.py`, using `AST_MM5_QA_NATIVE=1`.
 - `test_native_manifest_generator.py` validates 2-track ZIP/7z/RAR manifest
   files with zero socket or decoded-audio generation.
@@ -101,9 +106,9 @@ affected archive. Advancing player time alone does not prove clean sound.
   URLs, queue acknowledgement, HTTP compatibility, user cancellation and
   shared settings.
 
-**Encrypted native RAR5 (15 November 2026):** First-use password dialogs and actual playback pass in MediaMonkey 2024 without HTTP for both encrypted MP3 (bounded memory; no cache) and encrypted AAC (managed cache as final fallback). The input DLL runs in `MediaMonkeyEngine.exe`; no password was saved without consent. Since encrypted RAR5 streaming is not available for these members, do not label either case `STREAM`. AAC currently cannot use a Media Foundation memory-backed decoder. Native encrypted RAR5 **MP3** GUI seek/resume is certified (19→223→228s via bounded memory, no cache or HTTP). Native encrypted RAR5 AAC seek, header-encrypted archives and multipart acceptance remain open. Run the real host test with `AST_MM5_QA_NATIVE=1` `AST_MM5_QA_AES=accept` `AST_MM5_QA_ARCHIVE=rar` and `AST_MM5_QA_AES_CODEC=MP3` or `AAC`.
+**Encrypted native RAR5 (15 November 2026):** First-use password dialogs and actual playback pass in MediaMonkey 2024 without HTTP for both encrypted MP3 (bounded memory; no cache) and encrypted AAC (managed cache as final fallback). The input DLL runs in `MediaMonkeyEngine.exe`; no password was saved without consent. Since encrypted RAR5 streaming is not available for these members, do not label either case `STREAM`. AAC currently cannot use a Media Foundation memory-backed decoder. Native encrypted RAR5 **MP3** GUI seek/resume is certified (19→223→228s via bounded memory, no cache or HTTP). Native encrypted RAR5 AAC seek **remains open**: the actual maximized MediaMonkey host played the track using managed cache, but the GUI emitted no decoder seek callback and merely showed naturally advancing clock time. It may lack usable duration metadata, but that is not yet established. Native header-encrypted archives and multipart acceptance also remain open. Run the real host test with `AST_MM5_QA_NATIVE=1` `AST_MM5_QA_AES=accept` `AST_MM5_QA_ARCHIVE=rar` and `AST_MM5_QA_AES_CODEC=MP3` or `AAC`.
 
-**Encrypted native 7z (15 November 2026):** Actual MediaMonkey 2024 showed a native archive password dialog hosted by `MediaMonkeyEngine.exe`. After entering a synthetic password, AAC played through direct AES+LZMA2 streaming, not HTTP or disk cache. The shared 7z reader now rejects an initial empty AES password during open, with full Win32/x64 layout regression coverage. **Native encrypted AAC GUI seek/resume is still open:** the host requested a ~156-second seek but did not resume advancing afterward. Use the explicit HTTP compatibility menu action for this tested combination; that route has independent real-host seek evidence. QA: `test_native_portable_codecs.py` with `AST_MM5_QA_NATIVE=1` and `AST_MM5_QA_AES=accept`, plus `archive_backend_test/test_7z_encrypted_layouts.py`.
+**Encrypted native 7z (15 November 2026):** Actual MediaMonkey 2024 showed a native archive password dialog hosted by `MediaMonkeyEngine.exe`. After entering a synthetic password, AAC played through direct AES+LZMA2 streaming, not HTTP or disk cache. The shared 7z reader now rejects an initial empty AES password during open, with full Win32/x64 layout regression coverage. **Native encrypted AAC GUI seek/resume now passes twice in the actual host:** after the Windows credential prompt, the test restores the maximized MediaMonkey window and clicks the actual seek bar. Both isolated sessions jumped from 43–44s to 162s, resumed at 167s, logged an input `SEEK_REQUEST`, a Media Foundation `MF_SEEK_DISPATCH` and a successful `SEEK_READER_RETURN`; zero HTTP/cache and no profile changes. The QA now refuses to call elapsed-clock movement a seek without the decoder events. Encrypted RAR5 AAC and untested AES archive layouts remain separate acceptance tasks; explicit HTTP compatibility remains available. QA: `test_native_portable_codecs.py` with `AST_MM5_QA_NATIVE=1` and `AST_MM5_QA_AES=accept`, plus `archive_backend_test/test_7z_encrypted_layouts.py`.
 
 **Still unverified:** all seven codecs across every archive type in native
 mode, all encrypted/multipart layouts through the new native host path,

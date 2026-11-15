@@ -7,7 +7,11 @@ Uses pywinauto on DEV, without requiring interaction with a personal library.
 Run: py -3.13 mediamonkey_archive_stream/test_native_portable_codecs.py
 For actual encrypted host dialogs, set AST_MM5_QA_AES=accept|cancel|wrong
 and AST_MM5_QA_ARCHIVE=7z|rar (default 7z). Enable GUI seek acceptance with
-AST_MM5_VERIFY_GUI_SEEK=1. Set AST_MM5_QA_RAR_HEADERS=1 for first-use RAR5
+AST_MM5_VERIFY_GUI_SEEK=1. Native tests require a real decoder seek callback
+and Media Foundation seek success; elapsed GUI clock movement alone is not
+accepted as seeking. AST_MM5_QA_AUTOPLAY=1 starts an isolated single-track
+queue directly through the player SDK when portable UI rows are inaccessible.
+Set AST_MM5_QA_RAR_HEADERS=1 for first-use RAR5
 encrypted filenames (with no saved password). Only the archive picker result
 is substituted for the test; the packaged bridge and native queue run as-is.
 Set AST_MM5_QA_RAR_MULTIPART=1 to create >=3 adjacent RAR5 volumes and
@@ -17,6 +21,7 @@ plays and seeks both archive entries, including the second solid item.
 No persistent personal player database or password file is read or changed.
 """
 import hashlib
+import ctypes
 import os
 import secrets
 import threading
@@ -557,12 +562,20 @@ def main():
                     print("MM5_REFRESHED_ROW_RESELECT_RESULT",key,after,flush=True)
                 results[key]={"before":before,"after":after,"working":after>=2 and after>before}
                 if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1" and results[key]["working"]:
-                    bounds=window.rectangle()
-                    # Only on the maximized portable QA player. This is the
-                    # actual MediaMonkey GUI seek bar, not a bridge API seek.
+                    # MediaMonkey can restore the parent window when a native
+                    # password dialog closes. Restore maximized geometry before
+                    # selecting the actual host seek bar, otherwise a click may
+                    # merely refocus the UI and natural time looks like a seek.
+                    # pywin32 win32gui does not expose IsZoomed in all builds.
+                    # Ask the Win32 window manager through ctypes instead.
+                    if not ctypes.windll.user32.IsZoomed(int(window.handle)):
+                        window.maximize()
                     window.set_focus()
+                    time.sleep(.3)
+                    bounds=window.rectangle()
                     print("MM5_GUI_SEEK_WINDOW_BOUNDS",str(bounds),flush=True)
                     attempts = []
+                    seek_started=time.monotonic()
                     for offset in (95, 93, 91, 89, 87, 84):
                         coord=(bounds.left + int(bounds.width()*.62),
                                bounds.bottom-offset)
@@ -571,13 +584,14 @@ def main():
                         observed=elapsed(window,label)
                         attempts.append({"offset":offset,"coord":coord,
                                          "position":observed})
-                        if observed>=after+15:
+                        if observed >= after + max(15, int(time.monotonic()-seek_started) + 12):
                             break
                     jumped=elapsed(window,label)
                     time.sleep(3)
                     resumed=elapsed(window,label)
                     results[key]["gui_seek"]={"before":after,"jumped":jumped,
-                        "resumed":resumed,"working":jumped>=after+15 and resumed>=jumped+2,
+                        "resumed":resumed,
+                        "working":jumped>=after+max(15,int(time.monotonic()-seek_started)+12) and resumed>=jumped+2,
                         "attempts":attempts}
                     print("MM5_GUI_SEEK_RESULT",key,results[key]["gui_seek"],flush=True)
             except Exception as error:
@@ -628,7 +642,16 @@ def main():
                 assert accepted_writes and all(0 < size <= 8192 for size in accepted_writes),accepted_writes
                 print("MM5_NATIVE_MP3_OUTPUT_8192_BYTE_CONTRACT_PASS",accepted_writes,flush=True)
             if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1":
-                assert native_counts["SEEK_REQUEST"]>=len(SOURCES),native_counts
+                if native_counts["SEEK_REQUEST"] < len(SOURCES):
+                    print("MM5_NATIVE_GUI_CLOCK_ONLY_NOT_SEEK_CERTIFIED",{"native_seek_requests":native_counts["SEEK_REQUEST"],"expected_tracks":len(SOURCES)},flush=True)
+                    raise AssertionError("GUI clock movement alone is not a decoder seek; native SEEK_REQUEST callback missing: "+str(native_counts))
+                mf_track_count=sum(key in ("AAC","M4A","WMA") for key,_ in SOURCES)
+                if mf_track_count:
+                    if native_counts["MF_SEEK_DISPATCH"] < mf_track_count or native_counts["SEEK_READER_RETURN"] < mf_track_count:
+                        print("MM5_NATIVE_MF_GUI_SEEK_UNCERTIFIED",native_counts,flush=True)
+                        raise AssertionError("Media Foundation seek not dispatched and returned for every MF track: "+str(native_counts))
+                    if len(re.findall(r"SEEK_READER_RETURN[^\n]*hr=0x00000000",native_trace)) < mf_track_count:
+                        raise AssertionError("Media Foundation did not confirm successful decoder seek for every MF track")
                 if AES_MODE == "accept" and SOURCES[0][0] == "AAC" and ARCHIVE_KIND == "7z":
                     print("MM5_NATIVE_ENCRYPTED_AAC_MF_SEEK_HANDOFF",
                           {"request":native_counts["SEEK_REQUEST"],
