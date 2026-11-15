@@ -34,22 +34,24 @@ and the existing statically linked HTTP bridge as a compatibility fallback.
 Tested: isolated VLC 3.0.24 x64 on Windows 11. No external archive DLLs.
 Do not install into VLC 4, 32-bit VLC, or an untested build without QA.
 
-Install into the desired VLC x64 installation (or a portable VLC copy):
-- plugins\access\libarchive_stream_plugin.dll -> VLC\plugins\access\
+Extract this package anywhere writable; no modification to your installed VLC is needed:
+- plugins\access\libarchive_stream_plugin.dll is loaded as an external VLC module through VLC_PLUGIN_PATH
 - vlc_native_playlist.exe -> the folder holding launch-archive.ps1
 - launch-archive.ps1, configure-adapters.ps1 -> same folder as builder
 - x64\Release\archive_player_bridge.exe -> same folder hierarchy as launcher
 
-The easiest arrangement is to extract the archive OVER A PORTABLE VLC 3 x64
-folder, retaining its existing binaries and plugin directories. Existing
-files are not removed. For a Program Files VLC, a manual elevated copy
-may be required. Back up custom player files before changing a real install.
+Simply keep the files in this extracted folder and pass -PlayerPath to your
+VLC 3 x64 executable. The launcher sets VLC_PLUGIN_PATH for its child process
+and restores the caller's original environment immediately afterward. It
+can alternatively use a DLL already installed in VLC/plugins/access. It is
+not necessary to copy DLLs into Program Files or use elevation.
 
 Launch, passing your exact VLC executable:
 powershell -File .\launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z"
 
-The launcher chooses native M3U8 ast:// URLs only if it finds the DLL
-beside that VLC executable and the native playlist builder is available.
+The launcher chooses native M3U8 ast:// URLs when the DLL is installed
+inside VLC OR present alongside the launcher/package or built in the source
+workspace, and the native playlist builder is available.
 Use -UseHttpBridge to force the prior HTTP scheme. When native setup is
 not installed or per-launch overrides are supplied, HTTP remains the
 working fallback (the bundled bridge EXE is included for this reason).

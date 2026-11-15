@@ -53,9 +53,9 @@ untested builds use the HTTP bridge fallback, not this x64 DLL.
 
 ## Install
 
-For best isolation, use a portable copy of VLC 3 x64. The package contains:
+The package may be extracted to **any writable folder**, with no changes to the VLC installation. The launcher temporarily sets VLC_PLUGIN_PATH to the bundled external module directory for its VLC child process, then restores the caller's environment. This route passed real VLC 3.0.24 exact PCM output without a DLL in the player's plugins folder (test_real_vlc_plugin_path.py). The package contains:
 
-- plugins\access\libarchive_stream_plugin.dll: copy beneath the VLC install.
+- plugins\access\libarchive_stream_plugin.dll: bundled DLL; the launcher can load it from this external location without copying it into VLC.
 - vlc_native_playlist.exe: place beside launch-archive.ps1.
 - launch-archive.ps1 and configure-adapters.ps1: launcher/settings.
 - x64\Release\archive_player_bridge.exe: existing HTTP compatibility route.
@@ -65,7 +65,7 @@ Example after copying, specifying the correct VLC installation:
 
     & '.\launch-archive.ps1' -Player VLC -PlayerPath 'D:\Apps\VLC\vlc.exe' -Archive 'D:\Audio\Album.7z'
 
-If native components are present and compatible, the launcher produces a
+If native components are present and compatible, either alongside the launcher/package or under VLC's own plugins directory, the launcher produces a
 local ast:// playlist with NO HTTP server. Explicit -UseHttpBridge always keeps
 the prior route. Per-launch -MemoryMB, -CacheLimitMB, -TitleTemplate and
 -PasswordList overrides use HTTP to preserve their semantics. Shared native

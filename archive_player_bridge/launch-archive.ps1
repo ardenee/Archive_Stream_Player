@@ -108,7 +108,14 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
         }
     }
     $vlcFolder = if ($playerExe) { Split-Path -Path $playerExe -Parent } else { '' }
-    $vlcModule = if ($vlcFolder) { Join-Path $vlcFolder 'plugins\access\libarchive_stream_plugin.dll' } else { '' }
+    $installedVlcModule = if ($vlcFolder) { Join-Path $vlcFolder 'plugins\access\libarchive_stream_plugin.dll' } else { '' }
+    $nativeModuleCandidates = @(
+        $installedVlcModule,
+        (Join-Path $PSScriptRoot 'plugins\access\libarchive_stream_plugin.dll'),
+        (Join-Path $PSScriptRoot 'libarchive_stream_plugin.dll'),
+        (Join-Path (Split-Path $PSScriptRoot -Parent) 'vlc_archive_stream\x64\Release\libarchive_stream_plugin.dll')
+    )
+    $vlcModule = $nativeModuleCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
     $nativeBuilderCandidates = @(
         (Join-Path $PSScriptRoot 'vlc_native_playlist.exe'),
         (Join-Path (Split-Path $PSScriptRoot -Parent) 'vlc_archive_stream\x64\Release\vlc_native_playlist.exe')
@@ -121,8 +128,8 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
     elseif (!$vlcCompatible) {
         Write-Host 'VLC_BRIDGE_FALLBACK reason=native_module_requires_VLC3_x64'
     }
-    elseif (!$vlcModule -or !(Test-Path -LiteralPath $vlcModule -PathType Leaf) -or !$nativeBuilder) {
-        Write-Host 'VLC_BRIDGE_FALLBACK reason=native_dll_or_playlist_builder_not_installed'
+    elseif (!$vlcModule -or !$nativeBuilder) {
+        Write-Host 'VLC_BRIDGE_FALLBACK reason=native_dll_or_playlist_builder_not_available'
     }
     else {
         $nativeRoot = Join-Path $env:LOCALAPPDATA 'ArchiveStreamPlayer\NativePlaylists'
@@ -149,7 +156,20 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
             Write-Host 'DRY_RUN_PASS player=VLC mode=native_sdk http=0'
             return
         }
-        Start-Process -FilePath $playerExe -WorkingDirectory $vlcFolder -ArgumentList @('--no-one-instance', ('"' + $nativePlaylist + '"'))
+        # VLC 3 officially loads modules from VLC_PLUGIN_PATH. Use the bundled
+        # or locally built DLL without copying anything into Program Files.
+        # The temporary change is inherited by only this launched VLC process.
+        $oldPluginPath = $env:VLC_PLUGIN_PATH
+        try {
+            if ($vlcModule -ne $installedVlcModule) {
+                $nativeFolder = Split-Path -Path $vlcModule -Parent
+                $env:VLC_PLUGIN_PATH = if ($oldPluginPath) { $nativeFolder + ';' + $oldPluginPath } else { $nativeFolder }
+            }
+            Start-Process -FilePath $playerExe -WorkingDirectory $vlcFolder -ArgumentList @('--no-one-instance', ('"' + $nativePlaylist + '"'))
+        }
+        finally {
+            $env:VLC_PLUGIN_PATH = $oldPluginPath
+        }
         Write-Host 'VLC native archive playback requested; no HTTP bridge was started.'
         return
     }
