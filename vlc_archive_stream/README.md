@@ -1,7 +1,7 @@
 # VLC native Archive Stream adapter
 
 Optional VLC 3.0 **x64** native input integration. The statically linked
-DLL v1.2 implements the `ast://` access scheme, including an **in-process**
+DLL v1.3 implements the `ast://` access scheme, including an **in-process**
 album at `ast://<hex-path>/list/album.m3u8`. VLC reads the virtual M3U8 and
 all tracks in the same process, allowing verified per-archive passwords to
 remain in process. No HTTP server, separate builder or on-disk playlist.
@@ -55,6 +55,17 @@ are reused. No extra archive-related runtime DLL is introduced.
   zero cache, configured password list unchanged and disposable GUI cleanup
   (`test_real_vlc_launcher_inprocess.py`,
   `test_real_vlc_launcher_encrypted.py`).
+- **Native v1.3 playback settings:** The existing PowerShell launcher accepts
+  `-MemoryMB` (1–512), `-CacheLimitMB` (0–20480; zero disables disk), and
+  `-TitleTemplate` (one of the six shared presets) without HTTP when the
+  v1.3 DLL is available. It passes each value only to the VLC child process
+  and restores any prior environment value; HKCU is not modified. Example:
+  `powershell -File launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z" -MemoryMB 64 -CacheLimitMB 512 -TitleTemplate '<#>. <filename>'`.
+  Actual real-host QA in `test_real_vlc_launcher_preferences.py` passed
+  two correct ZIP album `#EXTINF` titles, two direct ZIP streams and zero
+  HTTP/cache; a 1 MiB RAM cap with cache=0 refused >1 MiB solid 7z entries
+  without creating a disk file, whereas cache=5 MiB gave byte-identical
+  managed disk fallback. Live repaint of existing VLC rows remains untested.
 - **Actual PowerShell launcher Save=Yes:** v1.2 accepts a child-process-only
   password-list path through the existing `-PasswordList` option without HTTP:
   `powershell -File launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z" -PasswordList "D:\Audio\passwords\keeps.txt"`.
@@ -101,7 +112,7 @@ Use Visual Studio/MSBuild (v145 on DEV):
     & '.\vlc_archive_stream\package-native-vlc.ps1'
 
 The packaged output is vlc_archive_stream\Release\ArchiveStreamPlayer-VLC3-x64.zip.
-The access module uses VLC's 3_0_0f plugin ABI and Windows DLL FileVersion **1.2.0.0** for native album and per-launch password-list capability detection (album listing introduced in v1.1). VLC 4, x86 VLC and other
+The access module uses VLC's 3_0_0f plugin ABI and Windows DLL FileVersion **1.3.0.0** for native album and per-launch password-list/memory/cache/title overrides (album listing introduced in v1.1, native password-list in v1.2). VLC 4, x86 VLC and other
 untested builds use the HTTP bridge fallback, not this x64 DLL.
 
 ## Install

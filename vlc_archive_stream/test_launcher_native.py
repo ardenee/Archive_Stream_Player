@@ -38,10 +38,13 @@ def main():
   assert forced.returncode==0 and "DRY_RUN_PASS player=VLC" in forced.stdout and "NATIVE_VLC_READY" not in forced.stdout,(
       forced.returncode,forced.stdout,forced.stderr)
   print("VLC_EXPLICIT_HTTP_BRIDGE_COMPATIBILITY_PASS",flush=True)
-  overr=run(player,"-MemoryMB","1")
-  assert overr.returncode==0 and "VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge" in overr.stdout,(
-      overr.returncode,overr.stdout,overr.stderr)
-  print("VLC_CLI_OVERRIDES_PRESERVE_HTTP_ROUTE_PASS",flush=True)
+  overr=run(player,"-MemoryMB","1","-CacheLimitMB","0","-TitleTemplate","<archivetype>: <#> - <filename>")
+  assert overr.returncode==0 and "NATIVE_VLC_PREF_OVERRIDES=1" in overr.stdout and "DRY_RUN_PASS player=VLC mode=native_sdk http=0" in overr.stdout,(overr.returncode,overr.stdout,overr.stderr)
+  print("VLC_V13_NATIVE_PER_LAUNCH_MEMORY_CACHE_TITLE_NO_HTTP_PASS",flush=True)
+  for args in (("-MemoryMB","-1"),("-MemoryMB","513"),("-CacheLimitMB","-2"),("-CacheLimitMB","20481"),("-TitleTemplate","<no-such-placeholder>")):
+   bad=run(player,*args)
+   assert bad.returncode!=0 and "DRY_RUN_PASS player=VLC mode=native_sdk" not in bad.stdout,(args,bad.returncode,bad.stdout,bad.stderr)
+  print("VLC_V13_INVALID_PER_LAUNCH_SETTINGS_FAIL_CLOSED_PASS",flush=True)
   plugin.unlink()
   external=run(player)
   assert external.returncode==0 and "DRY_RUN_PASS player=VLC mode=native_sdk http=0" in external.stdout,(
@@ -56,6 +59,9 @@ def main():
    older=run(player)
    assert older.returncode==0 and "NATIVE_VLC_READY=1 mode=external_playlist" in older.stdout and "NATIVE_VLC_PLAYLIST_ENTRIES=21" in older.stdout,(older.returncode,older.stdout,older.stderr)
    print("VLC_LEGACY_UNVERSIONED_NATIVE_DLL_BUILDER_FALLBACK_PASS",flush=True)
+   old_pref=run(player,"-MemoryMB","1","-CacheLimitMB","0","-TitleTemplate","<#>. <filename>")
+   assert old_pref.returncode==0 and "VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge" in old_pref.stdout and "DRY_RUN_PASS player=VLC" in old_pref.stdout,(old_pref.returncode,old_pref.stdout,old_pref.stderr)
+   print("VLC_OLDER_NATIVE_DLL_SETTINGS_HTTP_COMPATIBILITY_PASS",flush=True)
    old_with_list=run(player,"-PasswordList",str(qa_password_list))
    assert old_with_list.returncode==0 and "VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge" in old_with_list.stdout and "DRY_RUN_PASS player=VLC" in old_with_list.stdout,(old_with_list.returncode,old_with_list.stdout,old_with_list.stderr)
    print("VLC_OLD_NATIVE_DLL_PASSWORD_LIST_USES_HTTP_PASS",flush=True)

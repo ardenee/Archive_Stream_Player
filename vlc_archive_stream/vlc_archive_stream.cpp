@@ -308,10 +308,60 @@ int Open(vlc_object_t* object)
                 return VLC_EGENERIC;
             s->prefs.passwordListPath = std::move(overridePath);
         }
+        // v1.3: scoped native memory/cache/title overrides from the launcher.
+        // Validate rather than clamp or inherit an invalid environment value.
+        // This does not modify any persistent shared setting.
+        const auto numberOverride = [](const wchar_t* name, unsigned minimum, unsigned maximum, unsigned& result)
+        {
+            wchar_t chars[32]{};
+            const DWORD read = GetEnvironmentVariableW(name, chars, static_cast<DWORD>(std::size(chars)));
+            if (!read)
+                return GetLastError() == ERROR_ENVVAR_NOT_FOUND;
+            if (read >= std::size(chars))
+                return false;
+            unsigned value = 0;
+            for (DWORD i = 0; i < read; ++i)
+            {
+                if (chars[i] < L'0' || chars[i] > L'9')
+                    return false;
+                const unsigned digit = static_cast<unsigned>(chars[i] - L'0');
+                if (value > (maximum - (std::min)(digit, maximum)) / 10)
+                    return false;
+                value = value * 10 + digit;
+                if (value > maximum)
+                    return false;
+            }
+            if (value < minimum)
+                return false;
+            result = value;
+            return true;
+        };
+        if (!numberOverride(L"ARCHIVE_STREAM_VLC_MEMORY_MB", 1, 512, s->prefs.memoryMb) ||
+            !numberOverride(L"ARCHIVE_STREAM_VLC_CACHE_LIMIT_MB", 0, 20480, s->prefs.cacheLimitMb))
+            return VLC_EGENERIC;
+        const DWORD titleChars = GetEnvironmentVariableW(L"ARCHIVE_STREAM_VLC_TITLE_TEMPLATE", nullptr, 0);
+        if (titleChars)
+        {
+            if (titleChars > 4096)
+                return VLC_EGENERIC;
+            std::wstring format(static_cast<size_t>(titleChars), L'\0');
+            const DWORD copied = GetEnvironmentVariableW(L"ARCHIVE_STREAM_VLC_TITLE_TEMPLATE", format.data(), titleChars);
+            if (!copied || copied >= titleChars)
+                return VLC_EGENERIC;
+            format.resize(copied);
+            if (format != L"<filename>" && format != L"<archivetype>: <filename>" &&
+                format != L"<#>. <filename>" && format != L"<filename> [<filetype>]" &&
+                format != L"<archivetype>: <#> - <filename>" &&
+                format != L"[<archive>] <#> - <filename>")
+                return VLC_EGENERIC;
+            s->prefs.titleTemplate = std::move(format);
+        }
         ArchiveSetDataDirectoryName("VLCArchiveStream");
         char debug[8]{};
         const bool forced = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", debug, sizeof(debug)) == 1 && debug[0] == '1';
         ArchiveAdapterLogging::Configure(L"vlc", s->prefs.debugLogging || forced);
+        DebugLogWrite("INFO", "VLC", "NATIVE_PREFS", "memoryMb=%u | cacheLimitMb=%u | titleTemplate=%s",
+            s->prefs.memoryMb, s->prefs.cacheLimitMb, ArchiveAdapterWideToUtf8(s->prefs.titleTemplate).c_str());
         ArchivePasswordSetPromptCallback(s->prefs.promptPasswords ? AskPassword : nullptr);
         ArchivePasswordSetPromptAllowedForCurrentThread(s->prefs.promptPasswords);
         if (!s->prefs.passwordListPath.empty())
@@ -361,6 +411,7 @@ int Open(vlc_object_t* object)
                     if (valid)
                         ext = filename.substr(dot);
                 }
+                DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_TITLE", "index=%u | title=%s", entry.index, title.c_str());
                 playlist += "#EXTINF:-1," + title + "\r\n";
                 playlist += prefix + "/" + std::to_string(entry.index) + "/track" + ext + "\r\n";
                 ++selected;

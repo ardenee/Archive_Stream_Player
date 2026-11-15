@@ -28,7 +28,7 @@ try {
 Archive Stream Player - VLC 3.0 x64 native archive access module
 
 The built-in VLC archive handling does not support every tested 7z layout.
-This pack includes a versioned v1.2 native access DLL for in-process
+This pack includes a versioned v1.3 native access DLL for in-process
 album enumeration and playback, the legacy external builder for older
 native DLLs, and HTTP fallback for explicitly requested/incompatible hosts.
 
@@ -54,15 +54,23 @@ When a compatible v1.1+ DLL is available inside VLC or externally, the
 launcher opens ast://hexpath/list/album.m3u8 directly in VLC; album and
 tracks run in the same process with shared session password state.
 Older unversioned native DLLs use the packaged external builder.
+The v1.3 DLL also supports -MemoryMB (1..512), -CacheLimitMB
+(0..20480; 0 disables disk) and -TitleTemplate (the six shared title
+presets) natively. They apply only to the launched VLC process and do
+not update global HKCU settings. Real VLC 3.0.24 x64 passed two-track
+ZIP custom titles, solid 7z memory-limit fail-closed with cache disabled,
+and verified byte-identical disk fallback when a cache budget was allowed.
+Older DLLs keep HTTP for those per-launch flags; -UseHttpBridge forces HTTP.
 Older v1.1 native DLLs retain HTTP fallback for -PasswordList.
-With the included v1.2 DLL, native per-launch password lists work:
+With the included v1.3 DLL, native per-launch password lists work:
 powershell -File .\launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z" -PasswordList "D:\Audio\passwords\keeps.txt"
 Create the destination parent folder first. The path is passed only to the
 VLC child process; the global settings registry is not changed.
 Passwords are saved in plaintext only after consent and verification.
 
 Use -UseHttpBridge to force the prior HTTP scheme. When native setup is
-not installed or memory/cache/title overrides are supplied, HTTP remains the
+not installed or explicit HTTP is requested, or an older DLL receives
+memory/cache/title overrides, HTTP remains the
 working fallback (the bundled bridge EXE is included for this reason).
 Settings and passwords follow the project shared adapter preferences.
 Generated small playlists contain archive paths and titles, never audio
@@ -72,7 +80,7 @@ entry, Save=No and exact PCM; Cancel and wrong passwords produce no audio.
 RAR5 encrypted entries use RAM, not unsupported libarchive encrypted streaming.
 Actual launcher tests also passed two-track header-encrypted 7z and RAR5
 albums with a single prompt per album, no HTTP or disk, and unchanged
-password lists. For v1.2, -PasswordList remains native instead of HTTP;
+password lists. For v1.2+, -PasswordList remains native instead of HTTP;
 real two-track encrypted-header 7z/RAR5 launcher tests passed Save=Yes,
 wrong+Yes and Cancel with only verified saves to a disposable plaintext
 list, no HKCU changes. Physical speaker audio remains unverified.

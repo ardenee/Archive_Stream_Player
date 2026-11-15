@@ -22,6 +22,12 @@ if (!$Archive -or !(Test-Path -LiteralPath $Archive -PathType Leaf)) {
     throw "Archive not found: $Archive"
 }
 $Archive = (Resolve-Path -LiteralPath $Archive).ProviderPath
+if ($MemoryMB -lt 0) {
+    throw 'Memory limit must be nonnegative (0 means use the shared setting).'
+}
+if ($CacheLimitMB -lt -1) {
+    throw 'Cache limit must be -1 (shared setting) or a nonnegative MiB value.'
+}
 $hosts = @{
     VLC = @('C:\Program Files\VideoLAN\VLC\vlc.exe','C:\Program Files (x86)\VideoLAN\VLC\vlc.exe')
     WMP = @('C:\Program Files\Windows Media Player\wmplayer.exe','C:\Program Files (x86)\Windows Media Player\wmplayer.exe')
@@ -221,6 +227,7 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
     # DLLs must continue to use the external playlist builder or HTTP.
     $nativeInProcess = $false
     $nativePasswordOverride = $false
+    $nativePreferenceOverrides = $false
     if ($vlcModule) {
         try {
             $moduleVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($vlcModule)
@@ -231,13 +238,18 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
             # writing a verified password into the persistent user list.
             $nativePasswordOverride = ($moduleVersion.FileMajorPart -gt 1 -or
                 ($moduleVersion.FileMajorPart -eq 1 -and $moduleVersion.FileMinorPart -ge 2))
+            # v1.3+ accepts one-launch memory, managed-cache, and title presets.
+            $nativePreferenceOverrides = ($moduleVersion.FileMajorPart -gt 1 -or
+                ($moduleVersion.FileMajorPart -eq 1 -and $moduleVersion.FileMinorPart -ge 3))
         }
         catch {
             $nativeInProcess = $false
             $nativePasswordOverride = $false
+            $nativePreferenceOverrides = $false
         }
     }
-    $oneOffOptions = $MemoryMB -gt 0 -or $CacheLimitMB -ge 0 -or $TitleTemplate -or
+    $nativePreferenceRequested = $MemoryMB -gt 0 -or $CacheLimitMB -ge 0 -or [bool]$TitleTemplate
+    $oneOffOptions = ($nativePreferenceRequested -and !$nativePreferenceOverrides) -or
         ($PasswordList -and !$nativePasswordOverride)
     if ($oneOffOptions) {
         Write-Host 'VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge'
@@ -301,6 +313,23 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
             }
             Write-Host 'NATIVE_VLC_PASSWORD_LIST_OVERRIDE=1'
         }
+        if ($nativePreferenceOverrides -and $nativePreferenceRequested) {
+            if ($MemoryMB -lt 0 -or $MemoryMB -gt 512) {
+                throw 'VLC native memory limit must be 1-512 MiB.'
+            }
+            if ($CacheLimitMB -lt -1 -or $CacheLimitMB -gt 20480) {
+                throw 'VLC native cache limit must be 0-20480 MiB.'
+            }
+            $validTitleTemplates = @(
+                '<filename>', '<archivetype>: <filename>', '<#>. <filename>',
+                '<filename> [<filetype>]', '<archivetype>: <#> - <filename>',
+                '[<archive>] <#> - <filename>'
+            )
+            if ($TitleTemplate -and $validTitleTemplates -cnotcontains $TitleTemplate) {
+                throw 'Invalid VLC native track-title template.'
+            }
+            Write-Host 'NATIVE_VLC_PREF_OVERRIDES=1'
+        }
         if ($NoLaunch) {
             if (!$nativeInProcess) {
                 Remove-Item -LiteralPath $nativeSource -Force -ErrorAction SilentlyContinue
@@ -311,13 +340,18 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
         # VLC 3 officially loads modules from VLC_PLUGIN_PATH. Only this
         # process inherits the optional DLL folder, never the parent shell.
         $oldPluginPath = $env:VLC_PLUGIN_PATH
-        $oldNativePasswordPath = [Environment]::GetEnvironmentVariable('ARCHIVE_STREAM_VLC_PASSWORD_LIST', 'Process')
+        $nativeOverrides = @{
+            ARCHIVE_STREAM_VLC_PASSWORD_LIST = $nativePasswordList
+            ARCHIVE_STREAM_VLC_MEMORY_MB = if ($nativePreferenceOverrides -and $MemoryMB -gt 0) { [string]$MemoryMB } else { '' }
+            ARCHIVE_STREAM_VLC_CACHE_LIMIT_MB = if ($nativePreferenceOverrides -and $CacheLimitMB -ge 0) { [string]$CacheLimitMB } else { '' }
+            ARCHIVE_STREAM_VLC_TITLE_TEMPLATE = if ($nativePreferenceOverrides -and $TitleTemplate) { $TitleTemplate } else { '' }
+        }
+        $oldNativeValues = @{}
         try {
-            if ($nativePasswordList) {
-                $env:ARCHIVE_STREAM_VLC_PASSWORD_LIST = $nativePasswordList
-            }
-            else {
-                Remove-Item Env:\ARCHIVE_STREAM_VLC_PASSWORD_LIST -ErrorAction SilentlyContinue
+            foreach ($name in @($nativeOverrides.Keys)) {
+                $oldNativeValues[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                $requested = $nativeOverrides[$name]
+                [Environment]::SetEnvironmentVariable($name, $(if ($requested) { $requested } else { $null }), 'Process')
             }
             if ($vlcModule -ne $installedVlcModule) {
                 $nativeFolder = Split-Path -Path $vlcModule -Parent
@@ -328,7 +362,9 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
         }
         finally {
             $env:VLC_PLUGIN_PATH = $oldPluginPath
-            [Environment]::SetEnvironmentVariable('ARCHIVE_STREAM_VLC_PASSWORD_LIST', $oldNativePasswordPath, 'Process')
+            foreach ($name in @($oldNativeValues.Keys)) {
+                [Environment]::SetEnvironmentVariable($name, $oldNativeValues[$name], 'Process')
+            }
         }
         Write-Host 'VLC native archive playback requested; no HTTP bridge was started.'
         return
