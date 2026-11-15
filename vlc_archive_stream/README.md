@@ -22,6 +22,19 @@ are reused. No extra archive-related runtime DLL is introduced.
   native M3U8, recording two access opens, two closes and two stream routes,
   with no HTTP. See test_real_vlc_playlist.py.
 - Four fresh synthetic encrypted WAV archive layouts passed real VLC 3.0.24 Windows credentials: 7z AES+LZMA2 data encryption, 7z encrypted headers, RAR5 encrypted data, and RAR5 encrypted headers. One prompt plus Save=No and exact 176,400-frame PCM parity in each, no managed disk cache, configured password list hash unchanged. Native 7z decrypts via `ROUTE_STREAM`; encrypted RAR5 bypasses libarchive's unsupported encrypted-data stream and immediately uses bounded `ROUTE_MEMORY`, avoiding a previous duplicate prompt. Cancel and incorrect-password cases pass fail-closed in all four layouts (no decoded audio or cache). GUI regression: `test_real_vlc_password.py [--layout=7z|7z-hidden|rar|rar-headers] [--cancel|--wrong]` (requires pywin32 and pywinauto). This certifies direct `ast://` player tracks only, not the separate playlist-builder prompt lifecycle.
+- **Real password Save=Yes verification:** `test_real_vlc_password_save.py` uses the
+  real libVLC 3.0.24 x64 SDK with the production access DLL. It independently
+  tests data- and header-encrypted 7z/RAR5 tracks in three modes: approved
+  correct password (one saved plaintext entry, exact 132,300-frame WAV PCM),
+  approved incorrect password (no saved entry and no decoded audio), and
+  cancellation (no saved entry or decoded audio). All **12 cases** pass,
+  including a consecutive one-process test. A process-local Windows registry
+  override maps HKCU onto a disposable QA subtree for each case; the original
+  user's settings and configured password file are untouched, its digest
+  remains unchanged, and temporary QA keys are removed. Run from the repo
+  root with `py -3.13 -B vlc_archive_stream/test_real_vlc_password_save.py`;
+  optional single case: `...py rar-headers wrong`. This verifies direct
+  native `ast://` playback, not Save=Yes through the PowerShell launcher.
 - Native seeking was confirmed using the actual libVLC player API and a
   20-minute 7z WAV, beyond VLC's read-ahead buffer. VLC resumed at ~14:10;
   our access module logged ACCESS_SEEK offset=74970044; the test audio output
@@ -48,7 +61,7 @@ are reused. No extra archive-related runtime DLL is introduced.
 
 Sound-speaker output and all codecs/encryption layouts are NOT certified. The four
 specific direct native encrypted 7z/RAR5 layouts passed correct password with
-Save=No, Cancel and wrong-password rejection; Save=Yes remains untested.
+Save=No, Cancel and wrong-password rejection; direct native Save=Yes now passes all four tested layouts. The separate launcher has only Save=No album acceptance.
 For the versioned v1.1 module, the native album is enumerated **inside VLC**,
 so its verified password remains available for subsequent track opens.
 Only older unversioned DLLs use the separate playlist builder and may need
