@@ -282,6 +282,7 @@ static bool PromptForArchivePassword(const char* archivePath, const char* entryN
     }
 
     const char* className = "ArchiveStreamPasswordPrompt";
+    DebugLogWrite("INFO", "PASSWORD", "NATIVE_PROMPT_BEGIN", "archive=%s | entry=%s | owner=%p | current_thread=%lu", archivePath ? archivePath : "", entryName ? entryName : "", g_mod.hMainWindow, (unsigned long)GetCurrentThreadId());
 
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
@@ -311,9 +312,11 @@ static bool PromptForArchivePassword(const char* archivePath, const char* entryN
         return false;
     }
 
+    DebugLogWrite("INFO", "PASSWORD", "NATIVE_PROMPT_CREATED", "hwnd=%p | owner=%p | owner_valid=%d | owner_visible=%d", hwnd, g_mod.hMainWindow, IsWindow(g_mod.hMainWindow) ? 1 : 0, IsWindowVisible(g_mod.hMainWindow) ? 1 : 0);
     EnableWindow(g_mod.hMainWindow, FALSE);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
+    DebugLogWrite("INFO", "PASSWORD", "NATIVE_PROMPT_SHOWN", "hwnd=%p | visible=%d", hwnd, IsWindowVisible(hwnd) ? 1 : 0);
 
     MSG msg;
 

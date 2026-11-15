@@ -1496,10 +1496,11 @@ bool SevenZipOpenEntryStream(const wchar_t* archivePath, uint32_t index, Archive
         if (!SevenZipOpenNonSolidEntryStreamImpl(archivePath, index, candidate, attemptError))
             return false;
 
-        // A wrong AES password can initialise CBC successfully. Probe the
-        // compressed plaintext before accepting and remembering a candidate.
-        // All bytes are decoded, not CRC-calculated; seek resets the CBC IV.
-        if (!password.empty() && candidate.size > 0)
+        // AES-CBC can initialise even when the candidate is missing or wrong.
+        // Probe all candidate streams, including the initial empty password:
+        // otherwise encrypted LZMA2 can appear open, fail on the first read,
+        // and bypass the credential prompt. Rewind after verification.
+        if (candidate.size > 0)
         {
             unsigned char probe[4096];
             const size_t expected = candidate.size < sizeof(probe) ? static_cast<size_t>(candidate.size) : sizeof(probe);

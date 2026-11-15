@@ -202,16 +202,33 @@ def start_track(window, label):
     print("SELECTED_CODEC", label, "row", str(controls[0].rectangle()), flush=True)
 
 def handle_qa_password_windows(workspace, password, mode, events, stop, save_consent=False):
-    """Operate only credential dialogs owned by this throwaway archive bridge."""
+    """Operate only native/bridge password windows owned by this throwaway MM5 process."""
+    events.append("QA_PASSWORD_MONITOR_STARTED")
     while not stop.is_set():
         windows = []
         def collect(hwnd, unused):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
-                if title in ("Archive Stream Player - Password Required", "Archive Stream Player"):
+                if title in ("Archive Stream Player - Password Required", "Archive Stream Player") or (NATIVE_INPUT_QA and title == "Archive Password"):
                     windows.append((hwnd, title))
         try:
             win32gui.EnumWindows(collect, None)
+            if NATIVE_INPUT_QA:
+                # Winamp's modal prompt may be an owned popup that the normal
+                # top-level enumeration omits. Its debug log records the HWND,
+                # which must still be verified to belong to this QA process.
+                trace=workspace/"Local"/"ArchiveStreamPlayer"/"Logs"/"archive_stream_winamp.log"
+                if trace.is_file():
+                    if "QA_PASSWORD_TRACE_PRESENT" not in events:
+                        events.append("QA_PASSWORD_TRACE_PRESENT")
+                    for raw in re.findall(r"NATIVE_PROMPT_CREATED[^\n]*hwnd=([0-9A-Fa-f]+)",trace.read_text(encoding="utf-8-sig",errors="replace")):
+                        if "QA_PASSWORD_TRACE_HWND_MATCH" not in events:
+                            events.append("QA_PASSWORD_TRACE_HWND_MATCH")
+                        hwnd=int(raw,16)
+                        if win32gui.IsWindow(hwnd) and (hwnd,"Archive Password") not in windows:
+                            windows.append((hwnd,"Archive Password"))
+                            if "NATIVE_DIALOG_LOG_HANDLE_FOUND" not in events:
+                                events.append("NATIVE_DIALOG_LOG_HANDLE_FOUND")
             for hwnd, title in windows:
                 try:
                     _, pid = win32process.GetWindowThreadProcessId(hwnd)
@@ -220,9 +237,29 @@ def handle_qa_password_windows(workspace, password, mode, events, stop, save_con
                         exe = Path(win32process.GetModuleFileNameEx(process_handle, 0))
                     finally:
                         process_handle.Close()
-                    if exe.name.lower() != "archive_player_bridge.exe" or not str(exe).lower().startswith(str(workspace).lower()):
+                    isolated_owner = str(exe).lower().startswith(str(workspace).lower())
+                    if title == "Archive Password" and "QA_NATIVE_WINDOW_OWNER_CHECKED" not in events:
+                        events.append("QA_NATIVE_WINDOW_OWNER_CHECKED")
+                        events.append("QA_NATIVE_OWNER_ISOLATED_" + str(isolated_owner))
+                        events.append("QA_NATIVE_OWNER_EXE_" + exe.name.lower())
+                    # Real MM5 may host Winamp-compatible decoders in a child
+                    # executable. For this specific native HWND, the strictly
+                    # sandbox-local process path is the ownership boundary.
+                    if not isolated_owner or (title != "Archive Password" and exe.name.lower() != "archive_player_bridge.exe"):
                         continue
                     dialog = Desktop(backend="win32").window(handle=hwnd)
+                    if title == "Archive Password":
+                        if mode == "cancel":
+                            next(c for c in dialog.descendants() if c.window_text() in ("Cancel","&Cancel")).click()
+                            events.append("PASSWORD_CANCELED")
+                        else:
+                            field = next((c for c in dialog.descendants() if c.class_name() == "Edit"),None)
+                            if field is None:
+                                continue
+                            field.set_edit_text(password if mode == "accept" else password + "-INVALID")
+                            next(c for c in dialog.descendants() if c.window_text() == "OK").click()
+                            events.append("PASSWORD_ENTERED" if mode == "accept" else "PASSWORD_WRONG_ENTERED")
+                        continue
                     if title == "Archive Stream Player - Password Required":
                         if mode != "cancel":
                             edits = [c for c in dialog.descendants() if c.class_name() == "Edit"]
@@ -379,6 +416,7 @@ def main():
             ui_thread=threading.Thread(target=handle_qa_password_windows,
                       args=(workspace,synthetic_password,AES_MODE,password_events,ui_stop,TEST_SAVE_CONSENT),daemon=True)
             ui_thread.start()
+            print("MM5_PASSWORD_MONITOR_STARTED",ui_thread.is_alive(),flush=True)
         process=subprocess.Popen([str(exe_dir/"MediaMonkey.exe")],cwd=str(exe_dir),env=env)
         window=wait_for(lambda: player_window(process.pid),90,"portable MediaMonkey UI")
         dismiss_first_run_wizard(window)
@@ -587,7 +625,10 @@ def main():
                 raise AssertionError("Real MediaMonkey GUI seek/resume failed: " + ", ".join(failures))
             print("MM5_REAL_HOST_ALL_SELECTED_CODEC_GUI_SEEK_RESUME_PASS",flush=True)
         if AES_MODE == "accept":
-            print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_AND_SEEK_PASS",flush=True)
+            if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1":
+                print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_AND_SEEK_PASS",flush=True)
+            else:
+                print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_PASS_SEEK_NOT_TESTED",flush=True)
     finally:
         ui_stop.set()
         if ui_thread is not None:

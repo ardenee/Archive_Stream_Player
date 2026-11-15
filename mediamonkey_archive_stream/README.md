@@ -74,6 +74,8 @@ No Winamp *general-purpose* plugin is installed: MediaMonkey 5 can load Winamp
   URLs, queue acknowledgement, HTTP compatibility, user cancellation and
   shared settings.
 
+**Encrypted native 7z (15 November 2026):** Actual MediaMonkey 2024 showed a native archive password dialog hosted by `MediaMonkeyEngine.exe`. After entering a synthetic password, AAC played through direct AES+LZMA2 streaming, not HTTP or disk cache. The shared 7z reader now rejects an initial empty AES password during open, with full Win32/x64 layout regression coverage. **Native encrypted AAC GUI seek/resume is still open:** the host requested a ~156-second seek but did not resume advancing afterward. Use the explicit HTTP compatibility menu action for this tested combination; that route has independent real-host seek evidence. QA: `test_native_portable_codecs.py` with `AST_MM5_QA_NATIVE=1` and `AST_MM5_QA_AES=accept`, plus `archive_backend_test/test_7z_encrypted_layouts.py`.
+
 **Still unverified:** all seven codecs across every archive type in native
 mode, all encrypted/multipart layouts through the new native host path,
 automatic repaint of already-queued native titles, audible speakers and

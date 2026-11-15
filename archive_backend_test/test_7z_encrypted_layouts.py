@@ -175,7 +175,7 @@ def main():
         # Header ciphertext must not be accepted with a wrong password.
         incorrect = folder / "wrong-password.txt"
         incorrect.write_text("definitely-not-the-password\n", encoding="utf-8")
-        for case in ("copy-delta", "headers-copy-delta"):
+        for case in ("copy-delta", "lzma2", "headers-copy-delta"):
             test_archive = folder / (case + ".7z")
             for arch, path in (("Win32", "Release"), ("x64", "x64/Release")):
                 binary = ROOT / "archive_backend_test" / path / "archive_backend_test.exe"
@@ -191,6 +191,18 @@ def main():
                     case, arch, stream.stdout, stream.stderr
                 )
                 print(f"PASS_7Z_WRONG_PASSWORD_REJECTED {arch} {case} file-and-stream", flush=True)
+        # The initial empty candidate must not silently accept an encrypted
+        # LZMA2 stream that opens successfully but fails on its first read.
+        # Reject during open, allowing interactive hosts to request a password.
+        empty_list = folder / "empty-password-list.txt"
+        empty_list.write_bytes(b"")
+        for arch, subdir in (("Win32", "Release"), ("x64", "x64/Release")):
+            binary = ROOT / "archive_backend_test" / subdir / "archive_backend_test.exe"
+            result = run([binary, "pwstreamtest", folder / "lzma2.7z", empty_list, "0"], timeout=30)
+            assert result.returncode != 0 and "PASSWORD_STREAM_OPEN_FAIL" in result.stdout, (
+                arch, result.returncode, result.stdout, result.stderr
+            )
+            print(f"PASS_7Z_AES_LZMA2_EMPTY_PASSWORD_REJECTED_BEFORE_READ {arch}", flush=True)
     print("ALL_7Z_ENCRYPTED_LAYOUTS_PASS", flush=True)
 
 
