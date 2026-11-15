@@ -938,6 +938,7 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
         int channels = MfGetChannels(mf);
         int bitsPerSample = MfGetBitsPerSample(mf);
         int lengthMs = MfGetLengthMs(mf);
+        DebugLogWrite("INFO", "MF", "OPEN_DURATION", "format=%d | mode=%ld | source_length_ms=%d | existing_length_ms=%d | archive=%s | index=%u", (int)format, InterlockedCompareExchange(&g_playbackMode, 0, 0), lengthMs, g_currentLengthMs, g_currentArchivePath, (unsigned int)g_currentArchiveIndex);
 
         if (bitsPerSample <= 0)
             bitsPerSample = 16;

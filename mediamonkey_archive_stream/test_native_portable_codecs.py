@@ -18,6 +18,13 @@ Set AST_MM5_QA_RAR_MULTIPART=1 to create >=3 adjacent RAR5 volumes and
 verify that the first .part1.rar file decodes across their boundaries.
 Set AST_MM5_QA_RAR_SOLID=1 for a two-track solid RAR5 fixture; the test
 plays and seeks both archive entries, including the second solid item.
+For real native encrypted RAR5 AAC, AST_MM5_QA_SDK_SEEK=1 performs an
+isolated seekMSAsync(150000) via the supported MediaMonkey Player SDK, and
+requires actual native decoder seek/Media Foundation return and resumed clock;
+AST_MM5_VERIFY_GUI_SEEK=1 checks actual visible UIA seek-bar clicking instead.
+AST_MM5_QA_INJECT_DURATION=1 tests a duration override in the disposable
+playlist only (requires a local ffprobe executable); production is unchanged.
+AST_MM5_QA_DIAG_UI=1 logs bounded, non-secret UI/seek-bar and dialog traces.
 No persistent personal player database or password file is read or changed.
 """
 import hashlib
@@ -398,9 +405,39 @@ def main():
         hook = ("function qaWrite(name, value){app.filesystem.saveTextToFileAsync("+
                 json.dumps(str(workspace)+"\\qa-")+"+name+'.txt',String(value));}\n")
         js=hook+js
+        if os.environ.get("AST_MM5_QA_INJECT_DURATION") == "1":
+            # Disposable host A/B test only. Read the original fixture duration
+            # independently: do NOT guess it, alter production M3U8, or decode
+            # encrypted archive audio while generating the playlist.
+            if not (NATIVE_INPUT_QA and AES_MODE == "accept" and len(SOURCES) == 1 and SOURCES[0][0] == "AAC"):
+                raise AssertionError("QA duration injection requires a single native encrypted AAC entry")
+            ffprobe=Path(r"C:\Program Files\AudioBookConverter\app\external\ffprobe.exe")
+            duration_probe=subprocess.run([str(ffprobe),"-v","error","-show_entries","format=duration",
+                "-of","default=noprint_wrappers=1:nokey=1",str(AUDIO/SOURCES[0][1])],
+                capture_output=True,text=True,timeout=15)
+            assert duration_probe.returncode == 0,duration_probe.stderr
+            verified_seconds=int(float(duration_probe.stdout.strip()) + .5)
+            assert 20 < verified_seconds < 86400,verified_seconds
+            duration_anchor="const playlist = await app.filesystem.loadTextFromFileAsync(manifest.playlist);"
+            assert js.count(duration_anchor) == 1,"Unexpected native playlist read operation"
+            injected="const playlist = (await app.filesystem.loadTextFromFileAsync(manifest.playlist)).replace('#EXTINF:-1,', '#EXTINF:"+str(verified_seconds)+",');"
+            js=js.replace(duration_anchor,injected,1)
+            print("MM5_QA_ONLY_VERIFIED_AAC_PLAYLIST_DURATION_INJECTED",verified_seconds,"source=original_aac_fixture",flush=True)
         js=js.replace("await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});",
                       "await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});\n"
                       "await qaWrite('queued',String(tracks.count));")
+        if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_SDK_SEEK") == "1":
+            # A/B diagnosis only: use MediaMonkey\'s documented player API
+            # without touching the GUI seek bar or production add-on logic.
+            seek_marker="await qaWrite(\'queued\',String(tracks.count));"
+            assert js.count(seek_marker)==1,"Missing isolated queue acknowledgement"
+            seek_action=(seek_marker+"\nsetTimeout(async () => { try { "+
+                "const before=app.player.trackPositionMS; "+
+                "await app.player.seekMSAsync(150000); "+
+                "await qaWrite(\'sdk-seek-result\',JSON.stringify({before:before,after:app.player.trackPositionMS,target:150000})); "+
+                "} catch(error) { await qaWrite(\'sdk-seek-result\',JSON.stringify({error:String(error)})); } }, 35000);")
+            js=js.replace(seek_marker,seek_action,1)
+            print("MM5_QA_ONLY_NATIVE_SDK_SEEK_ARMED",150000,flush=True)
         if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_AUTOPLAY") == "1" and len(SOURCES) == 1:
             # Use the documented player queue SDK to begin playback directly.
             # Some fresh portable MM5 surfaces virtualize all accessible row
@@ -419,7 +456,8 @@ def main():
                " await app.filesystem.saveTextToFileAsync(marker, '1');" +
                " await actions.archiveStreamNativeAdd.execute(); }, 7000);\n")
         script.write_text(js,encoding="utf-8")
-        if TITLE_REFRESH_QA:
+        if (TITLE_REFRESH_QA or os.environ.get("AST_MM5_QA_INJECT_DURATION") == "1" or
+                os.environ.get("AST_MM5_QA_SDK_SEEK") == "1"):
             syntax=subprocess.run(["node","--check",str(script)],capture_output=True,text=True,timeout=12)
             if syntax.returncode:
                 raise AssertionError("Staged QA title refresh JavaScript invalid: "+syntax.stderr[-1400:])
@@ -485,8 +523,19 @@ def main():
         print("MM5_SELECTED_CODEC_PORTABLE_QUEUE_TITLES_PASS",flush=True)
         view=doc(window)
         visible=[label for label in labels if label in view]
+        if not visible and not (TITLE_REFRESH_QA and "AST_QA_TITLE_REFRESHED" in view):
+            # A fresh portable Chromium surface can acknowledge the SDK queue
+            # before its Now Playing accessibility text has been populated.
+            # Wait for it, without selecting tracks or altering the real profile.
+            for _ in range(16):
+                time.sleep(.5)
+                view=doc(window)
+                visible=[label for label in labels if label in view]
+                if visible:
+                    break
         print("MM5_VISIBLE_QUEUE_TITLES",visible,flush=True)
         if not visible and not (TITLE_REFRESH_QA and "AST_QA_TITLE_REFRESHED" in view):
+            print("MM5_NATIVE_QUEUE_ACCESSIBILITY_DELAY_TAIL",repr(view[-500:]),flush=True)
             raise AssertionError("Native Now Playing view has no archive titles")
         if TITLE_REFRESH_QA:
             # Exercise the production background refresh by atomically replacing
@@ -574,19 +623,48 @@ def main():
                     time.sleep(.3)
                     bounds=window.rectangle()
                     print("MM5_GUI_SEEK_WINDOW_BOUNDS",str(bounds),flush=True)
-                    attempts = []
+                    if os.environ.get("AST_MM5_QA_DIAG_UI") == "1":
+                        foreground=win32gui.GetForegroundWindow()
+                        print("MM5_QA_TIMELINE_FOCUS",{"main_hwnd":window.handle,"foreground_hwnd":foreground,
+                            "foreground_title":win32gui.GetWindowText(foreground),"main_enabled":win32gui.IsWindowEnabled(window.handle)},flush=True)
+                        controls=[]
+                        for control in window.descendants():
+                            try:
+                                rect=control.rectangle()
+                                typ=control.element_info.control_type
+                                if control.is_visible() and (typ in ("Slider","ProgressBar") or
+                                    rect.top >= bounds.bottom-135 and typ in ("Text","Button")):
+                                    controls.append((typ,control.window_text()[:50],str(rect),control.is_enabled()))
+                            except Exception:
+                                continue
+                            if len(controls)>=65:
+                                break
+                        print("MM5_QA_TIMELINE_CONTROLS",controls,flush=True)
+                    # Click the real accessible timeline, not a guessed offset
+                    # from the window bottom. The seek bar can be hundreds of
+                    # pixels higher in MediaMonkey's large-screen layout.
+                    timeline=[]
+                    for control in window.descendants():
+                        try:
+                            if (control.element_info.control_type=="Slider" and
+                                control.window_text().strip().lower()=="seek bar" and
+                                control.is_visible() and control.is_enabled()):
+                                timeline.append(control)
+                        except Exception:
+                            continue
+                    if len(timeline)!=1:
+                        raise AssertionError("Expected one visible enabled MediaMonkey seek bar, found "+str(len(timeline)))
+                    seek_bounds=timeline[0].rectangle()
+                    if seek_bounds.width()<=20 or seek_bounds.height()<=0:
+                        raise AssertionError("Accessible MediaMonkey seek bar has invalid geometry: "+str(seek_bounds))
+                    coord=(seek_bounds.left+int(seek_bounds.width()*.62),
+                           seek_bounds.top+seek_bounds.height()//2)
+                    print("MM5_GUI_SEEK_ACCESSIBLE_SLIDER",str(seek_bounds),"click",coord,flush=True)
                     seek_started=time.monotonic()
-                    for offset in (95, 93, 91, 89, 87, 84):
-                        coord=(bounds.left + int(bounds.width()*.62),
-                               bounds.bottom-offset)
-                        mouse.click(coords=coord)
-                        time.sleep(1)
-                        observed=elapsed(window,label)
-                        attempts.append({"offset":offset,"coord":coord,
-                                         "position":observed})
-                        if observed >= after + max(15, int(time.monotonic()-seek_started) + 12):
-                            break
+                    mouse.click(coords=coord)
+                    time.sleep(1)
                     jumped=elapsed(window,label)
+                    attempts=[{"source":"accessible_seek_bar","coord":coord,"position":jumped}]
                     time.sleep(3)
                     resumed=elapsed(window,label)
                     results[key]["gui_seek"]={"before":after,"jumped":jumped,
@@ -598,6 +676,14 @@ def main():
                 results[key]={"error":str(error),"working":False}
             print("MM5_CODEC_RESULT",key,results[key],flush=True)
 
+        if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_SDK_SEEK") == "1":
+            sdk_result=wait_for(lambda: workspace/"qa-sdk-seek-result.txt" if (workspace/"qa-sdk-seek-result.txt").is_file() else None,55,
+                                "isolated MM5 app.player.seekMSAsync result")
+            sdk_seek_payload=json.loads(sdk_result.read_text(encoding="utf-8-sig",errors="replace"))
+            assert "error" not in sdk_seek_payload and sdk_seek_payload.get("target")==150000,sdk_seek_payload
+            assert isinstance(sdk_seek_payload.get("before"),(int,float)) and sdk_seek_payload["before"]<150000,sdk_seek_payload
+            print("MM5_QA_ONLY_NATIVE_SDK_SEEK_RESULT",sdk_seek_payload,flush=True)
+            time.sleep(3)
         logfile=workspace/"Local"/"ArchiveStreamPlayer"/"Logs"/"archive_stream_bridge.log"
         if logfile.exists():
             data=logfile.read_text(encoding="utf-8",errors="replace")
@@ -615,8 +701,22 @@ def main():
             native_counts={kind:native_trace.count(kind) for kind in
                            ("NATIVE_MANIFEST_ACCEPTED","THREAD_ENTER","mode=STREAM","mode=CACHE","ROUTE_CACHE","SEEK_REQUEST","MF_SEEK_DISPATCH","SEEK_READER_RETURN")}
             print("MM5_NATIVE_INPUT_STREAM_COUNTS",native_counts,flush=True)
+            for duration_event in ("DURATION_METADATA", "OPEN_DURATION"):
+                for source_line in native_trace.splitlines():
+                    if duration_event in source_line:
+                        print("MM5_NATIVE_MF_DURATION_EVIDENCE",source_line.split("|",4)[-1].strip(),flush=True)
+            if os.environ.get("AST_MM5_QA_DIAG_UI") == "1":
+                for event in ("NATIVE_PROMPT_BEGIN", "NATIVE_PROMPT_SHOWN", "PASSWORD_ENTERED"):
+                    entries=[row.split("|",1)[0].strip() for row in native_trace.splitlines() if event in row]
+                    print("MM5_QA_NATIVE_DIALOG_TIMELINE",event,entries,flush=True)
             assert native_counts["NATIVE_MANIFEST_ACCEPTED"]>=len(SOURCES),native_counts
             assert native_counts["THREAD_ENTER"]>=len(SOURCES),native_counts
+            if os.environ.get("AST_MM5_QA_SDK_SEEK") == "1":
+                assert native_counts["SEEK_REQUEST"]>=1 and native_counts["MF_SEEK_DISPATCH"]>=1 and native_counts["SEEK_READER_RETURN"]>=1,native_counts
+                assert re.search(r"SEEK_READER_RETURN[^\n]*hr=0x00000000",native_trace),native_trace[-2500:]
+                sdk_played=elapsed(window,labels[0])
+                assert 150 <= sdk_played <= 260,sdk_played
+                print("MM5_NATIVE_RAR5_AAC_SDK_SEEK_CALLBACK_AND_RESUME_PASS",{"seek_target_ms":150000,"host_seconds":sdk_played,"reader_hr":"0x00000000"},flush=True)
             # Encrypted RAR5 may not support direct streaming. The native MF
             # decoder (AAC/WMA/M4A) cannot yet consume a bounded memory buffer,
             # so managed cache is the legitimate final fallback after trying
@@ -696,7 +796,9 @@ def main():
             print("MM5_REAL_HOST_ALL_SELECTED_CODEC_GUI_SEEK_RESUME_PASS",flush=True)
         if AES_MODE == "accept":
             if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1":
-                print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_AND_SEEK_PASS",flush=True)
+                print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_AND_GUI_SEEK_PASS",flush=True)
+            elif os.environ.get("AST_MM5_QA_SDK_SEEK") == "1":
+                print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_AND_SDK_SEEK_PASS_GUI_SEEK_NOT_TESTED",flush=True)
             else:
                 print("MM5_ENCRYPTED_HOST_PASSWORD_ACCEPTED_PLAYBACK_PASS_SEEK_NOT_TESTED",flush=True)
     finally:

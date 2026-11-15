@@ -231,6 +231,7 @@ static void MfLoadDuration(MfAudioDecoder* decoder)
         decoder->lengthMs = (int)(duration100ns / 10000ULL);
     }
 
+    DebugLogWrite("INFO", "MF", "DURATION_METADATA", "format=%s | hr=0x%08lX | variant_type=%u | length_ms=%d", MfAudioFormatName(decoder->format), (unsigned long)hr, (unsigned int)var.vt, decoder->lengthMs);
     PropVariantClear(&var);
 }
 
