@@ -23,13 +23,18 @@ int wmain(int argc, wchar_t** argv)
     HMODULE module = GetModuleHandleW(L"bass_archive_stream.dll");
     if (!module)
         return 5;
-    const bool allowWav = argc == 6 && wcscmp(argv[5], L"pcm") == 0;
-    auto scan = reinterpret_cast<Enumerate>(GetProcAddress(module, allowWav ? "ArchiveStreamWriteNativePcmTracksW" : "ArchiveStreamWriteNativeMp3TracksW"));
+    const bool allowPcm = argc == 6 && wcscmp(argv[5], L"pcm") == 0;
+    const bool allowAudio = argc == 6 && wcscmp(argv[5], L"audio") == 0;
+    if (argc == 6 && !allowPcm && !allowAudio)
+        return 2;
+    const char* exportName = allowAudio ? "ArchiveStreamWriteNativeAudioTracksW" :
+        allowPcm ? "ArchiveStreamWriteNativePcmTracksW" : "ArchiveStreamWriteNativeMp3TracksW";
+    auto scan = reinterpret_cast<Enumerate>(GetProcAddress(module, exportName));
     if (!scan)
         return 6;
     const int n = scan(argv[2], argv[3]);
     int expected = _wtoi(argv[4]);
-    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowWav ? "pcm" : "mp3", n, expected);
+    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
     if (n != expected)
         return 7;
     int files = 0;

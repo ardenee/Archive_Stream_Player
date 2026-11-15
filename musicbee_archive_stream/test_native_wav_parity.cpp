@@ -7,7 +7,7 @@
 
 int wmain(int argc,wchar_t** argv)
 {
-    if (argc != 5)
+    if (argc != 5 && argc != 6)
         return 2;
     if (!BASS_Init(0,44100,0,nullptr,nullptr))
         return 3;
@@ -53,6 +53,32 @@ int wmain(int argc,wchar_t** argv)
         out.write(reinterpret_cast<char*>(data.data()),data.size());
         if (!out.good())
             return 12;
+    }
+    if (argc == 6)
+    {
+        if (!BASS_ChannelSetPosition(stream, 0, BASS_POS_BYTE))
+            return 13;
+        std::ofstream fullOutput(argv[5], std::ios::binary);
+        if (!fullOutput)
+            return 14;
+        unsigned long long total = 0;
+        while (total < full)
+        {
+            const DWORD count = BASS_ChannelGetData(stream, data.data(), static_cast<DWORD>(data.size()));
+            if (count == static_cast<DWORD>(-1) || !count || count > data.size())
+            {
+                printf("NATIVE_FULL_PCM_FAILED offset=%llu bass_error=%d count=%u\n", total, BASS_ErrorGetCode(), count);
+                return 15;
+            }
+            fullOutput.write(reinterpret_cast<const char*>(data.data()), count);
+            if (!fullOutput.good())
+                return 16;
+            total += count;
+        }
+        fullOutput.close();
+        if (total != full)
+            return 17;
+        printf("NATIVE_FULL_PCM_STREAM_COMPLETE bytes=%llu\n", total);
     }
     BASS_StreamFree(stream);
     BASS_PluginFree(plugin);

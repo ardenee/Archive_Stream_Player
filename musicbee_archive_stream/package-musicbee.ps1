@@ -56,16 +56,18 @@ Restart MusicBee, then use Tools > Archive Stream: Add Archive Audio...
 or Tools > Archive Stream: Settings...
 
 NATIVE MODE
-Unencrypted streamable MP3 and 16-bit PCM WAV play natively inside ZIP,
-non-solid 7z and non-solid RAR. Albums may contain either or both codecs.
-MusicBee's native BASS DLL lists and decodes each archive entry in-process.
-It uses no external helper, HTTP or extracted decoded audio file. Small .ast
-references carry only paths and are removed at normal shutdown. Real host
-GUI seeking passed for all six codec/archive combinations and mixed albums.
-Other WAV encodings are not yet native-certified and use compatibility.
+Unencrypted streamable MP3, PCM16 WAV and 16/24-bit FLAC play natively
+from ZIP, non-solid 7z and non-solid RAR. Albums can mix these codecs.
+MusicBee's native x86 BASS DLL lists and decodes entries in-process;
+no external helper, HTTP or extracted decoded audio file is required.
+Temporary .ast references contain paths only and are cleaned normally.
+Real MusicBee GUI seek/resume passed for all 3 codecs in all 3 archives
+(the tested FLAC GUI sessions used 16-bit FLAC). A 24-bit FLAC also
+passed standalone full 100-second conversion/seek PCM parity checks.
+Unsupported FLAC bit depths retain the compatibility route.
 
 COMPATIBILITY MODE
-Other codecs, unsupported WAV encodings, encrypted archives, solid entries,
+Other codecs, unsupported WAV or FLAC encodings, encrypted archives, solid entries,
 unsupported streaming layouts, or missing/unloadable BASS add-ons retain
 the established MusicBee compatibility bridge, which uses direct streaming
 first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; OGG/FLAC/

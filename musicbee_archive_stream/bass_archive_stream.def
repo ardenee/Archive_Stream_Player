@@ -3,3 +3,4 @@ EXPORTS
     BASSplugin
     ArchiveStreamWriteNativeMp3TracksW=_ArchiveStreamWriteNativeMp3TracksW@8
     ArchiveStreamWriteNativePcmTracksW=_ArchiveStreamWriteNativePcmTracksW@8
+    ArchiveStreamWriteNativeAudioTracksW=_ArchiveStreamWriteNativeAudioTracksW@8
