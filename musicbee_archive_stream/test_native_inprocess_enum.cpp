@@ -25,16 +25,18 @@ int wmain(int argc, wchar_t** argv)
         return 5;
     const bool allowPcm = argc == 6 && wcscmp(argv[5], L"pcm") == 0;
     const bool allowAudio = argc == 6 && wcscmp(argv[5], L"audio") == 0;
-    if (argc == 6 && !allowPcm && !allowAudio)
+    const bool allowFour = argc == 6 && wcscmp(argv[5], L"four") == 0;
+    if (argc == 6 && !allowPcm && !allowAudio && !allowFour)
         return 2;
-    const char* exportName = allowAudio ? "ArchiveStreamWriteNativeAudioTracksW" :
+    const char* exportName = allowFour ? "ArchiveStreamWriteNativeFourCodecsW" :
+        allowAudio ? "ArchiveStreamWriteNativeAudioTracksW" :
         allowPcm ? "ArchiveStreamWriteNativePcmTracksW" : "ArchiveStreamWriteNativeMp3TracksW";
     auto scan = reinterpret_cast<Enumerate>(GetProcAddress(module, exportName));
     if (!scan)
         return 6;
     const int n = scan(argv[2], argv[3]);
     int expected = _wtoi(argv[4]);
-    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
+    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowFour ? "four" : allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
     if (n != expected)
         return 7;
     int files = 0;

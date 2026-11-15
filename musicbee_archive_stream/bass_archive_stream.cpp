@@ -59,6 +59,9 @@ struct ArchivePcm
     drmp3 decoder{};
     drwav wav{};
     drflac* flac = nullptr;
+    HSTREAM oggStream = 0;
+    uint64_t encodedSize = 0;
+    size_t memoryCursor = 0;
     AudioFormat format = AUDIO_FORMAT_MP3;
     bool opened = false;
     bool isStreaming = false;
@@ -142,6 +145,67 @@ static drflac_bool32 FlacTellEncoded(void* context, drflac_int64* position)
     return DRFLAC_TRUE;
 }
 
+// Reuse BASS's licensed, already-installed Ogg/Vorbis decoder with the
+// shared archive backend as a true seekable custom compressed-byte source.
+// File I/O ownership remains with ArchivePcm for both streaming and RAM.
+static void CALLBACK OggFileClose(void* user)
+{
+    auto* state = static_cast<ArchivePcm*>(user);
+    if (state && state->isStreaming)
+    {
+        ArchiveCloseEntryStream(&state->stream);
+        state->isStreaming = false;
+    }
+}
+
+static QWORD CALLBACK OggFileLength(void* user)
+{
+    return static_cast<ArchivePcm*>(user)->encodedSize;
+}
+
+static DWORD CALLBACK OggFileRead(void* buffer, DWORD length, void* user)
+{
+    auto* state = static_cast<ArchivePcm*>(user);
+    if (!state || !buffer)
+        return 0;
+    if (state->isStreaming)
+        return static_cast<DWORD>(ArchiveReadEntryStream(&state->stream, buffer, length));
+    if (state->memoryCursor >= state->encoded.size())
+        return 0;
+    const size_t count = std::min(static_cast<size_t>(length), state->encoded.size() - state->memoryCursor);
+    memcpy(buffer, state->encoded.data() + state->memoryCursor, count);
+    state->memoryCursor += count;
+    return static_cast<DWORD>(count);
+}
+
+static BOOL CALLBACK OggFileSeek(QWORD position, void* user)
+{
+    auto* state = static_cast<ArchivePcm*>(user);
+    if (!state || position > state->encodedSize)
+        return FALSE;
+    if (state->isStreaming)
+        return ArchiveSeekEntryStream(&state->stream, position) ? TRUE : FALSE;
+    if (position > state->encoded.size())
+        return FALSE;
+    state->memoryCursor = static_cast<size_t>(position);
+    return TRUE;
+}
+
+static const BASS_FILEPROCS kArchiveOggFileProcs = {
+    OggFileClose, OggFileLength, OggFileRead, OggFileSeek
+};
+
+// The native BASS file decoder may inspect registered add-ons while opening a
+// virtual compressed source. Do not recursively open the same .ast entry.
+static thread_local bool gOpeningNestedOgg = false;
+static HSTREAM OpenArchiveOggDecoder(ArchivePcm* state)
+{
+    gOpeningNestedOgg = true;
+    const HSTREAM stream = BASS_StreamCreateFileUser(STREAMFILE_NOBUFFER, BASS_STREAM_DECODE, &kArchiveOggFileProcs, state);
+    gOpeningNestedOgg = false;
+    return stream;
+}
+
 static void CloseDecoder(ArchivePcm* state)
 {
     if (!state || !state->opened)
@@ -150,6 +214,8 @@ static void CloseDecoder(ArchivePcm* state)
         drwav_uninit(&state->wav);
     else if (state->format == AUDIO_FORMAT_FLAC)
         drflac_close(state->flac);
+    else if (state->format == AUDIO_FORMAT_OGG)
+        BASS_StreamFree(state->oggStream);
     else
         drmp3_uninit(&state->decoder);
     state->opened = false;
@@ -221,7 +287,9 @@ QWORD WINAPI ArchivePcm::Seek(void* ptr, QWORD bytePosition, DWORD mode)
         ? drwav_seek_to_pcm_frame(&state->wav, frame) != 0
         : state->format == AUDIO_FORMAT_FLAC
             ? drflac_seek_to_pcm_frame(state->flac, frame) != 0
-            : drmp3_seek_to_pcm_frame(&state->decoder, frame) != 0;
+            : state->format == AUDIO_FORMAT_OGG
+                ? BASS_ChannelSetPosition(state->oggStream, bytePosition, BASS_POS_BYTE) != 0
+                : drmp3_seek_to_pcm_frame(&state->decoder, frame) != 0;
     if (!ok)
     {
         Trace("SEEK_FAIL", "");
@@ -242,11 +310,18 @@ DWORD CALLBACK ArchivePcm::ReadPcm(HSTREAM, void* buffer, DWORD length, void* pt
     if (!frames)
         return 0;
 
-    const uint64_t read = state->format == AUDIO_FORMAT_WAV
-        ? drwav_read_pcm_frames_s16(&state->wav, frames, static_cast<int16_t*>(buffer))
-        : state->format == AUDIO_FORMAT_FLAC
-            ? drflac_read_pcm_frames_s16(state->flac, frames, static_cast<int16_t*>(buffer))
-            : drmp3_read_pcm_frames_s16(&state->decoder, frames, static_cast<int16_t*>(buffer));
+    uint64_t read = 0;
+    if (state->format == AUDIO_FORMAT_OGG)
+    {
+        const DWORD decoded = BASS_ChannelGetData(state->oggStream, buffer, frames * bytesPerFrame);
+        read = decoded == static_cast<DWORD>(-1) ? 0 : decoded / bytesPerFrame;
+    }
+    else if (state->format == AUDIO_FORMAT_WAV)
+        read = drwav_read_pcm_frames_s16(&state->wav, frames, static_cast<int16_t*>(buffer));
+    else if (state->format == AUDIO_FORMAT_FLAC)
+        read = drflac_read_pcm_frames_s16(state->flac, frames, static_cast<int16_t*>(buffer));
+    else
+        read = drmp3_read_pcm_frames_s16(&state->decoder, frames, static_cast<int16_t*>(buffer));
     if (!state->firstRead && read > 0)
     {
         state->firstRead = true;
@@ -289,7 +364,9 @@ static bool ConvertDescriptorName(BASSFILE file, std::string& path)
 
 static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 {
-    Trace("CREATE_BEGIN", "codec=MP3_WAV_FLAC");
+    if (gOpeningNestedOgg)
+        return 0;
+    Trace("CREATE_BEGIN", "codec=MP3_WAV_FLAC_OGG");
     if (!descriptor)
         return 0;
 
@@ -315,13 +392,20 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     if (!ParseVirtualArchivePath(virtualTrack.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
         return 0;
     const AudioFormat format = GetAudioFormatFromPath(member);
-    if (format != AUDIO_FORMAT_MP3 && format != AUDIO_FORMAT_WAV && format != AUDIO_FORMAT_FLAC)
+    if (format != AUDIO_FORMAT_MP3 && format != AUDIO_FORMAT_WAV && format != AUDIO_FORMAT_FLAC && format != AUDIO_FORMAT_OGG)
         return 0;
 
-    Trace("MANIFEST_OK", format == AUDIO_FORMAT_WAV ? "codec=WAV" : format == AUDIO_FORMAT_FLAC ? "codec=FLAC" : "codec=MP3");
+    Trace("MANIFEST_OK", format == AUDIO_FORMAT_WAV ? "codec=WAV" : format == AUDIO_FORMAT_FLAC ? "codec=FLAC" :
+        format == AUDIO_FORMAT_OGG ? "codec=OGG" : "codec=MP3");
     auto state = std::make_unique<ArchivePcm>();
     state->format = format;
     std::string error;
+    if (format == AUDIO_FORMAT_OGG)
+    {
+        char entryName[1024]{};
+        if (!ArchiveGetEntryInfo(archive, index, entryName, sizeof(entryName), &state->encodedSize) || !state->encodedSize)
+            return 0;
+    }
     state->isStreaming = ArchiveOpenValidatedEntryStream(&state->stream, archive, index, 4096, &error);
     Trace("STREAM_VALIDATED", state->isStreaming ? "route=STREAM" : "route=FALLBACK");
     if (state->isStreaming)
@@ -333,9 +417,14 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
             state->flac = drflac_open(ReadEncoded, FlacSeekEncoded, FlacTellEncoded, &state->stream, nullptr);
             state->opened = state->flac != nullptr;
         }
+        else if (state->format == AUDIO_FORMAT_OGG)
+        {
+            state->oggStream = OpenArchiveOggDecoder(state.get());
+            state->opened = state->oggStream != 0;
+        }
         else
             state->opened = drmp3_init(&state->decoder, ReadEncoded, SeekEncoded, TellEncoded, nullptr, &state->stream, nullptr) != 0;
-        if (!state->opened)
+        if (!state->opened && state->isStreaming)
         {
             ArchiveCloseEntryStream(&state->stream);
             state->isStreaming = false;
@@ -365,14 +454,26 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
             state->flac = drflac_open_memory(state->encoded.data(), state->encoded.size(), nullptr);
             state->opened = state->flac != nullptr;
         }
+        else if (state->format == AUDIO_FORMAT_OGG)
+        {
+            state->encodedSize = state->encoded.size();
+            state->memoryCursor = 0;
+            state->oggStream = OpenArchiveOggDecoder(state.get());
+            state->opened = state->oggStream != 0;
+        }
         else
             state->opened = drmp3_init_memory(&state->decoder, state->encoded.data(), state->encoded.size(), nullptr) != 0;
     }
 
+    BASS_CHANNELINFO oggInfo{};
+    if (state->format == AUDIO_FORMAT_OGG && state->oggStream)
+        BASS_ChannelGetInfo(state->oggStream, &oggInfo);
     const DWORD rate = state->format == AUDIO_FORMAT_WAV ? state->wav.sampleRate :
-        state->format == AUDIO_FORMAT_FLAC && state->flac ? state->flac->sampleRate : state->decoder.sampleRate;
+        state->format == AUDIO_FORMAT_FLAC && state->flac ? state->flac->sampleRate :
+        state->format == AUDIO_FORMAT_OGG ? oggInfo.freq : state->decoder.sampleRate;
     const DWORD channels = state->format == AUDIO_FORMAT_WAV ? state->wav.channels :
-        state->format == AUDIO_FORMAT_FLAC && state->flac ? state->flac->channels : state->decoder.channels;
+        state->format == AUDIO_FORMAT_FLAC && state->flac ? state->flac->channels :
+        state->format == AUDIO_FORMAT_OGG ? oggInfo.chans : state->decoder.channels;
     if (!state->opened || !rate || (channels != 1 && channels != 2))
     {
         Trace("OPEN_FAIL", "reason=decoder_invalid");
@@ -384,10 +485,14 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 
     state->sampleRate = rate;
     state->channels = channels;
-    Trace("DECODER_INIT_OK", state->format == AUDIO_FORMAT_WAV ? "codec=WAV" : state->format == AUDIO_FORMAT_FLAC ? "codec=FLAC" : "codec=MP3");
+    Trace("DECODER_INIT_OK", state->format == AUDIO_FORMAT_WAV ? "codec=WAV" : state->format == AUDIO_FORMAT_FLAC ? "codec=FLAC" :
+        state->format == AUDIO_FORMAT_OGG ? "codec=OGG" : "codec=MP3");
     Trace("DURATION_COUNT_BEGIN", "");
+    const uint64_t oggBytes = state->format == AUDIO_FORMAT_OGG ? BASS_ChannelGetLength(state->oggStream, BASS_POS_BYTE) : 0;
     const uint64_t frames = state->format == AUDIO_FORMAT_WAV ? state->wav.totalPCMFrameCount :
-        state->format == AUDIO_FORMAT_FLAC ? state->flac->totalPCMFrameCount : drmp3_get_pcm_frame_count(&state->decoder);
+        state->format == AUDIO_FORMAT_FLAC ? state->flac->totalPCMFrameCount :
+        state->format == AUDIO_FORMAT_OGG ? oggBytes / (state->channels * sizeof(int16_t)) :
+        drmp3_get_pcm_frame_count(&state->decoder);
     Trace("DURATION_COUNT_DONE", "");
     if (!frames || frames > std::numeric_limits<QWORD>::max() / (state->channels * sizeof(int16_t)))
     {
@@ -402,7 +507,8 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 
     DWORD streamFlags = flags & (BASS_STREAM_DECODE | BASS_SAMPLE_SOFTWARE | BASS_SAMPLE_LOOP |
                                  BASS_STREAM_AUTOFREE | BASS_SAMPLE_3D | BASS_SAMPLE_FX | 0x3f000000);
-    Trace("BASS_CREATE_STREAM_BEGIN", state->format == AUDIO_FORMAT_WAV ? "codec=WAV" : state->format == AUDIO_FORMAT_FLAC ? "codec=FLAC" : "codec=MP3");
+    Trace("BASS_CREATE_STREAM_BEGIN", state->format == AUDIO_FORMAT_WAV ? "codec=WAV" : state->format == AUDIO_FORMAT_FLAC ? "codec=FLAC" :
+        state->format == AUDIO_FORMAT_OGG ? "codec=OGG" : "codec=MP3");
     HSTREAM stream = bassfunc->CreateStream(state->sampleRate, state->channels, streamFlags,
                                            ArchivePcm::ReadPcm, state.get(), &ArchivePcm::callbacks);
     if (!stream)
@@ -421,14 +527,15 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     if (BASS_GetVersion() >= 0x02041000)
         BASS_ChannelLock(stream, FALSE);
     Trace("OPEN_OK", openedFormat == AUDIO_FORMAT_WAV ? "codec=WAV route=STREAM_or_BUFFER" :
-        openedFormat == AUDIO_FORMAT_FLAC ? "codec=FLAC route=STREAM_or_BUFFER" : "codec=MP3 route=STREAM_or_BUFFER");
+        openedFormat == AUDIO_FORMAT_FLAC ? "codec=FLAC route=STREAM_or_BUFFER" :
+        openedFormat == AUDIO_FORMAT_OGG ? "codec=OGG route=BASS_FILEUSER" : "codec=MP3 route=STREAM_or_BUFFER");
     return stream;
 }
 
 // List-only native MusicBee integration: no separate helper executable, HTTP
 // listener, PCM extraction or BASS runtime redistribution is required.
 // The managed adapter calls this on its background archive-opening worker.
-static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac)
+static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg)
 {
     if (!archivePath || !*archivePath || !outputFolder || !*outputFolder)
         return 0;
@@ -469,7 +576,7 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
             const AudioFormat entryFormat = GetAudioFormatFromPath(entry.path.c_str());
             if (!entry.size || entry.isEncrypted ||
                 (entryFormat != AUDIO_FORMAT_MP3 && !(allowWav && entryFormat == AUDIO_FORMAT_WAV) &&
-                 !(allowFlac && entryFormat == AUDIO_FORMAT_FLAC)) ||
+                 !(allowFlac && entryFormat == AUDIO_FORMAT_FLAC) && !(allowOgg && entryFormat == AUDIO_FORMAT_OGG)) ||
                 entry.path.empty() || entry.path.size() >= 1024 ||
                 entry.path.find('\r') != std::string::npos ||
                 entry.path.find('\n') != std::string::npos ||
@@ -539,6 +646,47 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
                 }
             }
 
+            if (entryFormat == AUDIO_FORMAT_OGG)
+            {
+                // Reject Opus, malformed .ogg files and files with no Vorbis
+                // identification header; other formats retain compatibility.
+                ArchiveStreamContext probe{};
+                if (!ArchiveOpenValidatedEntryStream(&probe, archiveUtf8.c_str(), entry.index, 4096, &probeError))
+                    return 0;
+                unsigned char prefix[4096]{};
+                const size_t count = ArchiveReadEntryStream(&probe, prefix, sizeof(prefix));
+                ArchiveCloseEntryStream(&probe);
+                const unsigned char vorbisMagic[] = { 1, 'v', 'o', 'r', 'b', 'i', 's' };
+                if (count < 36 || memcmp(prefix, "OggS", 4) != 0 ||
+                    std::search(prefix, prefix + count, std::begin(vorbisMagic), std::end(vorbisMagic)) == prefix + count)
+                {
+                    Trace("NATIVE_ENUM_FALLBACK", "reason=ogg_not_vorbis");
+                    return 0;
+                }
+                // Verify the actual installed BASS core can open/seek this
+                // entry via its custom-file interface before native queueing.
+                auto check = std::make_unique<ArchivePcm>();
+                check->format = AUDIO_FORMAT_OGG;
+                check->encodedSize = entry.size;
+                check->isStreaming = ArchiveOpenValidatedEntryStream(&check->stream, archiveUtf8.c_str(), entry.index, 4096, &probeError);
+                if (!check->isStreaming)
+                    return 0;
+                check->oggStream = OpenArchiveOggDecoder(check.get());
+                BASS_CHANNELINFO info{};
+                bool valid = check->oggStream && BASS_ChannelGetInfo(check->oggStream, &info) &&
+                    info.freq >= 8000 && info.freq <= 384000 && (info.chans == 1 || info.chans == 2) &&
+                    BASS_ChannelGetLength(check->oggStream, BASS_POS_BYTE) != static_cast<QWORD>(-1);
+                if (check->oggStream)
+                    BASS_StreamFree(check->oggStream);
+                if (check->isStreaming)
+                    ArchiveCloseEntryStream(&check->stream);
+                if (!valid)
+                {
+                    Trace("NATIVE_ENUM_FALLBACK", "reason=ogg_decoder_invalid");
+                    return 0;
+                }
+            }
+
             const std::string virtualPath = archiveUtf8 + ".archive_stream|" +
                 std::to_string(entry.index) + "|" + entry.path;
             if (virtualPath.size() > 16300)
@@ -585,18 +733,24 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
 // is used by v1.3+ for mixed MP3/WAV albums, without changing old clients.
 extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false);
 }
 
 extern "C" int __stdcall ArchiveStreamWriteNativePcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false);
 }
 
 // New ABI retains older MP3-only and MP3/WAV scanners for installed adapters.
 extern "C" int __stdcall ArchiveStreamWriteNativeAudioTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false);
+}
+
+// v1.5 accepts actual Vorbis OGG files; older ABI selectors remain unchanged.
+extern "C" int __stdcall ArchiveStreamWriteNativeFourCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true);
 }
 
 extern "C" const void* WINAPI BASSplugin(DWORD face)

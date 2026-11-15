@@ -56,21 +56,20 @@ Restart MusicBee, then use Tools > Archive Stream: Add Archive Audio...
 or Tools > Archive Stream: Settings...
 
 NATIVE MODE
-Unencrypted streamable MP3, PCM16 WAV and 16/24-bit FLAC play natively
-from ZIP, non-solid 7z and non-solid RAR. Albums can mix these codecs.
-MusicBee's native x86 BASS DLL lists and decodes entries in-process;
-no external helper, HTTP or extracted decoded audio file is required.
-Temporary .ast references contain paths only and are cleaned normally.
-Real MusicBee GUI seek/resume passed for all 3 codecs in all 3 archives
-(the tested FLAC GUI sessions used 16-bit FLAC). A 24-bit FLAC also
-passed standalone full 100-second conversion/seek PCM parity checks.
-Unsupported FLAC bit depths retain the compatibility route.
-
+Unencrypted streamable MP3, PCM16 WAV, FLAC16/24 and OGG/Vorbis play
+natively from ZIP, non-solid 7z and non-solid RAR. Mixed codecs work.
+MusicBee's x86 BASS add-on reads compressed archive bytes in-process:
+no helper executable, HTTP listener or decoded-audio disk cache.
+Only path references are written to temporary .ast files.
+Real MusicBee GUI seek/resume passed for all 4 codecs in all 3 archive
+formats, plus a mixed four-track playlist and two-link chained Vorbis.
+Full FLAC and OGG PCM comparison and cross-link Vorbis seeking passed.
+Other WAV/FLAC encodings and non-Vorbis OGG use compatibility.
 COMPATIBILITY MODE
-Other codecs, unsupported WAV or FLAC encodings, encrypted archives, solid entries,
+Other codecs, unsupported WAV/FLAC or non-Vorbis OGG, encrypted archives, solid entries,
 unsupported streaming layouts, or missing/unloadable BASS add-ons retain
 the established MusicBee compatibility bridge, which uses direct streaming
-first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; OGG/FLAC/
+first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; fallback OGG/FLAC/
 WAV/WMA/M4A need bounded temporary local files due to MusicBee host
 limitations. The bridge only binds to 127.0.0.1. Temporary media may persist
 after a crash and should be cleared from shared settings. A zero cache limit

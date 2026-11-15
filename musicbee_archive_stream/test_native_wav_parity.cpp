@@ -7,7 +7,7 @@
 
 int wmain(int argc,wchar_t** argv)
 {
-    if (argc != 5 && argc != 6)
+    if (argc != 5 && argc != 6 && argc != 7)
         return 2;
     if (!BASS_Init(0,44100,0,nullptr,nullptr))
         return 3;
@@ -38,7 +38,7 @@ int wmain(int argc,wchar_t** argv)
         if (!out.good())
             return 8;
     }
-    QWORD target=BASS_ChannelSeconds2Bytes(stream,75.0);
+    QWORD target=BASS_ChannelSeconds2Bytes(stream,argc == 7 ? _wtof(argv[6]) : 75.0);
     if (!BASS_ChannelSetPosition(stream,target,BASS_POS_BYTE))
         return 9;
     QWORD position=BASS_ChannelGetPosition(stream,BASS_POS_BYTE);
@@ -54,7 +54,7 @@ int wmain(int argc,wchar_t** argv)
         if (!out.good())
             return 12;
     }
-    if (argc == 6)
+    if (argc >= 6)
     {
         if (!BASS_ChannelSetPosition(stream, 0, BASS_POS_BYTE))
             return 13;
