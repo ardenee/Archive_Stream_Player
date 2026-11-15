@@ -19,7 +19,7 @@ are reused. No extra archive-related runtime DLL is introduced.
 - Two WAV tracks from each ZIP/7z/RAR archive played via the generated
   native M3U8, recording two access opens, two closes and two stream routes,
   with no HTTP. See test_real_vlc_playlist.py.
-- A real VLC 3.0.24 x64 AES+LZMA2 data-encrypted 7z WAV triggered the native Windows credential dialog. Entering a fresh synthetic password and selecting No to save produced exact 176,400-frame PCM output via ROUTE_STREAM with no disk route; the original configured password file hash was unchanged (test_real_vlc_password.py). A separate real VLC Cancel test exited without any decoded route/audio, leaving the configured list unchanged. The GUI test requires optional pywin32 and pywinauto Python packages and supports a `--cancel` argument. Header-encrypted layouts, RAR passwords and Save=Yes remain untested.
+- Four fresh synthetic encrypted WAV archive layouts passed real VLC 3.0.24 Windows credentials: 7z AES+LZMA2 data encryption, 7z encrypted headers, RAR5 encrypted data, and RAR5 encrypted headers. One prompt plus Save=No and exact 176,400-frame PCM parity in each, no managed disk cache, configured password list hash unchanged. Native 7z decrypts via `ROUTE_STREAM`; encrypted RAR5 bypasses libarchive's unsupported encrypted-data stream and immediately uses bounded `ROUTE_MEMORY`, avoiding a previous duplicate prompt. Cancel and incorrect-password cases pass fail-closed in all four layouts (no decoded audio or cache). GUI regression: `test_real_vlc_password.py [--layout=7z|7z-hidden|rar|rar-headers] [--cancel|--wrong]` (requires pywin32 and pywinauto). This certifies direct `ast://` player tracks only, not the separate playlist-builder prompt lifecycle.
 - Native seeking was confirmed using the actual libVLC player API and a
   20-minute 7z WAV, beyond VLC's read-ahead buffer. VLC resumed at ~14:10;
   our access module logged ACCESS_SEEK offset=74970044; the test audio output
@@ -31,10 +31,13 @@ are reused. No extra archive-related runtime DLL is introduced.
   missing-DLL and one-off CLI preference-override compatibility modes. See
   test_launcher_native.py.
 
-Sound-speaker output, every codec/encryption layout and all native password
-dialog variants have NOT yet been certified. Only the specified real native
-AES-7z Password=Correct / Save=No and Password=Cancel cases passed. All audio tests use a silent
-audio-file sink and disposable isolated VLC/profile folders.
+Sound-speaker output and all codecs/encryption layouts are NOT certified. The four
+specific direct native encrypted 7z/RAR5 layouts passed correct password with
+Save=No, Cancel and wrong-password rejection; Save=Yes remains untested.
+The native playlist builder is a separate process from the VLC DLL, so its
+header-encryption password may be requested again by the player. Credential
+handoff for that scenario is an open integration gap. All PCM tests use a
+silent audio-file sink and disposable isolated VLC/profile folders.
 
 ## Build
 

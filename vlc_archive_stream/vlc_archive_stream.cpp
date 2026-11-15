@@ -126,7 +126,7 @@ bool AskPassword(const char* path, const char*, char* output, size_t capacity, b
     if (!good)
         output[0] = '\0';
     if (good && save && prefs.askToSavePassword)
-        *save = MessageBoxW(nullptr, L"Save verified password to the configured plaintext password list?",
+        *save = MessageBoxW(nullptr, L"If decoding verifies this password, save it to the configured plaintext password list?",
             L"Archive Stream Player - VLC", MB_YESNO | MB_ICONQUESTION) == IDYES;
     return good;
 }
@@ -300,7 +300,11 @@ int Open(vlc_object_t* object)
         if (found == entries.end())
             return VLC_EGENERIC;
         s->entry = *found;
-        if (!s->entry.isSolid && ArchiveOpenEntryStream(archive.c_str(), index, s->stream, error))
+        // libarchive can enumerate encrypted RAR5 but cannot read its encrypted
+        // data stream. Avoid a dead-end open and a second credential prompt:
+        // use the supported bounded-RAM UnRAR decode path immediately.
+        const bool encryptedRar = s->entry.isEncrypted && DetectArchiveFormatFromPath(archive.c_str()) == ArchiveFormat::Rar;
+        if (!s->entry.isSolid && !encryptedRar && ArchiveOpenEntryStream(archive.c_str(), index, s->stream, error))
         {
             s->route = Route::Stream;
             DebugLogWrite("INFO", "VLC", "ROUTE_STREAM", "index=%u | bytes=%llu", index, static_cast<unsigned long long>(s->entry.size));
