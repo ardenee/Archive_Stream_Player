@@ -7,6 +7,7 @@
 
 #include "archive_common.h"
 #include "plugin_state.h"
+#include "pcm_output_writer.h"
 #include "winamp_bridge_protocol.h"
 #include "playback.h"
 #include "archive_reader.h"
@@ -20,6 +21,14 @@
 
 #define STB_VORBIS_HEADER_ONLY
 #include "stb_vorbis.c"
+
+static bool PlaybackPcmShouldAbort()
+{
+    return InterlockedCompareExchange(&g_stopRequested, 0, 0) != 0 ||
+           InterlockedCompareExchange(&g_seekRequested, 0, 0) != 0;
+}
+
+static_assert(8192 % sizeof(short) == 0, "PCM Winamp write capacity must hold complete 16-bit samples");
 
 static size_t StreamingMp3Read(void* userData, void* bufferOut, size_t bytesToRead)
 {
@@ -1024,29 +1033,11 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             }
 
             int bytesToWrite = (int)bytesRead;
-            char* writePtr = (char*)pcm;
-
-            while (bytesToWrite > 0 &&
-                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
-                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
+            if (!ArchiveStreamWritePcmFrames(g_mod.outMod, pcm, bytesToWrite, channels * sizeof(short), PlaybackPcmShouldAbort) &&
+                !PlaybackPcmShouldAbort())
             {
-                int canWrite = g_mod.outMod->CanWrite();
-
-                if (canWrite <= 0)
-                {
-                    Sleep(5);
-                    continue;
-                }
-
-                int thisWrite = bytesToWrite;
-
-                if (thisWrite > canWrite)
-                    thisWrite = canWrite;
-
-                g_mod.outMod->Write(writePtr, thisWrite);
-
-                writePtr += thisWrite;
-                bytesToWrite -= thisWrite;
+                DebugLogWrite("ERROR", "OUTPUT", "PCM_WRITE_INVALID", "decoder=PCM | bytes=%d | channels=%u", bytesToWrite, (unsigned int)channels);
+                break;
             }
         }
 
@@ -1210,29 +1201,11 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             }
 
             int bytesToWrite = (int)(framesRead * channels * sizeof(short));
-            char* writePtr = (char*)pcm;
-
-            while (bytesToWrite > 0 &&
-                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
-                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
+            if (!ArchiveStreamWritePcmFrames(g_mod.outMod, pcm, bytesToWrite, channels * sizeof(short), PlaybackPcmShouldAbort) &&
+                !PlaybackPcmShouldAbort())
             {
-                int canWrite = g_mod.outMod->CanWrite();
-
-                if (canWrite <= 0)
-                {
-                    Sleep(5);
-                    continue;
-                }
-
-                int thisWrite = bytesToWrite;
-
-                if (thisWrite > canWrite)
-                    thisWrite = canWrite;
-
-                g_mod.outMod->Write(writePtr, thisWrite);
-
-                writePtr += thisWrite;
-                bytesToWrite -= thisWrite;
+                DebugLogWrite("ERROR", "OUTPUT", "PCM_WRITE_INVALID", "decoder=PCM | bytes=%d | channels=%u", bytesToWrite, (unsigned int)channels);
+                break;
             }
         }
 
@@ -1392,29 +1365,11 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             }
 
             int bytesToWrite = (int)(framesRead * channels * sizeof(short));
-            char* writePtr = (char*)pcm;
-
-            while (bytesToWrite > 0 &&
-                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
-                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
+            if (!ArchiveStreamWritePcmFrames(g_mod.outMod, pcm, bytesToWrite, channels * sizeof(short), PlaybackPcmShouldAbort) &&
+                !PlaybackPcmShouldAbort())
             {
-                int canWrite = g_mod.outMod->CanWrite();
-
-                if (canWrite <= 0)
-                {
-                    Sleep(5);
-                    continue;
-                }
-
-                int thisWrite = bytesToWrite;
-
-                if (thisWrite > canWrite)
-                    thisWrite = canWrite;
-
-                g_mod.outMod->Write(writePtr, thisWrite);
-
-                writePtr += thisWrite;
-                bytesToWrite -= thisWrite;
+                DebugLogWrite("ERROR", "OUTPUT", "PCM_WRITE_INVALID", "decoder=PCM | bytes=%d | channels=%u", bytesToWrite, (unsigned int)channels);
+                break;
             }
         }
 
@@ -1613,29 +1568,11 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
             }
 
             int bytesToWrite = framesRead * channels * sizeof(short);
-            char* writePtr = (char*)pcm;
-
-            while (bytesToWrite > 0 &&
-                InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
-                InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
+            if (!ArchiveStreamWritePcmFrames(g_mod.outMod, pcm, bytesToWrite, channels * sizeof(short), PlaybackPcmShouldAbort) &&
+                !PlaybackPcmShouldAbort())
             {
-                int canWrite = g_mod.outMod->CanWrite();
-
-                if (canWrite <= 0)
-                {
-                    Sleep(5);
-                    continue;
-                }
-
-                int thisWrite = bytesToWrite;
-
-                if (thisWrite > canWrite)
-                    thisWrite = canWrite;
-
-                g_mod.outMod->Write(writePtr, thisWrite);
-
-                writePtr += thisWrite;
-                bytesToWrite -= thisWrite;
+                DebugLogWrite("ERROR", "OUTPUT", "PCM_WRITE_INVALID", "decoder=PCM | bytes=%d | channels=%u", bytesToWrite, (unsigned int)channels);
+                break;
             }
         }
 
@@ -1816,35 +1753,18 @@ DWORD WINAPI PlaybackThreadProc(LPVOID)
         }
 
         int bytesToWrite = (int)(framesRead * channels * sizeof(short));
-        char* writePtr = (char*)pcm;
-
-        while (bytesToWrite > 0 &&
-            InterlockedCompareExchange(&g_stopRequested, 0, 0) == 0 &&
-            InterlockedCompareExchange(&g_seekRequested, 0, 0) == 0)
+        if (!ArchiveStreamWritePcmFrames(g_mod.outMod, pcm, bytesToWrite, channels * sizeof(short), PlaybackPcmShouldAbort,
+            [&](int accepted)
+            {
+                if (!firstOutputWriteLogged)
+                {
+                    DebugLogWrite("INFO", "OUTPUT", "FIRST_WRITE", "decoder=MP3 | archive=%s | index=%u | cache=%s | bytes=%d", g_currentArchivePath, (unsigned int)g_currentArchiveIndex, g_currentCachePath, accepted);
+                    firstOutputWriteLogged = true;
+                }
+            }) && !PlaybackPcmShouldAbort())
         {
-            int canWrite = g_mod.outMod->CanWrite();
-
-            if (canWrite <= 0)
-            {
-                Sleep(5);
-                continue;
-            }
-
-            int thisWrite = bytesToWrite;
-
-            if (thisWrite > canWrite)
-                thisWrite = canWrite;
-
-            if (!firstOutputWriteLogged)
-            {
-                DebugLogWrite("INFO", "OUTPUT", "FIRST_WRITE", "decoder=MP3 | archive=%s | index=%u | cache=%s | bytes=%d", g_currentArchivePath, (unsigned int)g_currentArchiveIndex, g_currentCachePath, thisWrite);
-                firstOutputWriteLogged = true;
-            }
-
-            g_mod.outMod->Write(writePtr, thisWrite);
-
-            writePtr += thisWrite;
-            bytesToWrite -= thisWrite;
+            DebugLogWrite("ERROR", "OUTPUT", "PCM_WRITE_INVALID", "decoder=MP3 | bytes=%d | channels=%u", bytesToWrite, channels);
+            break;
         }
     }
 

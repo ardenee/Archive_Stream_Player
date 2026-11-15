@@ -15,6 +15,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="pcm_output_writer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="playback.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -30,6 +33,14 @@
     <ClInclude Include="plugin_state.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="test_pcm_output_writer.cpp">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="test_pcm_output_writer.ps1">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">

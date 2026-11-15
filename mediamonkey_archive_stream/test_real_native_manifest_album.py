@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -178,16 +179,32 @@ await app.filesystem.saveTextToFileAsync(RESULT,JSON.stringify(results));
             # absence of decoder/output failures rather than MP3-only log names.
             assert metrics["NATIVE_MANIFEST_ACCEPTED"]==2 and metrics["SEEK_REQUEST"]>=2 and metrics["mode=STREAM"]>=2,metrics
             assert metrics["DECODER_OPEN_OK"]>=1 and metrics["FIRST_WRITE"]>=1,metrics
+            initial_writes=[int(match) for match in re.findall(r"FIRST_WRITE[^\n]*\bbytes=(\d+)",trace)]
+            assert initial_writes and all(0 < n <= 8192 for n in initial_writes),initial_writes
+            assert "PCM_WRITE_INVALID" not in trace,trace[-2000:]
+            print("MM5_NATIVE_OUTPUT_HOST_MAX_8192_BYTE_WRITES_PASS",kind,initial_writes,flush=True)
             assert "DECODER_OPEN_FAIL" not in trace and "OUTPUT | OPEN_FAIL" not in trace,trace[-2000:]
             assert metrics["mode=CACHE"]==metrics["ROUTE_CACHE"]==0,metrics
             print("MM5_REAL_NATIVE_ALBUM_TWO_TRACK_PLAY_SEEK_NO_HTTP_PASS",kind,flush=True)
         finally:
             if proc and proc.poll() is None:
-                proc.terminate()
-                try:proc.wait(timeout=9)
+                subprocess.run(["taskkill","/PID",str(proc.pid),"/T","/F"],
+                               capture_output=True,text=True,timeout=20)
+                try:proc.wait(timeout=8)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    proc.wait(timeout=7)
+                    proc.wait(timeout=8)
+            # The x86 Winamp decoder is hosted in MediaMonkeyEngine.exe, not
+            # necessarily the front-end process. Terminate ONLY executables
+            # located inside this disposable QA installation before cleanup.
+            isolated=str(host).replace("'","''")
+            cleanup_script=("$folder='"+isolated+"';"+
+                "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and " +
+                "$_.ExecutablePath.StartsWith($folder+'\\',[System.StringComparison]::OrdinalIgnoreCase) } | " +
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+            subprocess.run(["powershell","-NoProfile","-NonInteractive","-Command",cleanup_script],
+                           capture_output=True,text=True,timeout=20)
+            time.sleep(1.5)
     assert before=={str(p):digest(p) for p in protected},"Personal MediaMonkey profile modified"
     print("MM5_REAL_NATIVE_ALBUM_ISOLATED_PROFILE_CLEANED_PASS",kind,flush=True)
 

@@ -396,6 +396,13 @@ def main():
         js=js.replace("await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});",
                       "await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});\n"
                       "await qaWrite('queued',String(tracks.count));")
+        if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_AUTOPLAY") == "1" and len(SOURCES) == 1:
+            # Use the documented player queue SDK to begin playback directly.
+            # Some fresh portable MM5 surfaces virtualize all accessible row
+            # controls even though the track is present in Now Playing.
+            old_queue="await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});"
+            assert old_queue in js,"Cannot find isolated MM5 queue SDK call"
+            js=js.replace(old_queue,old_queue.replace("startPlayback: false","startPlayback: true"),1)
         js=js.replace("notice(error && error.message ? error.message : 'Archive selection or playback failed.');",
                       "await qaWrite('error',error && error.stack ? error.stack : String(error));\n"
                       "notice(error && error.message ? error.message : 'Archive selection or playback failed.');")
@@ -513,7 +520,10 @@ def main():
         results={}
         for key,label in zip((p[0] for p in SOURCES),labels):
             try:
-                start_track(window,label)
+                if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_AUTOPLAY") == "1" and len(SOURCES) == 1:
+                    print("MM5_NATIVE_SINGLE_TRACK_SDK_AUTOPLAY_SELECTED",label,flush=True)
+                else:
+                    start_track(window,label)
                 if AES_MODE:
                     deadline=time.monotonic()+32
                     while not any(event in password_events for event in ("PASSWORD_ENTERED","PASSWORD_CANCELED","PASSWORD_WRONG_ENTERED")) and time.monotonic()<deadline:
@@ -612,6 +622,11 @@ def main():
                 assert native_counts["mode=STREAM"]>=len(SOURCES),native_counts
                 assert native_counts["mode=CACHE"]==native_counts["ROUTE_CACHE"]==0,native_counts
             assert "NATIVE_MANIFEST_REJECTED" not in native_trace and "DECODER_OPEN_FAIL" not in native_trace,native_trace[-2500:]
+            assert "PCM_WRITE_INVALID" not in native_trace,native_trace[-2500:]
+            if any(key == "MP3" for key,_ in SOURCES):
+                accepted_writes=[int(value) for value in re.findall(r"FIRST_WRITE[^\n]*\bbytes=(\d+)",native_trace)]
+                assert accepted_writes and all(0 < size <= 8192 for size in accepted_writes),accepted_writes
+                print("MM5_NATIVE_MP3_OUTPUT_8192_BYTE_CONTRACT_PASS",accepted_writes,flush=True)
             if os.environ.get("AST_MM5_VERIFY_GUI_SEEK") == "1":
                 assert native_counts["SEEK_REQUEST"]>=len(SOURCES),native_counts
                 if AES_MODE == "accept" and SOURCES[0][0] == "AAC" and ARCHIVE_KIND == "7z":

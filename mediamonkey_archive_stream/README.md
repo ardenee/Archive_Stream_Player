@@ -54,6 +54,33 @@ No Winamp *general-purpose* plugin is installed: MediaMonkey 5 can load Winamp
   (maximum two hours), then deletes its session files. The HTTP compatibility
   bridge retains its previous session handling.
 
+## Native PCM corruption prevention
+
+Winamp's output ABI (`third_party/winamp/OUT.H`) requires `Out_Module::Write` to
+receive no more than **8,192 bytes per call**. The return value **1** means the
+data was not accepted and must be retried; **0** means accepted. Ignoring this
+contract can produce initially clean audio followed by scrambling as the host
+output queue fills.
+
+The shared source `in_archive_stream/pcm_output_writer.h` now enforces this
+contract for native MP3, WAV, FLAC, OGG and MF AAC/M4A/WMA decoding. It also
+keeps complete interleaved PCM frames and stops sending stale samples on a
+seek/stop. Run `in_archive_stream/test_pcm_output_writer.cpp` on both Win32
+and x64 to verify exact received bytes under deliberately rejected writes,
+bad capacity and interrupted playback. The real Winamp and WACUP x86 PCM silent sinks verified 367,264 and 367,926
+source-identical samples respectively before/after seeking. Real MediaMonkey
+ZIP and RAR album tests confirm the first MP3 write is ≤8,192 bytes, with
+real player seek and progression. A separate post-fix native encrypted RAR5
+MP3 test passed password entry, 37→43-second playback, GUI seek to 223 seconds,
+resume to 228 seconds, bounded memory/no HTTP/cache, first accepted PCM write
+8192 bytes, and unchanged normal MediaMonkey profile. The test-only
+`AST_MM5_QA_AUTOPLAY=1` mode can avoid occasional missing accessibility rows
+in a fresh disposable MM5 surface without changing production queueing.
+
+**A user reported audible corruption before the fix.** Audibility is
+still pending a post-fix listening/loopback check with the originally
+affected archive. Advancing player time alone does not prove clean sound.
+
 ## Actual host verification — 15 November 2026
 
 - ZIP, non-solid 7z and RAR5 each passed **two native MP3/OGG tracks** with real

@@ -171,6 +171,7 @@ unrar_static.lib
     <ClInclude Include="..\shared\debug_log.h" />
     <ClInclude Include="..\shared\winamp_bridge_protocol.h" />
     <ClInclude Include="winamp_playlist_bridge.h" />
+    <ClInclude Include="pcm_output_writer.h" />
     <ClInclude Include="playback.h" />
     <ClInclude Include="plugin_state.h" />
   </ItemGroup>
@@ -180,6 +181,10 @@ unrar_static.lib
     <ClCompile Include="config_ui.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="playback.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="test_pcm_output_writer.cpp" />
+    <None Include="test_pcm_output_writer.ps1" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\archive_backend\archive_backend.vcxproj">
