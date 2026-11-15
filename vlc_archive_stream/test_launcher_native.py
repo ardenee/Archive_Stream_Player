@@ -23,8 +23,8 @@ def main():
   valid=run(player)
   assert valid.returncode==0 and "DRY_RUN_PASS player=VLC mode=native_sdk http=0" in valid.stdout,(
       valid.returncode,valid.stdout,valid.stderr)
-  assert "NATIVE_VLC_PLAYLIST_ENTRIES=21" in valid.stdout,valid.stdout
-  print("VLC_NATIVE_LAUNCHER_21_TRACKS_NO_HTTP_PASS",flush=True)
+  assert "NATIVE_VLC_READY=1 mode=in_process http=0" in valid.stdout and "NATIVE_VLC_PLAYLIST_ENTRIES" not in valid.stdout,valid.stdout
+  print("VLC_VERSIONED_INPROCESS_NATIVE_LAUNCHER_NO_HTTP_PASS",flush=True)
   forced=run(player,"-UseHttpBridge")
   assert forced.returncode==0 and "DRY_RUN_PASS player=VLC" in forced.stdout and "NATIVE_VLC_READY" not in forced.stdout,(
       forced.returncode,forced.stdout,forced.stderr)
@@ -37,7 +37,17 @@ def main():
   external=run(player)
   assert external.returncode==0 and "DRY_RUN_PASS player=VLC mode=native_sdk http=0" in external.stdout,(
       external.returncode,external.stdout,external.stderr)
+  assert "NATIVE_VLC_READY=1 mode=in_process http=0" in external.stdout,external.stdout
   print("VLC_NATIVE_SOURCE_DLL_WITHOUT_VLC_INSTALL_PASS",flush=True)
+
+  # Previous unversioned adapters still select the external M3U8 builder.
+  old_plugin=Path(r"D:\Temp\AST-VLC-ProbeBuild\libarchive_stream_plugin.dll")
+  if old_plugin.is_file():
+   shutil.copy2(old_plugin,plugin)
+   older=run(player)
+   assert older.returncode==0 and "NATIVE_VLC_READY=1 mode=external_playlist" in older.stdout and "NATIVE_VLC_PLAYLIST_ENTRIES=21" in older.stdout,(older.returncode,older.stdout,older.stderr)
+   print("VLC_LEGACY_UNVERSIONED_NATIVE_DLL_BUILDER_FALLBACK_PASS",flush=True)
+   plugin.unlink()
 
   # In a distributed copy with neither local DLL nor playlist builder,
   # the original HTTP bridge remains functional with no silent failure.
@@ -60,6 +70,11 @@ def main():
    archive.extractall(extracted)
   bundled=run(player,script=extracted/"launch-archive.ps1")
   assert bundled.returncode==0 and "DRY_RUN_PASS player=VLC mode=native_sdk http=0" in bundled.stdout,(bundled.returncode,bundled.stdout,bundled.stderr)
+  assert "NATIVE_VLC_READY=1 mode=in_process http=0" in bundled.stdout,bundled.stdout
   print("VLC_STANDALONE_NATIVE_PACKAGE_WITHOUT_INSTALLED_DLL_PASS",flush=True)
+  (extracted/"vlc_native_playlist.exe").unlink()
+  no_builder=run(player,script=extracted/"launch-archive.ps1")
+  assert no_builder.returncode==0 and "NATIVE_VLC_READY=1 mode=in_process http=0" in no_builder.stdout,(no_builder.returncode,no_builder.stdout,no_builder.stderr)
+  print("VLC_INPROCESS_NATIVE_ALBUM_WITHOUT_EXTERNAL_BUILDER_PASS",flush=True)
  print("VLC_LAUNCHER_DISPOSABLE_PROFILE_CLEANED_PASS",flush=True)
 if __name__=="__main__":main()

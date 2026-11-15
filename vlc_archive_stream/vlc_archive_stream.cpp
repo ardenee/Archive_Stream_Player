@@ -76,11 +76,19 @@ bool DecodeLocation(std::string_view loc, std::wstring& archive, uint32_t& index
     auto suffix = loc.substr(slash + 1);
     auto end = suffix.find('/');
     auto digits = suffix.substr(0, end);
-    if (digits.empty() || digits.size() > 10)
-        return false;
-    const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), index);
-    if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
-        return false;
+    // "list" is a native M3U8 virtual member. VLC will fetch the playlist
+    // and all referenced entries in the same process, preserving verified
+    // archive-session credentials without a temporary password file.
+    if (digits == "list")
+        index = UINT32_MAX;
+    else
+    {
+        if (digits.empty() || digits.size() > 10)
+            return false;
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+            return false;
+    }
     const int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
     if (chars < 3 || chars > 4095)
         return false;
@@ -293,6 +301,61 @@ int Open(vlc_object_t* object)
         std::string error;
         if (!ArchiveListEntries(archive.c_str(), entries, error))
             return VLC_EGENERIC;
+        if (index == UINT32_MAX)
+        {
+            // VLC opens this as an ordinary playlist, then invokes this same
+            // module for every track in the current process and session.
+            const std::string_view location(access->psz_location);
+            const auto split = location.find('/');
+            const std::string prefix = "ast://" + std::string(location.substr(0, split));
+            std::string playlist = "#EXTM3U\r\n";
+            unsigned selected = 0;
+            for (const auto& entry : entries)
+            {
+                if (entry.isFolder || !entry.isSupportedAudio || entry.size == 0)
+                    continue;
+                const std::string filename = entry.path;
+                auto title = ArchiveAdapterWideToUtf8(ArchiveAdapterFormatTitle(archive, ArchiveAdapterUtf8ToWide(filename), entry.index + 1, s->prefs.titleTemplate));
+                if (title.empty())
+                    title = filename;
+                for (char& ch : title)
+                {
+                    if (ch == '\r' || ch == '\n' || ch == '\0')
+                        ch = ' ';
+                }
+                std::string ext;
+                const auto dot = filename.find_last_of('.');
+                if (dot != std::string::npos && filename.size() - dot <= 10)
+                {
+                    bool valid = true;
+                    for (size_t i = dot; i < filename.size(); ++i)
+                    {
+                        const char ch = filename[i];
+                        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                              (ch >= '0' && ch <= '9') || ch == '.'))
+                            valid = false;
+                    }
+                    if (valid)
+                        ext = filename.substr(dot);
+                }
+                playlist += "#EXTINF:-1," + title + "\r\n";
+                playlist += prefix + "/" + std::to_string(entry.index) + "/track" + ext + "\r\n";
+                ++selected;
+            }
+            if (!selected || playlist.size() > 16 * 1024 * 1024)
+                return VLC_EGENERIC;
+            s->entry.index = UINT32_MAX;
+            s->entry.size = playlist.size();
+            s->memory.assign(playlist.begin(), playlist.end());
+            s->route = Route::Memory;
+            access->pf_read = Read;
+            access->pf_block = nullptr;
+            access->pf_seek = Seek;
+            access->pf_control = Control;
+            access->p_sys = s.release();
+            DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_OPEN", "entries=%u | bytes=%llu", selected, static_cast<unsigned long long>(playlist.size()));
+            return VLC_SUCCESS;
+        }
         const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& e)
         {
             return e.index == index && !e.isFolder && e.isSupportedAudio && e.size != 0;

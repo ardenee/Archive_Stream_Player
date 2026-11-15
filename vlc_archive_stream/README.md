@@ -1,9 +1,11 @@
 # VLC native Archive Stream adapter
 
-Optional native VLC 3.0 **x64** input integration. The static
-libarchive_stream_plugin.dll implements the ast:// access scheme. The
-vlc_native_playlist.exe program enumerates audio members of ZIP, 7z and RAR
-archives and creates a native M3U8 with one ast:// URL per audio track.
+Optional VLC 3.0 **x64** native input integration. The statically linked
+DLL v1.1 implements the `ast://` access scheme, including an **in-process**
+album at `ast://<hex-path>/list/album.m3u8`. VLC reads the virtual M3U8 and
+all tracks in the same process, allowing verified per-archive passwords to
+remain in process. No HTTP server, separate builder or on-disk playlist.
+The legacy `vlc_native_playlist.exe` is retained for older unversioned DLLs.
 
 Each entry is read by the project's existing statically linked archive
 backend, never via a localhost web server. The routing policy is incremental
@@ -27,16 +29,30 @@ are reused. No extra archive-related runtime DLL is introduced.
 - A two-track solid 7z with known PCM values passed exact host decoded output
   parity for both members, with two bounded RAM routes, zero disk-cache routes.
   See test_real_vlc_solid.py.
-- Native-first launcher passed a 21-entry 7z dry run, and explicit HTTP,
-  missing-DLL and one-off CLI preference-override compatibility modes. See
-  test_launcher_native.py.
+- Real native in-process ZIP album: two WAV entries, two access opens and
+  direct streams, no HTTP (`test_real_vlc_inprocess_playlist.py`).
+- Real in-process encrypted-filename 7z and RAR5 albums: two tracks each,
+  **one credential prompt and Save=No per entire album**, exact final-track
+  PCM in silent-file outputs, 7z stream=2 or RAR5 RAM=2, cache=0
+  (`test_real_vlc_inprocess_encrypted.py`).
+- The **actual PowerShell launcher** loaded the DLL from outside VLC and
+  played two silent ZIP tracks; additional actual-launcher tests exercised
+  the two header-encrypted 7z/RAR5 two-track albums with one prompt each,
+  zero cache, configured password list unchanged and disposable GUI cleanup
+  (`test_real_vlc_launcher_inprocess.py`,
+  `test_real_vlc_launcher_encrypted.py`).
+- The launcher regression checks DLL v1.1 detection, older unversioned DLL
+  fallback to its original 21-entry native playlist builder, native 1.1
+  without that builder, missing-DLL and explicit HTTP/CLI overrides
+  (`test_launcher_native.py`).
 
 Sound-speaker output and all codecs/encryption layouts are NOT certified. The four
 specific direct native encrypted 7z/RAR5 layouts passed correct password with
 Save=No, Cancel and wrong-password rejection; Save=Yes remains untested.
-The native playlist builder is a separate process from the VLC DLL, so its
-header-encryption password may be requested again by the player. Credential
-handoff for that scenario is an open integration gap. All PCM tests use a
+For the versioned v1.1 module, the native album is enumerated **inside VLC**,
+so its verified password remains available for subsequent track opens.
+Only older unversioned DLLs use the separate playlist builder and may need
+another encrypted-header prompt. All PCM tests use a
 silent audio-file sink and disposable isolated VLC/profile folders.
 
 ## Build
@@ -53,7 +69,7 @@ Use Visual Studio/MSBuild (v145 on DEV):
     & '.\vlc_archive_stream\package-native-vlc.ps1'
 
 The packaged output is vlc_archive_stream\Release\ArchiveStreamPlayer-VLC3-x64.zip.
-The access module uses VLC's 3_0_0f plugin ABI. VLC 4, x86 VLC and other
+The access module uses VLC's 3_0_0f plugin ABI and Windows DLL FileVersion 1.1.0.0 for native album-feature detection. VLC 4, x86 VLC and other
 untested builds use the HTTP bridge fallback, not this x64 DLL.
 
 ## Install
@@ -61,7 +77,8 @@ untested builds use the HTTP bridge fallback, not this x64 DLL.
 The package may be extracted to **any writable folder**, with no changes to the VLC installation. The launcher temporarily sets VLC_PLUGIN_PATH to the bundled external module directory for its VLC child process, then restores the caller's environment. This route passed real VLC 3.0.24 exact PCM output without a DLL in the player's plugins folder (test_real_vlc_plugin_path.py). The package contains:
 
 - plugins\access\libarchive_stream_plugin.dll: bundled DLL; the launcher can load it from this external location without copying it into VLC.
-- vlc_native_playlist.exe: place beside launch-archive.ps1.
+- vlc_native_playlist.exe: optional compatibility builder for older DLLs;
+  versioned v1.1 doesn't require it.
 - launch-archive.ps1 and configure-adapters.ps1: launcher/settings.
 - x64\Release\archive_player_bridge.exe: existing HTTP compatibility route.
 - INSTALL.txt and the project's license/third-party notices.
@@ -70,8 +87,9 @@ Example after copying, specifying the correct VLC installation:
 
     & '.\launch-archive.ps1' -Player VLC -PlayerPath 'D:\Apps\VLC\vlc.exe' -Archive 'D:\Audio\Album.7z'
 
-If native components are present and compatible, either alongside the launcher/package or under VLC's own plugins directory, the launcher produces a
-local ast:// playlist with NO HTTP server. Explicit -UseHttpBridge always keeps
+With a compatible v1.1 DLL the launcher passes an in-process
+`ast://<hex-path>/list/album.m3u8` URL directly to VLC; no HTTP or M3U8
+file is produced. Older unversioned DLLs use the included external builder. Explicit -UseHttpBridge always keeps
 the prior route. Per-launch -MemoryMB, -CacheLimitMB, -TitleTemplate and
 -PasswordList overrides use HTTP to preserve their semantics. Shared native
 settings can be changed through -Configure. Native playlists contain only

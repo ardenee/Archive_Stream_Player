@@ -121,6 +121,19 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
         (Join-Path (Split-Path $PSScriptRoot -Parent) 'vlc_archive_stream\x64\Release\vlc_native_playlist.exe')
     )
     $nativeBuilder = $nativeBuilderCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    # Adapter 1.1+ supports playlist enumeration entirely inside VLC. Older
+    # DLLs must continue to use the external playlist builder or HTTP.
+    $nativeInProcess = $false
+    if ($vlcModule) {
+        try {
+            $moduleVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($vlcModule)
+            $nativeInProcess = ($moduleVersion.FileMajorPart -gt 1 -or
+                ($moduleVersion.FileMajorPart -eq 1 -and $moduleVersion.FileMinorPart -ge 1))
+        }
+        catch {
+            $nativeInProcess = $false
+        }
+    }
     $oneOffOptions = $MemoryMB -gt 0 -or $CacheLimitMB -ge 0 -or $PasswordList -or $TitleTemplate
     if ($oneOffOptions) {
         Write-Host 'VLC_BRIDGE_FALLBACK reason=per_launch_overrides_require_bridge'
@@ -128,44 +141,60 @@ if ($Player -eq 'VLC' -and !$UseHttpBridge) {
     elseif (!$vlcCompatible) {
         Write-Host 'VLC_BRIDGE_FALLBACK reason=native_module_requires_VLC3_x64'
     }
-    elseif (!$vlcModule -or !$nativeBuilder) {
+    elseif (!$vlcModule -or (!$nativeInProcess -and !$nativeBuilder)) {
         Write-Host 'VLC_BRIDGE_FALLBACK reason=native_dll_or_playlist_builder_not_available'
     }
     else {
-        $nativeRoot = Join-Path $env:LOCALAPPDATA 'ArchiveStreamPlayer\NativePlaylists'
-        New-Item -ItemType Directory -Force -Path $nativeRoot | Out-Null
-        # Remove only our own generated playlists older than a week.
-        # This folder contains no audio payload or passwords.
-        $expiry = [DateTime]::UtcNow.AddDays(-7)
-        Get-ChildItem -LiteralPath $nativeRoot -Filter 'vlc-native-*.m3u8' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTimeUtc -lt $expiry } |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-        $nativePlaylist = Join-Path $nativeRoot ('vlc-native-' + [Guid]::NewGuid().ToString('N') + '.m3u8')
-        & $nativeBuilder --archive $Archive --playlist $nativePlaylist
-        if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $nativePlaylist -PathType Leaf)) {
-            throw 'VLC native archive enumeration failed; no HTTP fallback after a password or listing error.'
+        $nativeSource = ''
+        if ($nativeInProcess) {
+            # Exact reversible UTF-8 hex, matching the native C++ parser.
+            # No per-track audio file, M3U8 file, web server or password handoff.
+            $hexPath = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes($Archive)).Replace('-', '')
+            if (!$hexPath -or $hexPath.Length -gt 8190) {
+                throw 'VLC native archive path is too long for a safe ast:// URI.'
+            }
+            $nativeSource = 'ast://' + $hexPath + '/list/album.m3u8'
+            Write-Host 'NATIVE_VLC_READY=1 mode=in_process http=0'
         }
-        $nativeContents = Get-Content -LiteralPath $nativePlaylist -Raw -Encoding UTF8
-        if (!$nativeContents -or !$nativeContents.Contains('ast://') -or $nativeContents.Contains('http://127.0.0.1:')) {
-            Remove-Item -LiteralPath $nativePlaylist -Force -ErrorAction SilentlyContinue
-            throw 'VLC native archive playlist does not contain valid ast:// entries.'
+        else {
+            # ABI-compatible VLC 3 DLLs predating the in-process list contract
+            # keep their original native playlist-builder integration.
+            $nativeRoot = Join-Path $env:LOCALAPPDATA 'ArchiveStreamPlayer\NativePlaylists'
+            New-Item -ItemType Directory -Force -Path $nativeRoot | Out-Null
+            $expiry = [DateTime]::UtcNow.AddDays(-7)
+            Get-ChildItem -LiteralPath $nativeRoot -Filter 'vlc-native-*.m3u8' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTimeUtc -lt $expiry } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            $nativePlaylist = Join-Path $nativeRoot ('vlc-native-' + [Guid]::NewGuid().ToString('N') + '.m3u8')
+            & $nativeBuilder --archive $Archive --playlist $nativePlaylist
+            if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $nativePlaylist -PathType Leaf)) {
+                throw 'VLC native archive enumeration failed; no HTTP fallback after a password or listing error.'
+            }
+            $nativeContents = Get-Content -LiteralPath $nativePlaylist -Raw -Encoding UTF8
+            if (!$nativeContents -or !$nativeContents.Contains('ast://') -or $nativeContents.Contains('http://127.0.0.1:')) {
+                Remove-Item -LiteralPath $nativePlaylist -Force -ErrorAction SilentlyContinue
+                throw 'VLC native archive playlist does not contain valid ast:// entries.'
+            }
+            $nativeSource = $nativePlaylist
+            Write-Host "NATIVE_VLC_READY=1 mode=external_playlist playlist=$nativePlaylist"
         }
-        Write-Host "NATIVE_VLC_READY=1 playlist=$nativePlaylist"
         if ($NoLaunch) {
-            Remove-Item -LiteralPath $nativePlaylist -Force -ErrorAction SilentlyContinue
+            if (!$nativeInProcess) {
+                Remove-Item -LiteralPath $nativeSource -Force -ErrorAction SilentlyContinue
+            }
             Write-Host 'DRY_RUN_PASS player=VLC mode=native_sdk http=0'
             return
         }
-        # VLC 3 officially loads modules from VLC_PLUGIN_PATH. Use the bundled
-        # or locally built DLL without copying anything into Program Files.
-        # The temporary change is inherited by only this launched VLC process.
+        # VLC 3 officially loads modules from VLC_PLUGIN_PATH. Only this
+        # process inherits the optional DLL folder, never the parent shell.
         $oldPluginPath = $env:VLC_PLUGIN_PATH
         try {
             if ($vlcModule -ne $installedVlcModule) {
                 $nativeFolder = Split-Path -Path $vlcModule -Parent
                 $env:VLC_PLUGIN_PATH = if ($oldPluginPath) { $nativeFolder + ';' + $oldPluginPath } else { $nativeFolder }
             }
-            Start-Process -FilePath $playerExe -WorkingDirectory $vlcFolder -ArgumentList @('--no-one-instance', ('"' + $nativePlaylist + '"'))
+            $nativeProcess = Start-Process -FilePath $playerExe -WorkingDirectory $vlcFolder -ArgumentList @('--no-one-instance', ('"' + $nativeSource + '"')) -PassThru
+            Write-Host "NATIVE_VLC_PLAYER_PID=$($nativeProcess.Id)"
         }
         finally {
             $env:VLC_PLUGIN_PATH = $oldPluginPath

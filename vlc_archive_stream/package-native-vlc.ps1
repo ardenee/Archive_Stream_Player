@@ -28,15 +28,16 @@ try {
 Archive Stream Player - VLC 3.0 x64 native archive access module
 
 The built-in VLC archive handling does not support every tested 7z layout.
-This pack includes our native access DLL, native archive-to-M3U8 enumerator,
-and the existing statically linked HTTP bridge as a compatibility fallback.
+This pack includes a versioned v1.1 native access DLL for in-process
+album enumeration and playback, the legacy external builder for older
+native DLLs, and HTTP fallback for explicitly requested/incompatible hosts.
 
 Tested: isolated VLC 3.0.24 x64 on Windows 11. No external archive DLLs.
 Do not install into VLC 4, 32-bit VLC, or an untested build without QA.
 
 Extract this package anywhere writable; no modification to your installed VLC is needed:
 - plugins\access\libarchive_stream_plugin.dll is loaded as an external VLC module through VLC_PLUGIN_PATH
-- vlc_native_playlist.exe -> the folder holding launch-archive.ps1
+- vlc_native_playlist.exe -> older native DLL compatibility (not required by v1.1)
 - launch-archive.ps1, configure-adapters.ps1 -> same folder as builder
 - x64\Release\archive_player_bridge.exe -> same folder hierarchy as launcher
 
@@ -49,9 +50,10 @@ not necessary to copy DLLs into Program Files or use elevation.
 Launch, passing your exact VLC executable:
 powershell -File .\launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z"
 
-The launcher chooses native M3U8 ast:// URLs when the DLL is installed
-inside VLC OR present alongside the launcher/package or built in the source
-workspace, and the native playlist builder is available.
+When a compatible v1.1 DLL is available inside VLC or externally, the
+launcher opens ast://hexpath/list/album.m3u8 directly in VLC; album and
+tracks run in the same process with shared session password state.
+Older unversioned native DLLs use the packaged external builder.
 Use -UseHttpBridge to force the prior HTTP scheme. When native setup is
 not installed or per-launch overrides are supplied, HTTP remains the
 working fallback (the bundled bridge EXE is included for this reason).
@@ -61,9 +63,9 @@ payloads or passwords. They are under your local ArchiveStreamPlayer data.
 Real VLC 3.0.24 passed 7z and RAR5 data/header encryption with credential
 entry, Save=No and exact PCM; Cancel and wrong passwords produce no audio.
 RAR5 encrypted entries use RAM, not unsupported libarchive encrypted streaming.
-These are direct ast:// track tests; an encrypted-header playlist launch may
-prompt again between the builder process and VLC. Save=Yes and speakers are
-not certified.
+Actual launcher tests also passed two-track header-encrypted 7z and RAR5
+albums with a single prompt per album, no HTTP or disk, and unchanged
+password lists. Save=Yes and physical speakers remain unverified.
 
 The VLC official SDK headers are not redistributed here.
 Source + build instructions: repository vlc_archive_stream/README.md
