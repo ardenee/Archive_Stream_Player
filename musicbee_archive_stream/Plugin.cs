@@ -28,9 +28,9 @@ namespace MusicBeePlugin
         [DllImport("bass.dll", EntryPoint = "BASS_PluginLoad", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern uint BassPluginLoad([MarshalAs(UnmanagedType.LPWStr)] string path, uint flags);
 
-        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeFourCodecsW",
+        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeSevenCodecsW",
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        private static extern int WriteNativeFourCodecs(string archive, string folder);
+        private static extern int WriteNativeSevenCodecs(string archive, string folder);
 
 
         private static readonly object traceLock = new object();
@@ -144,7 +144,7 @@ namespace MusicBeePlugin
             info.Author = "Archive Stream Player";
             info.TargetApplication = "";
             info.VersionMajor = 1;
-            info.VersionMinor = 5;
+            info.VersionMinor = 6;
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
@@ -278,7 +278,7 @@ namespace MusicBeePlugin
             {
                 // The statically-linked native BASS DLL enumerates the archive in
                 // this MusicBee process. No bridge executable, HTTP or playlist.
-                int count = WriteNativeFourCodecs(archive, folder);
+                int count = WriteNativeSevenCodecs(archive, folder);
                 if (count <= 0 || count > 10000)
                     return null;
 
@@ -301,7 +301,10 @@ namespace MusicBeePlugin
                         !(lines[1].EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
                           lines[1].EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
                           lines[1].EndsWith(".flac", StringComparison.OrdinalIgnoreCase) ||
-                          lines[1].EndsWith(".ogg", StringComparison.OrdinalIgnoreCase)))
+                          lines[1].EndsWith(".ogg", StringComparison.OrdinalIgnoreCase) ||
+                          lines[1].EndsWith(".aac", StringComparison.OrdinalIgnoreCase) ||
+                          lines[1].EndsWith(".m4a", StringComparison.OrdinalIgnoreCase) ||
+                          lines[1].EndsWith(".wma", StringComparison.OrdinalIgnoreCase)))
                         return null;
                     tracks.Add(target);
                 }

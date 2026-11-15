@@ -4,6 +4,9 @@ param(
     [string]$FixtureWav = 'C:\audiotest\04.WAVFile.wav',
     [string]$FixtureFlac = 'C:\audiotest\03.FlacFile.flac',
     [string]$FixtureOgg = 'C:\audiotest\02.OGGFile.ogg',
+    [string]$FixtureAac = 'C:\audiotest\07.AACFile.aac',
+    [string]$FixtureM4a = 'C:\audiotest\06.M4AFile.m4a',
+    [string]$FixtureWma = 'C:\audiotest\05.WMAFile.wma',
     [string]$MusicBeeRoot = 'C:\Program Files (x86)\MusicBee',
     [string]$SevenZipExe = 'C:\Program Files\7-Zip\7z.exe',
     [string]$RarExe = 'C:\Program Files\WinRAR\Rar.exe',
@@ -13,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $folder = $PSScriptRoot
 $source = Join-Path $folder 'test_native_inprocess_enum.cpp'
 $addon = Join-Path $folder 'Release\bass_archive_stream.dll'
-foreach ($item in @($source, $addon, $FixtureMp3, $FixtureWav, $FixtureFlac, $FixtureOgg, (Join-Path $MusicBeeRoot 'bass.dll'),
+foreach ($item in @($source, $addon, $FixtureMp3, $FixtureWav, $FixtureFlac, $FixtureOgg, $FixtureAac, $FixtureM4a, $FixtureWma, (Join-Path $MusicBeeRoot 'bass.dll'),
                     (Join-Path $BassCoreSdkRoot 'bass.h'), (Join-Path $BassCoreSdkRoot 'bass.lib'), $VcVars32)) {
     if (!(Test-Path -LiteralPath $item -PathType Leaf)) { throw "Missing native BASS enum prerequisite: $item" }
 }
@@ -31,7 +34,7 @@ try {
 
     function Verify([string]$archive, [int]$count, [string]$mode = 'mp3') {
         $folder = Join-Path $temp ([IO.Path]::GetFileName($archive) + "-$mode-manifests")
-        if ($mode -in @('pcm','audio','four')) {
+        if ($mode -in @('pcm','audio','four','seven')) {
             & $exe (Join-Path $temp 'bass_archive_stream.dll') $archive $folder $count $mode
         }
         else {
@@ -148,6 +151,44 @@ try {
     Verify $zipFour 4 'four'
     Verify $zipFour 0 'audio'
     Verify $zipFakeOgg 0 'four'
+    Verify $zipFour 4 'seven'   # v1.6 preserves all four native codecs
+    $zipSeven = Join-Path $temp 'mixed-seven-codecs.zip'
+    $zip = [IO.Compression.ZipFile]::Open($zipSeven, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($item in @(@($FixtureMp3, 'A.mp3'), @($FixtureWav, 'B.wav'),
+                           @($FixtureFlac, 'C.flac'), @($FixtureOgg, 'D.ogg'),
+                           @($FixtureAac, 'E.aac'), @($FixtureM4a, 'F.m4a'),
+                           @($FixtureWma, 'G.wma'))) {
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, [string]$item[0], [string]$item[1]) | Out-Null
+        }
+    }
+    finally { $zip.Dispose() }
+    Verify $zipSeven 7 'seven'
+    Verify $zipSeven 0 'four' # existing four-codec ABI remains unchanged
+
+    foreach ($item in @(@('aac', $FixtureAac), @('m4a', $FixtureM4a), @('wma', $FixtureWma))) {
+        $ext = [string]$item[0]
+        $one = Join-Path $temp ("mf-$ext.zip")
+        $zip = [IO.Compression.ZipFile]::Open($one, [IO.Compression.ZipArchiveMode]::Create)
+        try { [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, [string]$item[1], "Sample.$ext") | Out-Null }
+        finally { $zip.Dispose() }
+        Verify $one 1 'seven'
+        Verify $one 0 'four'
+        $invalid = Join-Path $temp ("invalid-$ext.zip")
+        $zip = [IO.Compression.ZipFile]::Open($invalid, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $entry = $zip.CreateEntry("Invalid.$ext")
+            $writer = $entry.Open()
+            try {
+                $bytes = [Text.Encoding]::ASCII.GetBytes("Header-mismatch-invalid-$ext")
+                $writer.Write($bytes, 0, $bytes.Length)
+            }
+            finally { $writer.Dispose() }
+        }
+        finally { $zip.Dispose() }
+        Verify $invalid 0 'seven'
+    }
+
 
 
 
@@ -156,6 +197,9 @@ try {
     Copy-Item -LiteralPath $FixtureWav -Destination (Join-Path $temp 'B.wav')
     Copy-Item -LiteralPath $FixtureFlac -Destination (Join-Path $temp 'C.flac')
     Copy-Item -LiteralPath $FixtureOgg -Destination (Join-Path $temp 'D.ogg')
+    Copy-Item -LiteralPath $FixtureAac -Destination (Join-Path $temp 'E.aac')
+    Copy-Item -LiteralPath $FixtureM4a -Destination (Join-Path $temp 'F.m4a')
+    Copy-Item -LiteralPath $FixtureWma -Destination (Join-Path $temp 'G.wma')
     if (Test-Path -LiteralPath $SevenZipExe -PathType Leaf) {
         Push-Location $temp
         try {
@@ -171,6 +215,12 @@ try {
             & $SevenZipExe a '-t7z' '-mx=0' '-ms=off' (Join-Path $temp 'ogg.7z') 'D.ogg' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw '7z OGG fixture creation failed' }
             Verify (Join-Path $temp 'ogg.7z') 1 'four'
+            foreach ($ext in @('aac','m4a','wma')) {
+                $archive = Join-Path $temp ("mf-$ext.7z")
+                & $SevenZipExe a '-t7z' '-mx=0' '-ms=off' $archive ("E.aac","F.m4a","G.wma" | Where-Object { $_ -like "*.$ext" }) | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "7z MF $ext fixture creation failed" }
+                Verify $archive 1 'seven'
+            }
 
 
             Copy-Item $input (Join-Path $temp 'b.mp3')
@@ -178,10 +228,12 @@ try {
             if ($LASTEXITCODE -ne 0) { throw '7z solid fixture creation failed' }
             Verify (Join-Path $temp 'solid.7z') 0
             Verify (Join-Path $temp 'solid.7z') 0 'pcm'
+            Verify (Join-Path $temp 'solid.7z') 0 'seven'
             & $SevenZipExe a '-tzip' '-mem=AES256' '-pAST-QA-TEST-ONLY' (Join-Path $temp 'encrypted.zip') 'a.mp3' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'encrypted ZIP fixture creation failed' }
             Verify (Join-Path $temp 'encrypted.zip') 0
             Verify (Join-Path $temp 'encrypted.zip') 0 'pcm'
+            Verify (Join-Path $temp 'encrypted.zip') 0 'seven'
         }
         finally { Pop-Location }
     }
@@ -202,6 +254,13 @@ try {
             & $RarExe a '-m0' '-s-' (Join-Path $temp 'ogg.rar') 'D.ogg' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'RAR OGG fixture creation failed' }
             Verify (Join-Path $temp 'ogg.rar') 1 'four'
+            foreach ($ext in @('aac','m4a','wma')) {
+                $archive = Join-Path $temp ("mf-$ext.rar")
+                $inputFile = @('E.aac','F.m4a','G.wma') | Where-Object { $_ -like "*.$ext" }
+                & $RarExe a '-m0' '-s-' $archive $inputFile | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "RAR MF $ext fixture creation failed" }
+                Verify $archive 1 'seven'
+            }
 
 
             if (!(Test-Path -LiteralPath (Join-Path $temp 'b.mp3'))) { Copy-Item $input (Join-Path $temp 'b.mp3') }
@@ -209,11 +268,12 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'RAR solid fixture creation failed' }
             Verify (Join-Path $temp 'solid.rar') 0
             Verify (Join-Path $temp 'solid.rar') 0 'pcm'
+            Verify (Join-Path $temp 'solid.rar') 0 'seven'
         }
         finally { Pop-Location }
     }
     else { Write-Output 'MUSICBEE_NATIVE_ENUM_RAR_SKIPPED external Rar.exe unavailable' }
-    Write-Output 'MUSICBEE_NATIVE_INPROCESS_ENUM_FOUR_CODEC_REGRESSIONS_PASS'
+    Write-Output 'MUSICBEE_NATIVE_INPROCESS_ENUM_SEVEN_CODEC_REGRESSIONS_PASS'
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
