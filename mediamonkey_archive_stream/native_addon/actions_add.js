@@ -11,6 +11,10 @@
     // Only paths that this addon validated and queued may receive transient
     // playback-duration metadata. No persistent library tracks or tags.
     const queuedNativePaths = new Set();
+    const synchronizedNativeLengths = new Map();
+    let activeNativeTrackPath = '';
+    let lastNativePlaybackPosition = -1;
+    let activeNativeProgressTicks = 0;
     let refreshingTitles = false;
 
     function notice(message) {
@@ -166,7 +170,50 @@
         // Paths come only from archiveTrackList()'s validated native session
         // root; never update unrelated music, HTTP URLs or foreign .ast paths.
         const path = track.path.replace(/\//g, '\\').toLowerCase();
-        if (!queuedNativePaths.has(path) || track.songLength > 0)
+        if (!queuedNativePaths.has(path)) {
+            activeNativeTrackPath = '';
+            lastNativePlaybackPosition = -1;
+            activeNativeProgressTicks = 0;
+            return false;
+        }
+
+        if (path !== activeNativeTrackPath) {
+            activeNativeTrackPath = path;
+            lastNativePlaybackPosition = -1;
+            activeNativeProgressTicks = 0;
+        }
+
+        // The player may change CurrentTrack before the new input decoder has
+        // opened; during the native password dialog it can still report the
+        // previous track's duration and playback position. Require real,
+        // steadily advancing playback across three 3-second polls before
+        // trusting TrackLengthMS to describe the new archive entry.
+        const positionMs = app.player.trackPositionMS;
+        if (app.player.isPlaying !== true ||
+            !Number.isFinite(positionMs) || positionMs < 0) {
+            lastNativePlaybackPosition = -1;
+            activeNativeProgressTicks = 0;
+            return false;
+        }
+
+        if (lastNativePlaybackPosition >= 0 &&
+            positionMs > lastNativePlaybackPosition + 200 &&
+            positionMs <= lastNativePlaybackPosition + 15000)
+            ++activeNativeProgressTicks;
+        else
+            activeNativeProgressTicks = 0;
+        lastNativePlaybackPosition = positionMs;
+
+        if (activeNativeProgressTicks < 2)
+            return false;
+
+        // The engine can initially expose the *previous* track's duration on
+        // a rapid multi-track switch. Remember only values that we injected;
+        // replace those if the decoder subsequently reports a different
+        // verified duration, but never overwrite playlist/user metadata.
+        const previouslySynchronized = synchronizedNativeLengths.get(path);
+        if (track.songLength > 0 &&
+            (previouslySynchronized === undefined || track.songLength !== previouslySynchronized))
             return false;
 
         // The native decoder exposes its verified duration after opening; MM5
@@ -177,8 +224,12 @@
             durationMs > 24 * 60 * 60 * 1000)
             return false;
 
+        if (track.songLength === durationMs)
+            return false;
+
         // In-memory notification only: no commitAsync, DB update, or tag writes.
         track.songLength = durationMs;
+        synchronizedNativeLengths.set(path, durationMs);
         track.notifyChanged();
         return true;
     }
@@ -258,8 +309,11 @@
             if (manifest.mode === 'native') {
                 for (const path of tracks.nativePaths)
                     queuedNativePaths.add(path);
-                while (queuedNativePaths.size > 10000)
-                    queuedNativePaths.delete(queuedNativePaths.values().next().value);
+                while (queuedNativePaths.size > 10000) {
+                    const oldPath = queuedNativePaths.values().next().value;
+                    queuedNativePaths.delete(oldPath);
+                    synchronizedNativeLengths.delete(oldPath);
+                }
             }
             else {
                 queuedArchiveSessions.set(manifest.playlist, new Set(playlistTitles(playlist).keys()));

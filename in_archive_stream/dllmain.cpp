@@ -2281,6 +2281,13 @@ static int Play(const char* fn)
     Stop();
     ClearPrevalidatedStream();
 
+    // Do not publish the previous track\'s duration while a new asynchronous
+    // Media Foundation decoder is opening. MediaMonkey otherwise snapshots
+    // that stale value into the new track\'s GUI seek-bar range.
+    const int previousLengthMs = g_currentLengthMs;
+    g_currentLengthMs = -1000;
+    DebugLogWrite("INFO", "PLAY", "RESET_TRACK_DURATION", "previous_length_ms=%d | next_length_ms=-1000 | reason=new_archive_track", previousLengthMs);
+
     InterlockedExchange(&g_seekRequested, 0);
     InterlockedExchange(&g_seekTargetMs, 0);
     InterlockedExchange(&g_outputTimeBaseMs, 0);

@@ -555,8 +555,32 @@ void LoadConfig()
             strcpy_s(g_displayTemplate, sizeof(g_displayTemplate), titleUtf8.c_str());
     }
 
-    RarSetPasswordListPath(g_rarPasswordListPath);
-    ArchivePasswordSetListPath(g_rarPasswordListPath);
+    // The native input and the archive-list helper can run in separate
+    // processes. An explicit process-local list path keeps their passwords
+    // together without modifying shared HKCU adapter preferences. Keep the
+    // configured path untouched so a future SaveConfig() never persists this
+    // temporary process-only override to the user's settings.
+    const char* activePasswordListPath = g_rarPasswordListPath;
+    char processPasswordListPath[MAX_PATH * 4]{};
+    DWORD processPasswordLength = GetEnvironmentVariableA("ARCHIVE_STREAM_RAR_PASSWORD_LIST", processPasswordListPath, sizeof(processPasswordListPath));
+    if (processPasswordLength > 0)
+    {
+        const bool driveAbsolute = processPasswordLength < sizeof(processPasswordListPath) && processPasswordLength >= 3 &&
+            ((processPasswordListPath[0] >= 'A' && processPasswordListPath[0] <= 'Z') || (processPasswordListPath[0] >= 'a' && processPasswordListPath[0] <= 'z')) &&
+            processPasswordListPath[1] == ':' && (processPasswordListPath[2] == '\\' || processPasswordListPath[2] == '/');
+        if (driveAbsolute && !strchr(processPasswordListPath, '\r') && !strchr(processPasswordListPath, '\n'))
+        {
+            activePasswordListPath = processPasswordListPath;
+            DebugLogWrite("INFO", "CONFIG", "PASSWORD_LIST_PROCESS_OVERRIDE", "source=ARCHIVE_STREAM_RAR_PASSWORD_LIST | absolute_path=1");
+        }
+        else
+        {
+            DebugLogWrite("WARN", "CONFIG", "PASSWORD_LIST_PROCESS_OVERRIDE_REJECTED", "reason=relative_or_invalid_path | length=%lu", (unsigned long)processPasswordLength);
+        }
+    }
+
+    RarSetPasswordListPath(activePasswordListPath);
+    ArchivePasswordSetListPath(activePasswordListPath);
 }
 
 void SaveConfig()

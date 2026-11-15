@@ -72,8 +72,14 @@ extracting. Synthetic AES non-solid 7z plays/seeks through direct stream.
 Synthetic encrypted RAR5 plays/seeks using bounded RAM fallback if direct
 streaming is unsupported. The real host passed password entry, cancellation
 for both formats, and wrong-password rejection for RAR5 without saving keys.
-First-use encrypted RAR5 filenames also pass host password entry, queue,
+First-use encrypted RAR5 filenames also pass native password entry, queue,
 playback/seek, cancellation and wrong-password rejection without saved keys.
+Four-volume encrypted-filename RAR5 AAC and two-track solid encrypted RAR5
+MP3/AAC pass real native GUI seeks with memory fallback and no HTTP/cache.
+The addon synchronizes only verified temporary .ast track durations after
+stable playback, avoiding a previous track's duration on fast switches.
+A process-local ARCHIVE_STREAM_RAR_PASSWORD_LIST absolute path may be used
+to isolate the native decoder password list without modifying HKCU.
 Other archive layouts use the shared stream -> memory -> cache policy.
 
 Native manifest files and HTTP bridge sessions end when MediaMonkey closes
