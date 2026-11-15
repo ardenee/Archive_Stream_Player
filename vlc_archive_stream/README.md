@@ -37,6 +37,7 @@ are reused. No extra archive-related runtime DLL is introduced.
   optional single case: `...py rar-headers wrong`. This verifies direct
   native `ast://` playback; the actual PowerShell launcher also passes Save=Yes
   separately through the new v1.2 child-process password-list override.
+- **21/21 native playback seek/resume and PCM-content checks:** `test_real_vlc_seven_codec_seek.py` tests ZIP, non-solid 7z and single-volume RAR5 for WAV/MP3/OGG/FLAC/WMA/M4A/AAC using real libVLC 3.0.24 x64 player API and a paced, silent libVLC decoded-audio callback. Each jumps near 95 seconds of a synthetic 120-second three-tone track, resumes, and emits the expected final 880 Hz 16-bit PCM rather than pre-seek audio. All cases stream directly, with zero managed RAM extraction, disk cache or HTTP. MP3/WAV/FLAC/WMA/M4A/AAC use `libvlc_media_player_set_time`; OGG uses `libvlc_media_player_set_position`. On the same source .ogg, the time API ended playback but position API succeeded, so the regression tests both modes explicitly (`--baseline --only ogg --ogg-time` reproduces the failure). Many small/streamable fixtures use VLC read-ahead and do not invoke the plugin's ACCESS_SEEK callback; the separate long-distance 7z/WAV test below confirms that path. No GUI click or speakers are involved.
 - Native seeking was confirmed using the actual libVLC player API and a
   20-minute 7z WAV, beyond VLC's read-ahead buffer. VLC resumed at ~14:10;
   our access module logged ACCESS_SEEK offset=74970044; the test audio output
