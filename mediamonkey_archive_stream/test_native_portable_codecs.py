@@ -437,6 +437,18 @@ def main():
         js=js.replace("await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});",
                       "await app.player.addTracksAsync(tracks.list, {withClear: false, startPlayback: false});\n"
                       "await qaWrite('queued',String(tracks.count));")
+        if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_TRACK_STATE") == "1":
+            # Disposable QA-only introspection: app SDK track length and DOM
+            # slider state, no archive paths, password values or user profile.
+            marker="await qaWrite('queued',String(tracks.count));"
+            assert js.count(marker)==1
+            poll_js=("setTimeout(async () => { try { " +
+                "const tr=app.player.getCurrentTrack(); " +
+                "const sliders=Array.from(document.querySelectorAll('[role=slider],input[type=range]')).slice(0,12).map(e=>({role:e.getAttribute('role'),label:e.getAttribute('aria-label'),max:e.getAttribute('aria-valuemax'),now:e.getAttribute('aria-valuenow'),disabled:e.getAttribute('aria-disabled'),rangeMax:e.max,rangeValue:e.value,rectY:Math.round(e.getBoundingClientRect().y)})); " +
+                "await qaWrite('track-state',JSON.stringify({length:app.player.trackLengthMS,position:app.player.trackPositionMS,playing:app.player.isPlaying,trackLength:tr?.songLength,sliders:sliders}));" +
+                "} catch(error) { await qaWrite('track-state',JSON.stringify({error:String(error)})); } }, 30000);")
+            js=js.replace(marker,marker+"\n"+poll_js,1)
+            print("MM5_QA_ONLY_TRACK_AND_SEEKBAR_STATE_PROBE_ARMED",flush=True)
         if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_SDK_SEEK") == "1":
             # A/B diagnosis only: use MediaMonkey\'s documented player API
             # without touching the GUI seek bar or production add-on logic.
@@ -468,7 +480,8 @@ def main():
                " await actions.archiveStreamNativeAdd.execute(); }, 7000);\n")
         script.write_text(js,encoding="utf-8")
         if (TITLE_REFRESH_QA or os.environ.get("AST_MM5_QA_INJECT_DURATION") == "1" or
-                os.environ.get("AST_MM5_QA_SDK_SEEK") == "1"):
+                os.environ.get("AST_MM5_QA_SDK_SEEK") == "1" or
+                os.environ.get("AST_MM5_QA_TRACK_STATE") == "1"):
             syntax=subprocess.run(["node","--check",str(script)],capture_output=True,text=True,timeout=12)
             if syntax.returncode:
                 raise AssertionError("Staged QA title refresh JavaScript invalid: "+syntax.stderr[-1400:])
@@ -665,16 +678,36 @@ def main():
                             continue
                     if len(timeline)!=1:
                         raise AssertionError("Expected one visible enabled MediaMonkey seek bar, found "+str(len(timeline)))
+                    if (NATIVE_INPUT_QA and AES_MODE=="accept" and
+                            ARCHIVE_KIND=="rar" and key=="AAC"):
+                        # Catch the exact UI bug: Winamp/MF source duration is
+                        # known, but an MM5 temporary Track.songLength=-1 made
+                        # the visible seek bar's maximum -0.001 seconds.
+                        slider_max=timeline[0].iface_range_value.CurrentMaximum
+                        print("MM5_ENCRYPTED_RAR5_NATIVE_GUI_SEEKBAR_MAX",slider_max,flush=True)
+                        assert slider_max>1,"Native RAR5 AAC GUI seek bar is missing verified track duration"
                     seek_bounds=timeline[0].rectangle()
                     if seek_bounds.width()<=20 or seek_bounds.height()<=0:
                         raise AssertionError("Accessible MediaMonkey seek bar has invalid geometry: "+str(seek_bounds))
                     coord=(seek_bounds.left+int(seek_bounds.width()*.62),
                            seek_bounds.top+seek_bounds.height()//2)
+                    if os.environ.get("AST_MM5_QA_TRACK_STATE") == "1":
+                        try:
+                            rng=timeline[0].iface_range_value
+                            print("MM5_QA_RANGEVALUE_BEFORE",{"current":rng.CurrentValue,"max":rng.CurrentMaximum,"min":rng.CurrentMinimum,"readOnly":rng.CurrentIsReadOnly},flush=True)
+                        except Exception as err:
+                            print("MM5_QA_RANGEVALUE_UNAVAILABLE",str(err)[:160],flush=True)
                     print("MM5_GUI_SEEK_ACCESSIBLE_SLIDER",str(seek_bounds),"click",coord,flush=True)
                     seek_started=time.monotonic()
                     mouse.click(coords=coord)
                     time.sleep(1)
                     jumped=elapsed(window,label)
+                    if os.environ.get("AST_MM5_QA_TRACK_STATE") == "1":
+                        try:
+                            rng=timeline[0].iface_range_value
+                            print("MM5_QA_RANGEVALUE_AFTER",{"current":rng.CurrentValue,"max":rng.CurrentMaximum,"min":rng.CurrentMinimum,"readOnly":rng.CurrentIsReadOnly},flush=True)
+                        except Exception as err:
+                            print("MM5_QA_RANGEVALUE_AFTER_UNAVAILABLE",str(err)[:160],flush=True)
                     attempts=[{"source":"accessible_seek_bar","coord":coord,"position":jumped}]
                     time.sleep(3)
                     resumed=elapsed(window,label)
@@ -695,6 +728,10 @@ def main():
             assert isinstance(sdk_seek_payload.get("before"),(int,float)) and sdk_seek_payload["before"]<150000,sdk_seek_payload
             print("MM5_QA_ONLY_NATIVE_SDK_SEEK_RESULT",sdk_seek_payload,flush=True)
             time.sleep(3)
+        if NATIVE_INPUT_QA and os.environ.get("AST_MM5_QA_TRACK_STATE") == "1":
+            statefile=wait_for(lambda: workspace/"qa-track-state.txt" if (workspace/"qa-track-state.txt").is_file() else None,40,"isolated MediaMonkey SDK/DOM track state")
+            state=json.loads(statefile.read_text(encoding="utf-8-sig",errors="replace"))
+            print("MM5_QA_NATIVE_TRACK_AND_SEEKBAR_STATE",state,flush=True)
         logfile=workspace/"Local"/"ArchiveStreamPlayer"/"Logs"/"archive_stream_bridge.log"
         if logfile.exists():
             data=logfile.read_text(encoding="utf-8",errors="replace")

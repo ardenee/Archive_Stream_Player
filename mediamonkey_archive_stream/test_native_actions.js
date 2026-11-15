@@ -118,7 +118,7 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
         files[playlistFile] = files[playlistFile].replace('Custom Archive Title 1', 'Updated Archive Title 1');
         await actions.archiveStreamNativeRefreshTitles.execute();
     }
-    return {calls, files, messages, menu, actions, hostTracks, timerCallbacks};
+    return {calls, files, messages, menu, actions, hostTracks, timerCallbacks, player: toolbox.app.player};
 }
 
 (async () => {
@@ -156,6 +156,44 @@ async function exercise({choice = 'C:\\Audio\\album.zip', install = 'user',
     assert.equal(nativeQueue[1].tracks[1].title, 'Native Two');
     assert.equal(native.files[ackFile], 'QUEUED=2');
     assert(native.messages.some(x => x.message.includes('native decoder, no HTTP')));
+    // A real encrypted RAR5 AAC source can be 251785ms long after the decoder
+    // opens, yet its temporary Now Playing track still reports -1. Test that
+    // only the addon's exact validated .ast references are synchronized.
+    native.player.trackLengthMS = 251785;
+    native.player.getCurrentTrack = () => native.hostTracks[0];
+    native.hostTracks[0].songLength = -1;
+    native.timerCallbacks[0]();
+    assert.equal(native.hostTracks[0].songLength, 251785);
+    assert.equal(native.calls.filter(x => x[0] === 'trackChanged').length, 1);
+    native.timerCallbacks[0]();
+    assert.equal(native.calls.filter(x => x[0] === 'trackChanged').length, 1,
+        'Duration sync must be idempotent after an accepted value');
+    native.player.trackLengthMS = 62000;
+    native.player.getCurrentTrack = () => native.hostTracks[1];
+    native.hostTracks[1].songLength = -1;
+    native.timerCallbacks[0]();
+    assert.equal(native.hostTracks[1].songLength, 62000, 'Next native track also gets playback duration');
+    native.player.trackLengthMS = 85000;
+    const unrelated = {path: 'C:\\Other\\entry-9.ast', songLength: -1,
+        notifyChanged: () => native.calls.push(['foreignTrackChanged'])};
+    native.player.getCurrentTrack = () => unrelated;
+    native.timerCallbacks[0]();
+    assert.equal(unrelated.songLength, -1, 'Foreign .ast track must not be changed');
+    assert(!native.calls.some(x => x[0] === 'foreignTrackChanged'));
+    native.player.getCurrentTrack = () => native.hostTracks[1];
+    native.player.trackLengthMS = 0;
+    native.hostTracks[1].songLength = -1;
+    native.timerCallbacks[0]();
+    assert.equal(native.hostTracks[1].songLength, -1, 'Unknown player duration must not be injected');
+    native.player.trackLengthMS = 87000;
+    native.hostTracks[1].songLength = 99000;
+    native.timerCallbacks[0]();
+    assert.equal(native.hostTracks[1].songLength, 99000, 'Known playlist duration must be preserved');
+    normal.player.trackLengthMS = 251785;
+    normal.player.getCurrentTrack = () => normal.hostTracks[0];
+    normal.timerCallbacks[0]();
+    assert.equal(normal.hostTracks[0].songLength, undefined, 'Never sync HTTP bridge or unrelated tracks');
+    console.log('MEDIAMONKEY_NATIVE_ONLY_VERIFIED_PLAYBACK_DURATION_SEEKBAR_PASS');
     const forged = await exercise({playlist: nativeList.replace('entry-1.ast', '..\\foreign.ast'), manifest: nativeManifest});
     assert(!forged.calls.some(x => x[0] === 'queue'), 'Reject escaped native manifest paths');
     const foreignRoot = await exercise({playlist: nativeList, manifest: {...nativeManifest, nativeRoot: 'C:\\Elsewhere'}});

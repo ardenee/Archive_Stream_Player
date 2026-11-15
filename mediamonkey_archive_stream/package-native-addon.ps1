@@ -61,6 +61,9 @@ Existing titles are refreshed from authenticated bridge playlists only for
 single-entry archive sessions. The third Tools action can refresh immediately.
 Multi-entry sessions retain their existing row titles to protect playback;
 new tracks still use the configured shared title template. No tags are changed.
+For validated native .ast sessions only, unknown Now Playing track durations
+are synchronized from the verified player length to enable GUI seek bars.
+This never changes real music-library tracks, tags or persisted metadata.
 Single-entry ZIP MP3 title refresh passed real portable MediaMonkey 2024 QA.
 MP3/OGG/FLAC/WAV/WMA/M4A/AAC ZIP streams pass real-host playback and
 GUI seek/resume acceptance. Vorbis duration is obtained via bounded archive

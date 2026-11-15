@@ -8,6 +8,9 @@
     // A session stays active only while its authenticated bridge playlist is
     // accessible. The map belongs to this host surface, not the user library.
     const queuedArchiveSessions = new Map();
+    // Only paths that this addon validated and queued may receive transient
+    // playback-duration metadata. No persistent library tracks or tags.
+    const queuedNativePaths = new Set();
     let refreshingTitles = false;
 
     function notice(message) {
@@ -74,6 +77,7 @@
         const rows = text.split(/\r?\n/);
         const list = app.utils.createTracklist(true);
         const useNative = mode === 'native';
+        const nativePaths = [];
         if (mode !== 'native' && mode !== 'http')
             throw new Error('Unsupported archive playback handoff.');
         const nativePrefix = useNative && typeof nativeRoot === 'string' &&
@@ -101,6 +105,7 @@
                 if (!file.startsWith(nativePrefix) ||
                     !/^entry-[0-9]+\.ast$/i.test(file.slice(nativePrefix.length)))
                     throw new Error('Native archive playlist contains an unexpected reference path.');
+                nativePaths.push(file);
             }
             else {
                 let url;
@@ -128,7 +133,7 @@
         }
         if (!count || count !== expectedCount)
             throw new Error('Archive playlist entry count does not match the bridge.');
-        return {list, count};
+        return {list, count, nativePaths};
     }
 
     function playlistTitles(text) {
@@ -148,6 +153,34 @@
             }
         }
         return titles;
+    }
+
+    function synchronizeNativePlayingDuration() {
+        if (!queuedNativePaths.size || typeof app.player.getCurrentTrack !== 'function')
+            return false;
+
+        const track = app.player.getCurrentTrack();
+        if (!track || typeof track.path !== 'string')
+            return false;
+
+        // Paths come only from archiveTrackList()'s validated native session
+        // root; never update unrelated music, HTTP URLs or foreign .ast paths.
+        const path = track.path.replace(/\//g, '\\').toLowerCase();
+        if (!queuedNativePaths.has(path) || track.songLength > 0)
+            return false;
+
+        // The native decoder exposes its verified duration after opening; MM5
+        // can know it via the player while the transient queued Track still
+        // says -1, leaving the stock GUI seek bar with a negative maximum.
+        const durationMs = app.player.trackLengthMS;
+        if (!Number.isFinite(durationMs) || durationMs < 1000 ||
+            durationMs > 24 * 60 * 60 * 1000)
+            return false;
+
+        // In-memory notification only: no commitAsync, DB update, or tag writes.
+        track.songLength = durationMs;
+        track.notifyChanged();
+        return true;
     }
 
     async function refreshQueuedArchiveTitles() {
@@ -222,8 +255,15 @@
             // The launcher terminates its bridge unless the player acknowledged
             // successful queue insertion. This avoids orphaned bridge sessions.
             await app.filesystem.saveTextToFileAsync(acknowledge, 'QUEUED=' + tracks.count);
-            if (manifest.mode !== 'native')
+            if (manifest.mode === 'native') {
+                for (const path of tracks.nativePaths)
+                    queuedNativePaths.add(path);
+                while (queuedNativePaths.size > 10000)
+                    queuedNativePaths.delete(queuedNativePaths.values().next().value);
+            }
+            else {
                 queuedArchiveSessions.set(manifest.playlist, new Set(playlistTitles(playlist).keys()));
+            }
             notice('Added ' + tracks.count + ' archive tracks to Now Playing (' +
                 (manifest.mode === 'native' ? 'native decoder, no HTTP' : 'HTTP compatibility') + ').');
         }
@@ -300,6 +340,7 @@
     // queued through this addon. Never touch embedded audio tags or unrelated
     // user tracks. The companion bridge rewrites its M3U8 on template change.
     setInterval(function () {
+        try { synchronizeNativePlayingDuration(); } catch (error) {}
         refreshQueuedArchiveTitles().catch(function () {});
     }, 3000);
 
