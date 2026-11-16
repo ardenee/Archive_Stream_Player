@@ -742,6 +742,10 @@ bool LibarchiveZipListEntries(const wchar_t* archivePath, std::vector<ArchiveEnt
         out.size = archive_entry_size_is_set(entry) ? static_cast<uint64_t>(archive_entry_size(entry)) : 0;
         out.isFolder = isFolder;
         out.isSupportedAudio = supportedAudio;
+        // Report the actual ZIP encryption flag to native host adapters.
+        // This is required for verified-only password persistence and for
+        // older scanner ABIs to reject encrypted members consistently.
+        out.isEncrypted = archive_entry_is_encrypted(entry) > 0;
         out.hasCrc32 = false;
         out.crc32 = 0;
 

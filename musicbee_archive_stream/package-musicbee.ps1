@@ -56,7 +56,7 @@ Restart MusicBee, then use Tools > Archive Stream: Add Archive Audio...
 or Tools > Archive Stream: Settings...
 
 NATIVE MODE
-Unencrypted streamable MP3, PCM16 WAV, FLAC16/24, OGG/Vorbis, AAC,
+Streamable MP3, PCM16 WAV, FLAC16/24, OGG/Vorbis, AAC,
 M4A and WMA play natively inside ZIP, non-solid 7z and RAR archives.
 Solid 7z and RAR MP3/OGG entries may also play from bounded RAM.
 Oversized unencrypted FLAC, PCM16 WAV, MP3, OGG/Vorbis, AAC, M4A
@@ -75,6 +75,14 @@ The original MF decoder stays alive; no test fault hooks ship.
 Real MusicBee GUI/speaker recovery acceptance remains open.
 Real MusicBee solid-file GUI acceptance remains unverified because
 the DEV interactive desktop was unavailable.
+ZIP AES-256, AES 7z (visible/hidden filenames), and RAR5 (visible/
+hidden filenames) use native credential UI and shared password policy.
+Passwords are saved only with user consent after verified PCM decode.
+Wrong password or cancellation never starts an HTTP helper.
+All seven codecs passed synthetic encrypted archive PCM/seek tests;
+real isolated MusicBee GUI passed ZIP/7z/RAR5 password entry and playback,
+wrong/cancel rejection and explicit verified Save=Yes.
+Encrypted GUI seeking and speaker audibility are not yet certified.
 Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.
 AAC/M4A/WMA reuse Windows Media Foundation and the shared archive reader.
 No helper executable, HTTP listener or decoded-audio cache is used for
@@ -89,7 +97,7 @@ Unsafe filename characters are replaced; duplicates remain unique.
 Changes to presets apply on the next queue, not existing rows.
 Unsupported encoded variants retain the compatibility route.
 COMPATIBILITY MODE
-Other codecs or unsupported encoded layouts, encrypted archives, other solid entries,
+Other codecs, unsupported encoded layouts or encryption modes, other solid entries,
 unsupported streaming layouts, or missing/unloadable BASS add-ons retain
 the established MusicBee compatibility bridge, which uses direct streaming
 first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; fallback OGG/FLAC/

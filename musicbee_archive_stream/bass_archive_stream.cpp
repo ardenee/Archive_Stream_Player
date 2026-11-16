@@ -3,12 +3,15 @@
 // never be redistributed. No HTTP server or runtime vendor DLL is bundled.
 #define NOMINMAX
 #include <windows.h>
+#include <wincred.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <new>
+#include <mutex>
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -19,6 +22,7 @@
 #include "bass-addon.h"
 #include "archive_common.h"
 #include "archive_reader.h"
+#include "archive_passwords.h"
 #include "native_track_manifest.h"
 #include "dr_mp3.h"
 #include "dr_wav.h"
@@ -50,6 +54,167 @@ static void Trace(const char* event, const char* note)
         WriteFile(handle, line, static_cast<DWORD>(length), &written, nullptr);
     }
     CloseHandle(handle);
+}
+
+// MusicBee owns the native UI. Archive backends already own password
+// verification, process-local reuse and verified-only keeps.txt persistence.
+// No password ever appears in logs or the .ast reference file.
+static thread_local bool gNativePasswordAttempted = false;
+static thread_local bool gNativePasswordCancelled = false;
+static std::mutex gNativePasswordSaveMutex;
+static std::unordered_map<std::string, std::string> gNativePasswordSavePending;
+
+static void MusicBeePendingPasswordSave(const char* archive, const char* password, bool consent)
+{
+    if (!archive || !*archive || !password || !*password || !consent)
+        return;
+    std::lock_guard<std::mutex> guard(gNativePasswordSaveMutex);
+    auto& pending = gNativePasswordSavePending[archive];
+    if (!pending.empty())
+        SecureZeroMemory(pending.data(), pending.size());
+    pending.assign(password);
+}
+
+static void MusicBeeForgetPendingPassword(const char* archive)
+{
+    if (!archive || !*archive)
+        return;
+    std::lock_guard<std::mutex> guard(gNativePasswordSaveMutex);
+    auto entry = gNativePasswordSavePending.find(archive);
+    if (entry != gNativePasswordSavePending.end())
+    {
+        if (!entry->second.empty())
+            SecureZeroMemory(entry->second.data(), entry->second.size());
+        gNativePasswordSavePending.erase(entry);
+    }
+}
+
+// Call only after a real PCM decode succeeds. The shared backend verifies
+// archive credentials, but encrypted-header listing ALONE is insufficient.
+static void MusicBeeCommitVerifiedPassword(const char* archive)
+{
+    if (!archive || !*archive)
+        return;
+    std::string confirmed;
+    {
+        std::lock_guard<std::mutex> guard(gNativePasswordSaveMutex);
+        auto item = gNativePasswordSavePending.find(archive);
+        if (item == gNativePasswordSavePending.end())
+            return;
+        confirmed = std::move(item->second);
+        gNativePasswordSavePending.erase(item);
+    }
+    if (confirmed.empty())
+        return;
+    std::string error;
+    const bool stored = ArchivePasswordAppendIfMissing(confirmed.c_str(), error);
+    Trace(stored ? "NATIVE_PASSWORD_VERIFIED_SAVED" : "NATIVE_PASSWORD_SAVE_FAILED",
+        "proof=pcm_read");
+    SecureZeroMemory(confirmed.data(), confirmed.size());
+}
+
+static bool MusicBeePromptPassword(const char* archive, const char* entry, char* output,
+    size_t capacity, bool* save)
+{
+    (void)entry;
+    if (!output || capacity < 2 || !save)
+        return false;
+    output[0] = '\0';
+    *save = false;
+    const auto settings = ArchiveAdapterPreferencesLoad();
+    if (!settings.promptPasswords)
+    {
+        Trace("NATIVE_PASSWORD_DISABLED", "reason=shared_settings");
+        return false;
+    }
+    gNativePasswordAttempted = true;
+#if defined(AST_NATIVE_TEST_HOOKS)
+    // Only isolated x86 test DLLs can return synthetic credentials without
+    // opening UI. Production DLLs cannot read any of these environment keys.
+    char testPassword[256]{};
+    const DWORD n = GetEnvironmentVariableA("AST_NATIVE_TEST_PASSWORD", testPassword, sizeof(testPassword));
+    if (n > 0 && n < sizeof(testPassword))
+    {
+        char mode[16]{};
+        GetEnvironmentVariableA("AST_NATIVE_TEST_PASSWORD_MODE", mode, sizeof(mode));
+        if (_stricmp(mode, "cancel") == 0)
+        {
+            gNativePasswordCancelled = true;
+            SecureZeroMemory(testPassword, sizeof(testPassword));
+            Trace("NATIVE_PASSWORD_CANCELLED", "source=test_only");
+            return false;
+        }
+        const bool accepted = strcpy_s(output, capacity, testPassword) == 0;
+        MusicBeePendingPasswordSave(archive, testPassword,
+            accepted && settings.askToSavePassword && _stricmp(mode, "save") == 0);
+        *save = false;
+        SecureZeroMemory(testPassword, sizeof(testPassword));
+        Trace(accepted ? "NATIVE_PASSWORD_ENTERED" : "NATIVE_PASSWORD_REJECTED", "source=test_only");
+        return accepted;
+    }
+#endif
+    wchar_t username[CREDUI_MAX_USERNAME_LENGTH + 1]{};
+    wchar_t password[CREDUI_MAX_PASSWORD_LENGTH + 1]{};
+    const std::wstring label = archive ? ArchiveAdapterUtf8ToWide(archive) : L"";
+    std::wstring display = label.empty() ? L"the selected archive" :
+        std::filesystem::path(label).filename().wstring();
+    if (display.size() > 128)
+        display.resize(128);
+    for (wchar_t& character : display)
+    {
+        if (character < 32)
+            character = L' ';
+    }
+    const std::wstring message = L"Enter the password for " + display +
+        L". Saving is optional and writes a verified password to your configured plain-text password list.";
+    CREDUI_INFOW ui{};
+    ui.cbSize = sizeof(ui);
+    ui.pszCaptionText = L"Archive Stream Player - Password Required";
+    ui.pszMessageText = message.c_str();
+    BOOL shouldSave = FALSE;
+    const DWORD flags = CREDUI_FLAGS_ALWAYS_SHOW_UI | CREDUI_FLAGS_GENERIC_CREDENTIALS |
+        CREDUI_FLAGS_DO_NOT_PERSIST | CREDUI_FLAGS_SHOW_SAVE_CHECK_BOX;
+    Trace("NATIVE_PASSWORD_PROMPT", "source=windows_credui");
+    const DWORD response = CredUIPromptForCredentialsW(&ui, L"Archive Stream Player",
+        nullptr, 0, username, static_cast<ULONG>(std::size(username)),
+        password, static_cast<ULONG>(std::size(password)), &shouldSave, flags);
+    bool accepted = false;
+    if (response == NO_ERROR && password[0])
+    {
+        const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+            password, -1, output, static_cast<int>(capacity), nullptr, nullptr);
+        accepted = bytes > 1;
+        if (accepted)
+            MusicBeePendingPasswordSave(archive, output,
+                settings.askToSavePassword && shouldSave != FALSE);
+        // The backend must not persist on header-only validation.
+        *save = false;
+    }
+    if (!accepted)
+    {
+        gNativePasswordCancelled = true;
+        SecureZeroMemory(output, capacity);
+    }
+    SecureZeroMemory(username, sizeof(username));
+    SecureZeroMemory(password, sizeof(password));
+    Trace(accepted ? "NATIVE_PASSWORD_ENTERED" : "NATIVE_PASSWORD_CANCELLED", "source=windows_credui");
+    return accepted;
+}
+
+static void MusicBeeInitializePasswordBackend()
+{
+    const auto settings = ArchiveAdapterPreferencesLoad();
+    std::string list = ArchiveAdapterWideToUtf8(settings.passwordListPath);
+#if defined(AST_NATIVE_TEST_HOOKS)
+    wchar_t testList[MAX_PATH * 4]{};
+    const DWORD n = GetEnvironmentVariableW(L"AST_NATIVE_TEST_PASSWORD_LIST",
+        testList, std::size(testList));
+    if (n > 0 && n < std::size(testList) && std::filesystem::path(testList).is_absolute())
+        list = ArchiveAdapterWideToUtf8(testList);
+#endif
+    if (!list.empty())
+        ArchivePasswordSetListPath(list.c_str());
+    ArchivePasswordSetPromptCallback(MusicBeePromptPassword);
 }
 
 struct ArchivePcm
@@ -443,6 +608,42 @@ static bool CountAdtsPcmFrames(const char* archivePath, mz_uint index, uint64_t 
 
 // The ADTS duration must count every compressed frame, including cache
 // files from solid archives whose original entry cannot be streamed.
+static bool CountAdtsMemoryFrames(const std::vector<unsigned char>& bytes,
+    DWORD decodedRate, uint64_t* frames)
+{
+    if (!frames || !decodedRate)
+        return false;
+    *frames = 0;
+    static constexpr unsigned rates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000,
+        22050, 16000, 12000, 11025, 8000, 7350 };
+    size_t offset = 0;
+    unsigned rateIndex = 255;
+    uint64_t samples = 0;
+    while (offset < bytes.size())
+    {
+        if (bytes.size() - offset < 7)
+            return false;
+        const auto* h = bytes.data() + offset;
+        const unsigned rate = (h[2] >> 2) & 15u;
+        const unsigned length = ((h[3] & 3u) << 11) | (h[4] << 3) | (h[5] >> 5);
+        const unsigned minimum = (h[1] & 1u) ? 7 : 9;
+        const uint64_t next = 1024ull * (1u + (h[6] & 3u));
+        if (h[0] != 0xff || (h[1] & 0xf6) != 0xf0 ||
+            rate >= std::size(rates) || rates[rate] != decodedRate ||
+            (rateIndex != 255 && rate != rateIndex) ||
+            length < minimum || length > bytes.size() - offset ||
+            samples > std::numeric_limits<uint64_t>::max() - next)
+            return false;
+        rateIndex = rate;
+        samples += next;
+        offset += length;
+    }
+    if (!samples)
+        return false;
+    *frames = samples;
+    return true;
+}
+
 static bool CountAdtsCachedFrames(const wchar_t* path, DWORD decodedRate, uint64_t* frames)
 {
     if (frames)
@@ -841,6 +1042,7 @@ DWORD CALLBACK ArchivePcm::ReadPcm(HSTREAM, void* buffer, DWORD length, void* pt
     state->pcmFrameCursor += read;
     if (!state->firstRead && read > 0)
     {
+        MusicBeeCommitVerifiedPassword(state->archivePathUtf8.c_str());
         state->firstRead = true;
         Trace("PCM_FIRST", state->diskCached ? "route=CACHE" :
             (state->isStreaming || state->mfArchiveStream) ? "route=STREAM" : "route=BUFFER");
@@ -923,6 +1125,7 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
         return 0;
 
     Trace("MANIFEST_OK", FormatNote(format));
+    MusicBeeInitializePasswordBackend();
     auto state = std::make_unique<ArchivePcm>();
     const std::string titleField = "TITLE=" + titleUtf8;
     state->displayTitleTags.assign(titleField.begin(), titleField.end());
@@ -938,10 +1141,38 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
         if (!ArchiveGetEntryInfo(archive, index, entryName, sizeof(entryName), &state->encodedSize) || !state->encodedSize)
             return 0;
     }
+    // An encrypted RAR5 entry may report an apparent stream capability even
+    // though the backend cannot supply a seekable, verified byte stream.
+    // Use the same entry metadata that native enumeration validated.
+    bool encryptedRar = false;
+    if (IsRarArchivePath(archive))
+    {
+        wchar_t archiveWide[MAX_PATH * 4]{};
+        std::vector<ArchiveEntry> entries;
+        std::string metadataError;
+        if (!CharPathToWidePath(archive, archiveWide, std::size(archiveWide)) ||
+            !ArchiveListEntries(archiveWide, entries, metadataError))
+        {
+            Trace("OPEN_FAIL", "reason=rar_metadata_unavailable");
+            return 0;
+        }
+        const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& entry)
+        {
+            return entry.index == index && !entry.isFolder;
+        });
+        if (found == entries.end())
+        {
+            Trace("OPEN_FAIL", "reason=rar_entry_missing");
+            return 0;
+        }
+        encryptedRar = found->isEncrypted;
+    }
     if (IsMediaFoundationFormat(format))
     {
-        // Solid dependencies must not be treated as a freely seekable stream.
-        const bool streamSupported = ArchiveGetEntryStreamCapability(archive, index) ==
+        // Solid dependencies and encrypted RAR entries are not independent
+        // seekable streams, regardless of an optimistic backend capability.
+        const bool streamSupported = !encryptedRar &&
+            ArchiveGetEntryStreamCapability(archive, index) ==
             ARCHIVE_STREAM_CAPABILITY_SUPPORTED;
         state->opened = streamSupported &&
             MfOpenArchiveDecoder(archive, index, state->encodedSize, format, &state->mf);
@@ -953,7 +1184,8 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
         // Do not trust an archive stream-open result for solid RAR/7z.
         // A solid RAR may return bytes before its decoder dependency chain has
         // been restored. Follow the shared capability decision instead.
-        const bool streamSupported = ArchiveGetEntryStreamCapability(archive, index) ==
+        const bool streamSupported = !encryptedRar &&
+            ArchiveGetEntryStreamCapability(archive, index) ==
             ARCHIVE_STREAM_CAPABILITY_SUPPORTED;
         state->isStreaming = streamSupported &&
             ArchiveOpenValidatedEntryStream(&state->stream, archive, index, 4096, &error);
@@ -1103,7 +1335,9 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     if (state->format == AUDIO_FORMAT_AAC &&
         !(state->diskCached ?
           CountAdtsCachedFrames(state->cachedEncodedPath.c_str(), state->sampleRate, &exactAdtsFrames) :
-          CountAdtsPcmFrames(archive, index, state->encodedSize, state->sampleRate, &exactAdtsFrames)))
+          (!state->encoded.empty() ?
+            CountAdtsMemoryFrames(state->encoded, state->sampleRate, &exactAdtsFrames) :
+            CountAdtsPcmFrames(archive, index, state->encodedSize, state->sampleRate, &exactAdtsFrames))))
     {
         Trace("OPEN_FAIL", "reason=aac_adts_frame_count_invalid");
         CloseDecoder(state.get());
@@ -1170,7 +1404,7 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 static bool PrepareDiskLastAudio(const wchar_t* archivePath, const ArchiveEntry& entry,
     const ArchiveAdapterPreferences& settings, std::wstring& cachePath, std::string& error)
 {
-    if (!archivePath || entry.isEncrypted || !entry.isSupportedAudio || entry.isFolder ||
+    if (!archivePath || !entry.isSupportedAudio || entry.isFolder ||
         !entry.size || (GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_FLAC &&
          GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_WAV &&
          GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_MP3 &&
@@ -1354,12 +1588,110 @@ static bool PreflightSolidBufferedMp3Ogg(const char* archive, const ArchiveEntry
 // List-only native MusicBee integration: no separate helper executable, HTTP
 // listener, PCM extraction or BASS runtime redistribution is required.
 // The managed adapter calls this on its background archive-opening worker.
-static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg, bool allowMf, bool allowSolidBuffer, bool allowDiskPcm, bool allowDiskWav, bool allowDiskMp3, bool allowDiskOgg, bool allowDiskMf)
+static bool PreflightNativeEncryptedMemory(const char* archive,
+    const ArchiveEntry& entry, AudioFormat format, const ArchiveAdapterPreferences& preferences)
+{
+    if (!entry.isEncrypted || !entry.size ||
+        entry.size > static_cast<uint64_t>(preferences.memoryMb) * 1024ull * 1024ull)
+        return false;
+    std::vector<unsigned char> encoded;
+    std::string error;
+    if (!ArchiveExtractEntryToMemory(archive, entry.index, encoded, error) ||
+        encoded.size() != entry.size)
+        return false;
+    int16_t buffer[4096]{};
+    if (format == AUDIO_FORMAT_WAV)
+    {
+        drwav wav{};
+        if (!drwav_init_memory(&wav, encoded.data(), encoded.size(), nullptr))
+            return false;
+        const bool valid = wav.translatedFormatTag == DR_WAVE_FORMAT_PCM &&
+            wav.bitsPerSample == 16 && wav.sampleRate >= 8000 && wav.channels >= 1 &&
+            wav.channels <= 2 && wav.totalPCMFrameCount > wav.sampleRate &&
+            drwav_read_pcm_frames_s16(&wav, 1024, buffer) == 1024 &&
+            drwav_seek_to_pcm_frame(&wav, wav.sampleRate) &&
+            drwav_read_pcm_frames_s16(&wav, 1024, buffer) == 1024;
+        drwav_uninit(&wav);
+        return valid;
+    }
+    if (format == AUDIO_FORMAT_FLAC)
+    {
+        drflac* flac = drflac_open_memory(encoded.data(), encoded.size(), nullptr);
+        if (!flac)
+            return false;
+        const bool valid = flac->sampleRate >= 8000 && flac->channels >= 1 &&
+            flac->channels <= 2 && (flac->bitsPerSample == 16 || flac->bitsPerSample == 24) &&
+            flac->totalPCMFrameCount > flac->sampleRate &&
+            drflac_read_pcm_frames_s16(flac, 1024, buffer) == 1024 &&
+            drflac_seek_to_pcm_frame(flac, flac->sampleRate) &&
+            drflac_read_pcm_frames_s16(flac, 1024, buffer) == 1024;
+        drflac_close(flac);
+        return valid;
+    }
+    if (format == AUDIO_FORMAT_MP3)
+    {
+        drmp3 mp3{};
+        if (!drmp3_init_memory(&mp3, encoded.data(), encoded.size(), nullptr))
+            return false;
+        const bool valid = mp3.sampleRate >= 8000 && mp3.channels >= 1 &&
+            mp3.channels <= 2 && drmp3_get_pcm_frame_count(&mp3) > mp3.sampleRate &&
+            drmp3_read_pcm_frames_s16(&mp3, 1024, buffer) == 1024 &&
+            drmp3_seek_to_pcm_frame(&mp3, mp3.sampleRate) &&
+            drmp3_read_pcm_frames_s16(&mp3, 1024, buffer) == 1024;
+        drmp3_uninit(&mp3);
+        return valid;
+    }
+    if (format == AUDIO_FORMAT_OGG)
+    {
+        ArchivePcm probe{};
+        probe.format = AUDIO_FORMAT_OGG;
+        probe.encoded = std::move(encoded);
+        probe.encodedSize = probe.encoded.size();
+        const HSTREAM decoded = OpenArchiveHostDecoder(&probe);
+        if (!decoded)
+            return false;
+        BASS_CHANNELINFO info{};
+        const bool metadata = BASS_ChannelGetInfo(decoded, &info) != FALSE;
+        const QWORD bytes = BASS_ChannelGetLength(decoded, BASS_POS_BYTE);
+        const QWORD seek = static_cast<QWORD>(info.freq) * info.chans * sizeof(int16_t);
+        const bool valid = metadata && info.freq >= 8000 &&
+            (info.chans == 1 || info.chans == 2) &&
+            bytes != static_cast<QWORD>(-1) && bytes > seek + sizeof(buffer) &&
+            BASS_ChannelGetData(decoded, buffer, sizeof(buffer)) == sizeof(buffer) &&
+            BASS_ChannelSetPosition(decoded, seek, BASS_POS_BYTE) &&
+            BASS_ChannelGetData(decoded, buffer, sizeof(buffer)) == sizeof(buffer);
+        BASS_StreamFree(decoded);
+        return valid;
+    }
+    if (IsMediaFoundationFormat(format))
+    {
+        MfAudioDecoder* mf = nullptr;
+        if (!MfOpenMemoryDecoder(encoded.data(), encoded.size(), format, &mf) || !mf)
+            return false;
+        const int rate = MfGetSampleRate(mf);
+        const int lengthMs = MfGetLengthMs(mf);
+        bool valid = MfGetBitsPerSample(mf) == 16 && rate >= 8000 &&
+            (MfGetChannels(mf) == 1 || MfGetChannels(mf) == 2) && lengthMs > 1000;
+        uint64_t aacFrames = 0;
+        if (valid && format == AUDIO_FORMAT_AAC)
+            valid = CountAdtsMemoryFrames(encoded, rate, &aacFrames);
+        if (valid)
+            valid = MfReadPcm(mf, buffer, sizeof(buffer)) == sizeof(buffer) &&
+                MfSeekMs(mf, 1000) && MfReadPcm(mf, buffer, sizeof(buffer)) == sizeof(buffer);
+        MfCloseDecoder(mf);
+        return valid;
+    }
+    return false;
+}
+
+static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg, bool allowMf, bool allowSolidBuffer, bool allowDiskPcm, bool allowDiskWav, bool allowDiskMp3, bool allowDiskOgg, bool allowDiskMf, bool allowEncrypted)
 {
     if (!archivePath || !*archivePath || !outputFolder || !*outputFolder)
         return 0;
     try
     {
+        if (allowEncrypted)
+            MusicBeeInitializePasswordBackend();
         const std::filesystem::path archive(archivePath);
         const std::wstring ext = archive.extension().wstring();
         if (_wcsicmp(ext.c_str(), L".zip") != 0 && _wcsicmp(ext.c_str(), L".7z") != 0 &&
@@ -1374,6 +1706,8 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
                                 archiveUtf8.data(), required, nullptr, nullptr) != required)
             return 0;
         archiveUtf8.pop_back();
+        if (allowEncrypted)
+            ArchivePasswordClearArchiveCancelled(archiveUtf8.c_str());
         if (archiveUtf8.find('\r') != std::string::npos || archiveUtf8.find('\n') != std::string::npos)
             return 0;
 
@@ -1390,10 +1724,10 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
         {
             if (entry.isFolder || !entry.isSupportedAudio)
                 continue;
-            // Fail closed for mixed, encrypted and missing audio. The existing
-            // bridge handles unsupported layouts and their password prompts.
+            // Old scanner ABIs preserve their encrypted-entry rejection.
+            // Only the new password-aware export can call native backends.
             const AudioFormat entryFormat = GetAudioFormatFromPath(entry.path.c_str());
-            if (!entry.size || entry.isEncrypted ||
+            if (!entry.size || (entry.isEncrypted && !allowEncrypted) ||
                 (entryFormat != AUDIO_FORMAT_MP3 && !(allowWav && entryFormat == AUDIO_FORMAT_WAV) &&
                  !(allowFlac && entryFormat == AUDIO_FORMAT_FLAC) && !(allowOgg && entryFormat == AUDIO_FORMAT_OGG) &&
                  !(allowMf && IsMediaFoundationFormat(entryFormat))) ||
@@ -1406,23 +1740,31 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
             // Stream first. The v1.8 opt-in ABI additionally accepts proven,
             // unencrypted solid MP3/Vorbis via the configured bounded RAM buffer.
             // Other layouts continue to the bridge (RAM/disk-last there).
-            if (ArchiveGetEntryStreamCapability(archiveUtf8.c_str(), entry.index) != ARCHIVE_STREAM_CAPABILITY_SUPPORTED)
+            const bool nonStreamingEncryptedRar = allowEncrypted && entry.isEncrypted &&
+                _wcsicmp(ext.c_str(), L".rar") == 0;
+            if (nonStreamingEncryptedRar ||
+                ArchiveGetEntryStreamCapability(archiveUtf8.c_str(), entry.index) != ARCHIVE_STREAM_CAPABILITY_SUPPORTED)
             {
-                const unsigned memoryMb = ArchiveAdapterPreferencesLoad().memoryMb;
-                const bool buffered = allowSolidBuffer &&
-                    PreflightSolidBufferedMp3Ogg(archiveUtf8.c_str(), entry, entryFormat, memoryMb);
+                const ArchiveAdapterPreferences preferences = ArchiveAdapterPreferencesLoad();
+                const unsigned memoryMb = preferences.memoryMb;
+                const bool buffered = (allowEncrypted && entry.isEncrypted &&
+                    PreflightNativeEncryptedMemory(archiveUtf8.c_str(), entry, entryFormat, preferences)) ||
+                    (allowSolidBuffer && !entry.isEncrypted &&
+                     PreflightSolidBufferedMp3Ogg(archiveUtf8.c_str(), entry, entryFormat, memoryMb));
                 const bool cached = !buffered && allowDiskPcm && (entryFormat == AUDIO_FORMAT_FLAC ||
                     (allowDiskWav && entryFormat == AUDIO_FORMAT_WAV) ||
                     (allowDiskMp3 && entryFormat == AUDIO_FORMAT_MP3) ||
                     (allowDiskOgg && entryFormat == AUDIO_FORMAT_OGG) ||
                     (allowDiskMf && IsMediaFoundationFormat(entryFormat))) &&
-                    PreflightDiskLastAudio(archivePath, entry, ArchiveAdapterPreferencesLoad());
+                    PreflightDiskLastAudio(archivePath, entry, preferences);
                 if (!buffered && !cached)
                 {
                     Trace("NATIVE_ENUM_FALLBACK", "reason=non_streamable_or_memory_cache_invalid");
                     return 0;
                 }
                 Trace(cached ? "NATIVE_ENUM_CACHE_OK" : "NATIVE_ENUM_BUFFER_OK", FormatNote(entryFormat));
+                if (entry.isEncrypted && allowEncrypted)
+                    MusicBeeCommitVerifiedPassword(archiveUtf8.c_str());
                 selected.push_back(&entry);
                 if (selected.size() > 10000)
                     return 0;
@@ -1583,6 +1925,8 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
                 std::to_string(entry.index) + "|" + entry.path;
             if (virtualPath.size() > 16300)
                 return 0;
+            if (entry.isEncrypted && allowEncrypted)
+                MusicBeeCommitVerifiedPassword(archiveUtf8.c_str());
             selected.push_back(&entry);
             if (selected.size() > 10000)
                 return 0;
@@ -1625,73 +1969,96 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
 // is used by v1.3+ for mixed MP3/WAV albums, without changing old clients.
 extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false, false, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false, false, false, false, false, false, false, false, false);
 }
 
 extern "C" int __stdcall ArchiveStreamWriteNativePcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false, false, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false, false, false, false, false, false, false, false, false);
 }
 
 // New ABI retains older MP3-only and MP3/WAV scanners for installed adapters.
 extern "C" int __stdcall ArchiveStreamWriteNativeAudioTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false, false, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false, false, false, false, false, false, false, false, false);
 }
 
 // v1.5 accepts actual Vorbis OGG files; older ABI selectors remain unchanged.
 extern "C" int __stdcall ArchiveStreamWriteNativeFourCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, false, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, false, false, false, false, false, false, false, false);
 }
 
 // v1.6 extends the native BASS byte-stream path to Media Foundation codecs,
 // without changing the older four in-process scanner ABIs.
 extern "C" int __stdcall ArchiveStreamWriteNativeSevenCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, false, false, false, false, false, false, false);
 }
 
 // v1.8 adds tested unencrypted solid 7z/RAR MP3 and Vorbis through bounded
 // memory while preserving all earlier scanner ABI contracts.
 extern "C" int __stdcall ArchiveStreamWriteNativeBufferedTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, false, false, false, false, false, false);
 }
 
 // v1.9 opt-in: retain direct stream and bounded memory; only validated
 // over-budget solid FLAC may fall back to the shared managed disk cache.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskLastTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, false, false, false, false, false);
 }
 
 // v1.10 opt-in adds PCM16 WAV to the shared cache fallback while retaining
 // the v1.9 FLAC-only API for older clients.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskPcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, false, false, false, false);
 }
 
 // v1.11 opt-in adds oversized unencrypted MP3 to the shared encoded-file
 // cache route; older exports preserve their original codec contracts.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true, false, false, false);
 }
 
 // v1.12 adds oversized Vorbis OGG disk-last decoding using the installed
 // BASS decoder, without changing any of the older public scanner ABIs.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskOggTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true, true, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true, true, false, false);
 }
 
 // v1.13 opt-in: AAC/M4A/WMA also use shared disk-last cache when the
 // archive is nonstreamable and exceeds the configured bounded RAM buffer.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskMfTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true, true, true);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true, true, true, false);
+}
+
+// v1.17 opt-in: native 7z/RAR encrypted audio; old scanner exports keep their
+// previous unencrypted-only rules. -2=cancelled, -3=rejected credential.
+extern "C" int __stdcall ArchiveStreamWriteNativeEncryptedTracksW(
+    const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    gNativePasswordAttempted = false;
+    gNativePasswordCancelled = false;
+    const int count = WriteNativeTracksInternal(archivePath, outputFolder,
+        true, true, true, true, true, true, true, true, true, true, true);
+    if (count > 0)
+        return count;
+    if (count <= 0 && archivePath)
+    {
+        const auto archiveUtf8 = ArchiveAdapterWideToUtf8(archivePath);
+        MusicBeeForgetPendingPassword(archiveUtf8.c_str());
+    }
+    if (gNativePasswordCancelled)
+        return -2;
+    if (gNativePasswordAttempted)
+        return -3;
+    return count;
 }
 
 // Shared title-preset renderer for host adapters. Using the same

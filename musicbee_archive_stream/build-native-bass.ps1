@@ -30,7 +30,7 @@ try {
         '/LIBPATH:"' + $BassCoreSdkRoot + '" /LIBPATH:"archive_backend\Release" ' +
         '/LIBPATH:"unrar_static\Release" /LIBPATH:"libarchive_static\Release" /LIBPATH:"zlib_static\Release" ' +
         'bass.lib archive_backend.lib unrar_static.lib libarchive_static.lib zlib_static.lib ' +
-        'bcrypt.lib Advapi32.lib Shell32.lib User32.lib'
+        'bcrypt.lib Advapi32.lib Shell32.lib User32.lib Credui.lib'
     & cmd.exe /d /s /c $command
     if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out -PathType Leaf)) {
         throw 'Native BASS archive add-on build failed (x86). Build the static backend Release libraries first.'

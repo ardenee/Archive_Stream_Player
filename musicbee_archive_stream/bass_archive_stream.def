@@ -13,3 +13,4 @@ EXPORTS
     ArchiveStreamWriteNativeDiskMp3TracksW=_ArchiveStreamWriteNativeDiskMp3TracksW@8
     ArchiveStreamWriteNativeDiskOggTracksW=_ArchiveStreamWriteNativeDiskOggTracksW@8
     ArchiveStreamWriteNativeDiskMfTracksW=_ArchiveStreamWriteNativeDiskMfTracksW@8
+    ArchiveStreamWriteNativeEncryptedTracksW=_ArchiveStreamWriteNativeEncryptedTracksW@8

@@ -56,6 +56,10 @@ namespace MusicBeePlugin
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int WriteNativeDiskMfTracks(string archive, string folder);
 
+        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeEncryptedTracksW",
+            CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        private static extern int WriteNativeEncryptedTracks(string archive, string folder);
+
         [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamFormatNativeTitleW",
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int FormatNativeTitle(string virtualPath, StringBuilder output, uint capacity);
@@ -172,7 +176,7 @@ namespace MusicBeePlugin
             info.Author = "Archive Stream Player";
             info.TargetApplication = "";
             info.VersionMajor = 1;
-            info.VersionMinor = 16;
+            info.VersionMinor = 17;
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
@@ -204,6 +208,11 @@ namespace MusicBeePlugin
                 try
                 {
                     string[] tracks = await Task.Run(() => StartArchiveSession(dialog.FileName));
+                    if (tracks.Length == 0)
+                    {
+                        Trace("NATIVE_PASSWORD_NO_QUEUE bridge=0");
+                        return;
+                    }
                     bool queued = tracks.Length > 0 && api.NowPlayingList_QueueFilesLast != null &&
                         api.NowPlayingList_QueueFilesLast(tracks);
                     Trace("QUEUE_RESULT accepted=" + (queued ? "1" : "0") + " tracks=" + tracks.Length);
@@ -389,7 +398,14 @@ namespace MusicBeePlugin
                                 {
                                     try
                                     {
-                                        count = WriteNativeDiskMfTracks(archive, folder);
+                                        try
+                                        {
+                                            count = WriteNativeEncryptedTracks(archive, folder);
+                                        }
+                                        catch (EntryPointNotFoundException)
+                                        {
+                                            count = WriteNativeDiskMfTracks(archive, folder);
+                                        }
                                     }
                                     catch (EntryPointNotFoundException)
                                     {
@@ -419,6 +435,16 @@ namespace MusicBeePlugin
                 catch (EntryPointNotFoundException)
                 {
                     count = WriteNativeSevenCodecs(archive, folder);
+                }
+                if (count == -2)
+                {
+                    Trace("NATIVE_PASSWORD_CANCELLED bridge=0");
+                    return new string[0];
+                }
+                if (count == -3)
+                {
+                    Trace("NATIVE_PASSWORD_REJECTED bridge=0");
+                    return new string[0];
                 }
                 if (count <= 0 || count > 10000)
                     return null;
