@@ -480,7 +480,7 @@ namespace MusicBeePlugin
                 if (tracks.Count == 0)
                     return null;
                 ApplyNativeSharedTitles(folder, tracks, virtualPaths);
-                Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + tracks.Count + " helper=DLL http=0 cache=0");
+                Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + tracks.Count + " helper=DLL http=0 cache=shared");
                 return tracks.ToArray();
             }
             catch (Exception e)

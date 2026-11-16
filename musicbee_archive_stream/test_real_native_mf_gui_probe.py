@@ -21,6 +21,14 @@ new="""public void ReceiveNotification(string sourceFileUrl, NotificationType ty
                 {
                     string archive = Environment.GetEnvironmentVariable("AST_NATIVE_ZIP_PATH");
                     string[] tracks = StartArchiveSession(archive);
+                    string selectedText = Environment.GetEnvironmentVariable("AST_GUI_TRACK_INDEX");
+                    if (!String.IsNullOrEmpty(selectedText))
+                    {
+                        int selected;
+                        if (!Int32.TryParse(selectedText, out selected) || selected < 0 || selected >= tracks.Length)
+                            throw new IndexOutOfRangeException("Invalid QA archive track selection");
+                        tracks = new string[] { tracks[selected] };
+                    }
                     Trace("QA_NATIVE_SESSION tracks=" + tracks.Length);
                     bool accepted = api.NowPlayingList_QueueFilesLast(tracks);
                     Trace("QA_NATIVE_QUEUE accepted=" + (accepted ? "1" : "0"));
@@ -29,7 +37,7 @@ new="""public void ReceiveNotification(string sourceFileUrl, NotificationType ty
                     for (int i = 0; i < 21; ++i)
                     {
                         System.Threading.Thread.Sleep(1000);
-                        Trace("QA_NATIVE_HOST state=" + api.Player_GetPlayState() + " position=" + api.Player_GetPosition());
+                        Trace("QA_NATIVE_HOST state=" + api.Player_GetPlayState() + " position=" + api.Player_GetPosition() + " duration=" + api.NowPlaying_GetDuration());
                     }
                 }
                 catch (Exception e)

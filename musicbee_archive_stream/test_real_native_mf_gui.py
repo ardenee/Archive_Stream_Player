@@ -13,6 +13,8 @@ APP=Path(r"C:\Program Files (x86)\MusicBee")
 REPO=Path(__file__).resolve().parents[1]
 AUT=Path(r"D:\Temp\ArchiveStreamFoobar32Runtime\automation")
 ZIP=Path(os.environ["AST_NATIVE_ARCHIVE_TEST_PATH"])
+EXPECTED_TRACKS=int(os.environ.get("AST_GUI_EXPECT_TRACKS","1"))
+EXPECTED_ROUTE=os.environ.get("AST_GUI_EXPECT_ROUTE","STREAM")
 assert all(p.is_file() for p in [
     ZIP,ROOT/"MB_ArchiveStream_ProductionProbe.dll",
     REPO/"musicbee_archive_stream"/"Release"/"bass_archive_stream.dll",
@@ -68,6 +70,8 @@ with tempfile.TemporaryDirectory(prefix="ast-musicbee-production-host-",dir=r"D:
         clicked=False
         data=""
         gui_clicked=False
+        gui_attempts=0
+        last_gui_attempt=0
         before_click=0
         while time.monotonic()<deadline:
             if process.poll() is not None:
@@ -83,17 +87,23 @@ with tempfile.TemporaryDirectory(prefix="ast-musicbee-production-host-",dir=r"D:
                     clicked=True
                     print("MUSICBEE_PRODUCTION_ISOLATED_EMPTY_LIBRARY_READY",flush=True)
             log=musiclog.read_text(encoding="utf-8",errors="replace") if musiclog.is_file() else ""
-            if not gui_clicked:
-                positions=[int(q) for q in re.findall(r"QA_NATIVE_HOST state=Playing position=(\d+)",log)]
-                if len(positions)>=4 and max(positions)-min(positions)>2000:
-                    active=next((w for w in windows(process.pid) if w.window_text().endswith("MusicBee")),None)
-                    if active:
-                        rect=active.rectangle()
+            positions=[int(q) for q in re.findall(r"QA_NATIVE_HOST state=Playing position=(\d+)",log)]
+            progressed=gui_attempts>0 and max(positions,default=0)>before_click+30000
+            ready=len(positions)>=4 and max(positions)-min(positions)>2000
+            retry=gui_attempts>0 and gui_attempts<3 and not progressed and time.monotonic()-last_gui_attempt>=2.5
+            if (gui_attempts==0 and ready) or retry:
+                active=next((w for w in windows(process.pid) if w.window_text().endswith("MusicBee") and w.class_name().startswith("WindowsForms10.Window") and w.rectangle().width()>1000),None)
+                if active:
+                    active.maximize()
+                    rect=active.rectangle()
+                    if gui_attempts==0:
                         before_click=positions[-1]
-                        active.set_focus()
-                        mouse.click(coords=(rect.left+895,rect.bottom-14))
-                        print("MUSICBEE_NATIVE_REAL_GUI_SEEK_CLICKED",before_click,(rect.left+895,rect.bottom-14),flush=True)
-                        gui_clicked=True
+                    active.set_focus()
+                    mouse.click(coords=(rect.left+895,rect.bottom-14))
+                    gui_attempts+=1
+                    last_gui_attempt=time.monotonic()
+                    print("MUSICBEE_NATIVE_REAL_GUI_SEEK_CLICKED",before_click,(rect.left+895,rect.bottom-14),"attempt="+str(gui_attempts),flush=True)
+                    gui_clicked=True
             if "QA_NATIVE_TRACE_COMPLETE" in log:
                 data=log
                 break
@@ -108,11 +118,11 @@ with tempfile.TemporaryDirectory(prefix="ast-musicbee-production-host-",dir=r"D:
             if any(x in line for x in ["OPEN_OK","PCM_FIRST","STREAM_VALIDATED","SEEK","CREATE_BEGIN","MANIFEST_READ"]):
                 print("MUSICBEE_BASS_RUNTIME_LOG",line,flush=True)
         assert "NATIVE_BASS_PLUGIN loaded=1" in data, "MusicBee did not load native BASS through production C#"
-        assert "NATIVE_MANIFEST_READY mode=AUDIO archive=" + ZIP.suffix.lower() + " tracks=1 helper=DLL http=0 cache=0" in data, "production native route did not select"
-        assert "SESSION_READY route=NATIVE tracks=1" in data, "production native path not used"
+        assert "NATIVE_MANIFEST_READY mode=AUDIO archive=" + ZIP.suffix.lower() + " tracks=" + str(EXPECTED_TRACKS) + " helper=DLL http=0 cache=shared" in data, "production native route did not select"
+        assert "SESSION_READY route=NATIVE tracks=" + str(EXPECTED_TRACKS) in data, "production native path not used"
         assert "QA_NATIVE_QUEUE accepted=1" in data, "host rejected native .ast"
         assert "AST_BASS NATIVE_ENUM_OK route=IN_PROCESS" in native, "In-process enumerator did not execute"
-        assert ("AST_BASS OPEN_OK codec=" + os.environ["AST_NATIVE_CODEC"]) in native and "AST_BASS PCM_FIRST route=STREAM" in native, "host did not decode native PCM entry"
+        assert ("AST_BASS OPEN_OK codec=" + os.environ["AST_NATIVE_CODEC"]) in native and ("AST_BASS PCM_FIRST route=" + EXPECTED_ROUTE) in native, "host did not decode expected native PCM route: " + EXPECTED_ROUTE
         playing=[int(p) for p in re.findall(r"QA_NATIVE_HOST state=Playing position=(\d+)",data)]
         assert len(playing)>=2 and max(playing)-min(playing)>1000, "MusicBee playback position did not progress: "+str(playing)
         assert gui_clicked,"Native GUI seek was not clicked"

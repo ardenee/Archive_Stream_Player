@@ -79,6 +79,8 @@ with tempfile.TemporaryDirectory(prefix="ast-musicbee-production-host-",dir=r"D:
         clicked=False
         data=""
         gui_clicked=False
+        gui_attempts=0
+        last_gui_attempt=0
         before_click=0
         prompted=False
         filled=False
@@ -123,16 +125,23 @@ with tempfile.TemporaryDirectory(prefix="ast-musicbee-production-host-",dir=r"D:
                         filled=True
                         print("MUSICBEE_REAL_GUI_NATIVE_PASSWORD_ENTERED",flush=True)
             log=musiclog.read_text(encoding="utf-8",errors="replace") if musiclog.is_file() else ""
-            if REQUIRE_SEEK and MODE in ("accept","save") and not gui_clicked:
+            if REQUIRE_SEEK and MODE in ("accept","save"):
                 positions=[int(q) for q in re.findall(r"QA_NATIVE_HOST state=Playing position=(\d+)",log)]
-                if len(positions)>=4 and max(positions)-min(positions)>2000:
-                    active=next((w for w in windows(process.pid) if w.window_text().endswith("MusicBee")),None)
+                progressed=gui_attempts>0 and max(positions,default=0)>before_click+30000
+                ready=len(positions)>=4 and max(positions)-min(positions)>2000
+                retry=gui_attempts>0 and gui_attempts<3 and not progressed and time.monotonic()-last_gui_attempt>=2.5
+                if (gui_attempts==0 and ready) or retry:
+                    active=next((w for w in windows(process.pid) if w.window_text().endswith("MusicBee") and w.class_name().startswith("WindowsForms10.Window") and w.rectangle().width()>1000),None)
                     if active:
+                        active.maximize()
                         rect=active.rectangle()
-                        before_click=positions[-1]
+                        if gui_attempts==0:
+                            before_click=positions[-1]
                         active.set_focus()
                         mouse.click(coords=(rect.left+895,rect.bottom-14))
-                        print("MUSICBEE_NATIVE_REAL_GUI_SEEK_CLICKED",before_click,(rect.left+895,rect.bottom-14),flush=True)
+                        gui_attempts+=1
+                        last_gui_attempt=time.monotonic()
+                        print("MUSICBEE_NATIVE_REAL_GUI_SEEK_CLICKED",before_click,(rect.left+895,rect.bottom-14),"attempt="+str(gui_attempts),flush=True)
                         gui_clicked=True
             if "QA_NATIVE_TRACE_COMPLETE" in log:
                 data=log
@@ -168,7 +177,7 @@ with tempfile.TemporaryDirectory(prefix="ast-musicbee-production-host-",dir=r"D:
             print("MUSICBEE_REAL_HOST_ENCRYPTED_PASSWORD_DIALOG_FAIL_CLOSED_PASS",MODE,flush=True)
         else:
             assert "NATIVE_BASS_PLUGIN loaded=1" in data, "MusicBee did not load native BASS through production C#"
-            assert "NATIVE_MANIFEST_READY mode=AUDIO archive=" + ZIP.suffix.lower() + " tracks=1 helper=DLL http=0 cache=0" in data, "production native route did not select"
+            assert "NATIVE_MANIFEST_READY mode=AUDIO archive=" + ZIP.suffix.lower() + " tracks=1 helper=DLL http=0 cache=shared" in data, "production native route did not select"
             assert "SESSION_READY route=NATIVE tracks=1" in data, "production native path not used"
             assert "QA_NATIVE_QUEUE accepted=1" in data, "host rejected native .ast"
             assert "AST_BASS NATIVE_ENUM_OK route=IN_PROCESS" in native, "In-process enumerator did not execute"
