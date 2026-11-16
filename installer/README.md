@@ -1,5 +1,7 @@
 # Archive Stream Player — Windows installer
 
+**[Download the Windows preview installer](https://github.com/ardenee/Archive_Stream_Player/releases/download/v0.1.0-preview.1/ArchiveStreamPlayer-Setup.exe)** · [GitHub release page](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.0-preview.1)
+
 **One installer for all selectable native player integrations.**
 
 The installer detects installed players, checks whether each is 32-bit or 64-bit, preselects compatible versions, and lets you install only the plugins you want. Portable players can be selected by browsing to their actual application folder.
@@ -30,7 +32,7 @@ The executable is generated at \`installer\output\ArchiveStreamPlayer-Setup.exe\
 
 The build script stages compiled Release binaries and packages the required two MediaMonkey MMIPs. The installer uses statically linked archive backends; there are no extra libarchive/7-Zip/UnRAR runtime DLLs to install. Temporary build payloads and the unsigned installer executable are not committed to the source repository.
 
-**Status:** preview installer. Validate your distribution and code-signing requirements before publishing an official downloadable release. Commercial distribution of installers built with Inno Setup 7 may require a separate Inno Setup commercial licence.
+**Status:** a public, unsigned preview release is available. A signed stable release is not yet available. Commercial distribution of installers built with Inno Setup 7 may require a separate Inno Setup commercial licence.
 
 ## Command-line deployment
 
