@@ -34,7 +34,7 @@ try {
 
     function Verify([string]$archive, [int]$count, [string]$mode = 'mp3') {
         $folder = Join-Path $temp ([IO.Path]::GetFileName($archive) + "-$mode-manifests")
-        if ($mode -in @('pcm','audio','four','seven','buffered','disk','diskpcm','diskmp3')) {
+        if ($mode -in @('pcm','audio','four','seven','buffered','disk','diskpcm','diskmp3','diskogg')) {
             & $exe (Join-Path $temp 'bass_archive_stream.dll') $archive $folder $count $mode
         }
         else {
@@ -168,6 +168,7 @@ try {
     Verify $zipSeven 7 'disk' # direct streaming remains first priority
     Verify $zipSeven 7 'diskpcm' # v1.10 must preserve all direct-streaming codecs
     Verify $zipSeven 7 'diskmp3' # v1.11 must preserve all seven native streaming codecs
+    Verify $zipSeven 7 'diskogg' # v1.12 must preserve direct streaming of all seven codecs
     Verify $zipSeven 0 'four' # existing four-codec ABI remains unchanged
 
     foreach ($item in @(@('aac', $FixtureAac), @('m4a', $FixtureM4a), @('wma', $FixtureWma))) {
@@ -248,6 +249,7 @@ try {
             Verify (Join-Path $temp 'encrypted.zip') 0 'disk'
             Verify (Join-Path $temp 'encrypted.zip') 0 'diskpcm' # encrypted route remains on compatibility
             Verify (Join-Path $temp 'encrypted.zip') 0 'diskmp3' # no native password bypass
+            Verify (Join-Path $temp 'encrypted.zip') 0 'diskogg' # encrypted remains on compatibility bridge
         }
         finally { Pop-Location }
     }
@@ -293,7 +295,7 @@ try {
         finally { Pop-Location }
     }
     else { Write-Output 'MUSICBEE_NATIVE_ENUM_RAR_SKIPPED external Rar.exe unavailable' }
-    Write-Output 'MUSICBEE_NATIVE_INPROCESS_ENUM_SEVEN_CODEC_SOLID_AND_DISK_MP3_REGRESSIONS_PASS'
+    Write-Output 'MUSICBEE_NATIVE_INPROCESS_ENUM_SEVEN_CODEC_SOLID_AND_DISK_OGG_REGRESSIONS_PASS'
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
