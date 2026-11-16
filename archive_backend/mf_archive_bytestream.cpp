@@ -7,8 +7,13 @@
 #include <propvarutil.h>
 #include <strsafe.h>
 #include <new>
+#include <limits>
+#include <string>
+#include <vector>
 
 #include "mf_archive_bytestream.h"
+#include "archive_adapter_preferences.h"
+#include "archive_unified_cache.h"
 #include "archive_reader.h"
 #include "debug_log.h"
 
@@ -74,6 +79,9 @@ ArchiveMFByteStream::ArchiveMFByteStream() :
     m_memoryData(nullptr),
     m_hardReadFailure(false),
     m_readZeroLogged(false),
+    m_recoveryAttempted(false),
+    m_entryIndex(0),
+    m_recoveredFile(nullptr),
     m_length(0),
     m_position(0),
     m_attributes(nullptr)
@@ -121,6 +129,8 @@ bool ArchiveMFByteStream::Open(const char* archivePath, mz_uint index, mz_uint64
     m_readZeroLogged = false;
     m_length = static_cast<QWORD>(length);
     m_position = 0;
+    m_archivePath = archivePath;
+    m_entryIndex = index;
 
     bool ok = ArchiveOpenEntryStream(&m_stream, archivePath, index);
 
@@ -189,10 +199,107 @@ void ArchiveMFByteStream::CloseInternal()
 
     m_memoryOpen = false;
     m_memoryData = nullptr;
+    if (m_recoveredFile)
+    {
+        fclose(m_recoveredFile);
+        m_recoveredFile = nullptr;
+    }
+    m_recoveredBytes.clear();
+    m_recoveredPath.clear();
+    m_archivePath.clear();
+    m_entryIndex = 0;
+    m_recoveryAttempted = false;
     m_closed = true;
     m_position = 0;
 }
 
+
+// On an unexpected encoded read/seek failure, switch the existing
+// IMFByteStream's source at the identical byte position. Media Foundation
+// keeps its original SourceReader, decoded sample buffers, and timestamps.
+// Caller holds m_lock; this method does not invoke MF while locked.
+bool ArchiveMFByteStream::RecoverSourceAt(QWORD encodedPosition)
+{
+    if (!m_streamOpen || m_recoveryAttempted || m_archivePath.empty() ||
+        encodedPosition >= m_length)
+        return false;
+
+    m_recoveryAttempted = true;
+    DebugLogWrite("WARN", "MFSTREAM", "RECOVERY_BEGIN", "index=%u | offset=%llu | length=%llu", (unsigned)m_entryIndex, (unsigned long long)encodedPosition, (unsigned long long)m_length);
+    ArchiveAdapterPreferences settings = ArchiveAdapterPreferencesLoad();
+#if defined(AST_MF_TEST_FAULT_INJECTION)
+    // Test executable only, never linked into the release static backend.
+    wchar_t overrideLimit[32]{};
+    const DWORD n = GetEnvironmentVariableW(L"AST_MF_TEST_MEMORY_MB", overrideLimit, _countof(overrideLimit));
+    if (n > 0 && n < _countof(overrideLimit))
+    {
+        const unsigned limit = static_cast<unsigned>(_wcstoui64(overrideLimit, nullptr, 10));
+        if (limit >= 1 && limit <= settings.memoryMb)
+            settings.memoryMb = limit;
+    }
+    wchar_t blocked[8]{};
+    if (GetEnvironmentVariableW(L"AST_MF_TEST_CACHE_DISABLED", blocked, _countof(blocked)) &&
+        blocked[0] == L'1')
+        settings.cacheLimitMb = 0;
+#endif
+    std::string error;
+    if (m_length <= static_cast<uint64_t>(settings.memoryMb) * 1024ull * 1024ull &&
+        m_length <= static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    {
+        std::vector<unsigned char> decoded;
+        if (ArchiveExtractEntryToMemory(m_archivePath.c_str(), m_entryIndex, decoded, error) &&
+            decoded.size() == m_length)
+        {
+            ArchiveCloseEntryStream(&m_stream);
+            m_streamOpen = false;
+            m_recoveredBytes = std::move(decoded);
+            m_memoryData = m_recoveredBytes.data();
+            m_memoryOpen = true;
+            m_position = encodedPosition;
+            m_hardReadFailure = false;
+            DebugLogWrite("INFO", "MFSTREAM", "RECOVERY_OK", "route=BUFFER | index=%u | offset=%llu", (unsigned)m_entryIndex, (unsigned long long)encodedPosition);
+            return true;
+        }
+        DebugLogWrite("WARN", "MFSTREAM", "RECOVERY_BUFFER_FAILED", "index=%u | reason=%s", (unsigned)m_entryIndex, error.c_str());
+    }
+
+    wchar_t archiveWide[MAX_PATH * 4]{};
+    int converted = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, m_archivePath.c_str(), -1, archiveWide, _countof(archiveWide));
+    if (!converted)
+        converted = MultiByteToWideChar(CP_ACP, 0, m_archivePath.c_str(), -1, archiveWide, _countof(archiveWide));
+    ArchiveEntry entry;
+    std::wstring cachePath;
+    if (!converted ||
+        !ArchiveUnifiedCache::LookupEntry(archiveWide, m_entryIndex, entry, error) ||
+        entry.size != m_length || entry.isEncrypted || entry.isFolder ||
+        !entry.isSupportedAudio || !settings.cacheLimitMb ||
+        entry.size > static_cast<uint64_t>(settings.cacheLimitMb) * 1024ull * 1024ull ||
+        !ArchiveUnifiedCache::Prepare(archiveWide, entry, settings, cachePath, error))
+    {
+        DebugLogWrite("WARN", "MFSTREAM", "RECOVERY_FAILED", "index=%u | route=NONE | reason=%s", (unsigned)m_entryIndex, error.c_str());
+        return false;
+    }
+    FILE* recovered = nullptr;
+    if (encodedPosition > static_cast<uint64_t>(INT64_MAX) ||
+        _wfopen_s(&recovered, cachePath.c_str(), L"rb") != 0 ||
+        !recovered ||
+        _fseeki64(recovered, static_cast<int64_t>(encodedPosition), SEEK_SET) != 0)
+    {
+        if (recovered)
+            fclose(recovered);
+        DebugLogWrite("WARN", "MFSTREAM", "RECOVERY_FAILED", "index=%u | route=CACHE | reason=cannot_seek", (unsigned)m_entryIndex);
+        return false;
+    }
+
+    ArchiveCloseEntryStream(&m_stream);
+    m_streamOpen = false;
+    m_recoveredFile = recovered;
+    m_recoveredPath = cachePath;
+    m_position = encodedPosition;
+    m_hardReadFailure = false;
+    DebugLogWrite("INFO", "MFSTREAM", "RECOVERY_OK", "route=CACHE | index=%u | offset=%llu", (unsigned)m_entryIndex, (unsigned long long)encodedPosition);
+    return true;
+}
 
 STDMETHODIMP ArchiveMFByteStream::QueryInterface(REFIID riid, void** ppv)
 {
@@ -300,7 +407,7 @@ STDMETHODIMP ArchiveMFByteStream::Read(BYTE* pb, ULONG cb, ULONG* pcbRead)
 
     EnterCriticalSection(&m_lock);
 
-    if (m_closed || (!m_streamOpen && !m_memoryOpen))
+    if (m_closed || (!m_streamOpen && !m_memoryOpen && !m_recoveredFile))
     {
         LeaveCriticalSection(&m_lock);
         return MF_E_SHUTDOWN;
@@ -328,13 +435,33 @@ STDMETHODIMP ArchiveMFByteStream::Read(BYTE* pb, ULONG cb, ULONG* pcbRead)
     size_t got = 0;
     if (m_memoryOpen)
     {
-        // m_length is size_t bounded by OpenMemory; m_position never exceeds it.
+        // m_length is size_t bounded by OpenMemory and recovered buffer size.
         memcpy(pb, m_memoryData + static_cast<size_t>(m_position), cb);
         got = cb;
     }
+    else if (m_recoveredFile)
+        got = fread(pb, 1, cb, m_recoveredFile);
     else
     {
-        got = ArchiveReadEntryStream(&m_stream, pb, cb);
+#if defined(AST_MF_TEST_FAULT_INJECTION)
+        wchar_t faultValue[32]{};
+        const DWORD n = GetEnvironmentVariableW(L"AST_MF_TEST_STREAM_FAIL_AFTER", faultValue, _countof(faultValue));
+        const uint64_t threshold = n > 0 && n < _countof(faultValue) ? _wcstoui64(faultValue, nullptr, 10) : 0;
+        if (threshold >= 4096 && m_position >= threshold)
+            DebugLogWrite("WARN", "MFSTREAM", "TEST_FAULT", "offset=%llu", (unsigned long long)m_position);
+        else
+#endif
+            got = ArchiveReadEntryStream(&m_stream, pb, cb);
+        if (got == 0 && cb > 0 && m_position < m_length && RecoverSourceAt(m_position))
+        {
+            if (m_memoryOpen)
+            {
+                memcpy(pb, m_memoryData + static_cast<size_t>(m_position), cb);
+                got = cb;
+            }
+            else if (m_recoveredFile)
+                got = fread(pb, 1, cb, m_recoveredFile);
+        }
     }
 
     if (got == 0 && cb > 0 && m_position < m_length)
@@ -467,7 +594,7 @@ STDMETHODIMP ArchiveMFByteStream::Seek(MFBYTESTREAM_SEEK_ORIGIN SeekOrigin, LONG
 {
     EnterCriticalSection(&m_lock);
 
-    if (m_closed || (!m_streamOpen && !m_memoryOpen))
+    if (m_closed || (!m_streamOpen && !m_memoryOpen && !m_recoveredFile))
     {
         LeaveCriticalSection(&m_lock);
         return MF_E_SHUTDOWN;
@@ -494,7 +621,10 @@ STDMETHODIMP ArchiveMFByteStream::Seek(MFBYTESTREAM_SEEK_ORIGIN SeekOrigin, LONG
         return E_INVALIDARG;
     }
 
-    bool ok = m_memoryOpen || ArchiveSeekEntryStream(&m_stream, (mz_uint64)target);
+    bool ok = m_memoryOpen ||
+        (m_recoveredFile && _fseeki64(m_recoveredFile, target, SEEK_SET) == 0) ||
+        (m_streamOpen && (ArchiveSeekEntryStream(&m_stream, (mz_uint64)target) ||
+                          RecoverSourceAt(static_cast<QWORD>(target))));
 
     if (!ok)
     {

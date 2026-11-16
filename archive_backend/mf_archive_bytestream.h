@@ -2,6 +2,9 @@
 
 #define NOMINMAX
 #include <windows.h>
+#include <cstdio>
+#include <string>
+#include <vector>
 #include <mfidl.h>
 #include <mfobjects.h>
 
@@ -28,6 +31,8 @@ public:
     bool OpenMemory(const void* data, size_t length, const wchar_t* virtualUrl, const wchar_t* mimeType);
 
     void CloseInternal();
+    // Must be called while holding m_lock; never restarts the MF reader.
+    bool RecoverSourceAt(QWORD encodedPosition);
 
     // IUnknown
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override;
@@ -95,6 +100,12 @@ private:
     const unsigned char* m_memoryData;
     bool m_hardReadFailure;
     bool m_readZeroLogged;
+    bool m_recoveryAttempted;
+    std::string m_archivePath;
+    mz_uint m_entryIndex;
+    std::vector<unsigned char> m_recoveredBytes;
+    FILE* m_recoveredFile;
+    std::wstring m_recoveredPath;
 
     QWORD m_length;
 

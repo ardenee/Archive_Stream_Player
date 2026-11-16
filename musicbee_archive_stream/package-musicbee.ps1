@@ -69,7 +69,10 @@ stream interruption: memory first, shared encoded cache last.
 OGG/Vorbis encoded-source recovery keeps the same BASS decoder open,
 switching to RAM then cache at the exact compressed-byte position.
 ZIP/7z/RAR fault-injection PCM and chained-OGG seek tests passed;
-Media Foundation midstream and real MusicBee GUI recovery remain open.
+Shared MF byte-stream AAC/M4A/WMA midstream recovery also passed
+ZIP/7z/RAR BUFFER/CACHE PCM-parity and 75-second seeking tests.
+The original MF decoder stays alive; no test fault hooks ship.
+Real MusicBee GUI/speaker recovery acceptance remains open.
 Real MusicBee solid-file GUI acceptance remains unverified because
 the DEV interactive desktop was unavailable.
 Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.
