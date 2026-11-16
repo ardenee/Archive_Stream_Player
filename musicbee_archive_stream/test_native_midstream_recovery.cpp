@@ -11,7 +11,8 @@
 
 int wmain(int argc,wchar_t** argv)
 {
-    if(argc!=4){puts("Usage: recover_probe.exe addon.dll member.ast decoded.pcm");return 2;}
+    const bool midseek = argc==5 && wcscmp(argv[4],L"midseek")==0;
+    if(argc!=4 && !midseek){puts("Usage: recover_probe.exe addon.dll member.ast decoded.pcm [midseek]");return 2;}
     if(!BASS_Init(0,44100,0,nullptr,nullptr)){printf("RECOVER_INIT_FAIL %d\n",BASS_ErrorGetCode());return 3;}
     HPLUGIN addon=BASS_PluginLoad(argv[1],BASS_UNICODE);
     if(!addon){printf("RECOVER_PLUGIN_FAIL %d\n",BASS_ErrorGetCode());return 4;}
@@ -23,9 +24,27 @@ int wmain(int argc,wchar_t** argv)
     if(_wfopen_s(&pcm,argv[3],L"wb")!=0||!pcm)return 7;
     std::vector<unsigned char> block(65536);
     uint64_t total=0;
+    uint64_t written=0;
     unsigned chunks=0;
+    bool jumped=false;
+    BASS_CHANNELINFO info{};
+    if(!BASS_ChannelGetInfo(channel,&info)||!info.chans)return 10;
     while(total<expected)
     {
+        if(midseek && !jumped && total>=4ULL*1024*1024)
+        {
+            const uint64_t bytesPerFrame=static_cast<uint64_t>(info.chans)*2;
+            uint64_t target=(expected/4)*3;
+            target-=target%bytesPerFrame;
+            if(!BASS_ChannelSetPosition(channel,target,BASS_POS_BYTE))
+            {
+                printf("RECOVER_NATIVE_MIDSEEK_FAIL pos=%llu error=%d\n",target,BASS_ErrorGetCode());
+                fclose(pcm);
+                return 11;
+            }
+            total=target;
+            jumped=true;
+        }
         const DWORD wanted=static_cast<DWORD>(std::min<uint64_t>(block.size(),expected-total));
         const DWORD got=BASS_ChannelGetData(channel,block.data(),wanted);
         if(got==0xFFFFFFFFu||got==0)
@@ -44,10 +63,14 @@ int wmain(int argc,wchar_t** argv)
         if(got>wanted){fclose(pcm);return 8;}
         if(fwrite(block.data(),1,got,pcm)!=got){fclose(pcm);return 9;}
         total+=got;
+        written+=got;
         ++chunks;
     }
     fclose(pcm);
-    printf("RECOVER_NATIVE_FULL_PCM_PASS bytes=%llu chunks=%u\n",total,chunks);
+    if(midseek && !jumped)return 12;
+    printf("RECOVER_NATIVE_FULL_PCM_PASS bytes=%llu chunks=%u\n",written,chunks);
+    if(midseek)
+        printf("RECOVER_NATIVE_MIDSEEK_PASS target_after_4mb=75pct total_output=%llu\n",written);
     BASS_StreamFree(channel);
     BASS_PluginFree(addon);
     BASS_Free();

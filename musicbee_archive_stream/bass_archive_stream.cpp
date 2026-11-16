@@ -200,13 +200,110 @@ static QWORD CALLBACK EncodedFileLength(void* user)
     return static_cast<ArchivePcm*>(user)->encodedSize;
 }
 
+// Called from BASS's compressed OGG file-user callbacks. Preserve the
+// existing Vorbis decoder/PCM timeline: move the encoded byte source at the
+// exact requested offset rather than restarting BASS at an approximate time.
+// Do not open another BASS decoder recursively from within this callback.
+static bool PrepareDiskLastAudio(const wchar_t* archivePath, const ArchiveEntry& entry,
+    const ArchiveAdapterPreferences& settings, std::wstring& cachePath, std::string& error);
+
+static bool RecoverOggEncodedSource(ArchivePcm* state, uint64_t offset)
+{
+    if (!state || state->format != AUDIO_FORMAT_OGG || !state->isStreaming ||
+        !state->firstRead || state->recoveryAttempted || state->archivePathUtf8.empty() ||
+        !state->encodedSize || offset >= state->encodedSize)
+        return false;
+
+    state->recoveryAttempted = true;
+    Trace("RECOVERY_START", "codec=OGG source=BASS_FILEUSER");
+    ArchiveAdapterPreferences preferences = ArchiveAdapterPreferencesLoad();
+#if defined(AST_NATIVE_TEST_HOOKS)
+    // Only test builds can force an otherwise memory-fitting OGG through
+    // the cache route. This is never part of production routing.
+    wchar_t overrideText[32]{};
+    const DWORD chars = GetEnvironmentVariableW(L"AST_NATIVE_TEST_MEMORY_MB", overrideText, std::size(overrideText));
+    if (chars > 0 && chars < std::size(overrideText))
+    {
+        const unsigned candidate = static_cast<unsigned>(_wcstoui64(overrideText, nullptr, 10));
+        if (candidate >= 1 && candidate <= preferences.memoryMb)
+            preferences.memoryMb = candidate;
+    }
+#endif
+    std::string error;
+    if (state->encodedSize <= static_cast<uint64_t>(preferences.memoryMb) * 1024u * 1024u)
+    {
+        std::vector<unsigned char> recovered;
+        if (ArchiveExtractEntryToMemory(state->archivePathUtf8.c_str(), state->entryIndex, recovered, error) &&
+            recovered.size() == state->encodedSize)
+        {
+            ArchiveCloseEntryStream(&state->stream);
+            state->isStreaming = false;
+            state->encoded = std::move(recovered);
+            state->memoryCursor = static_cast<size_t>(offset);
+            state->diskCached = false;
+            Trace("RECOVERY_OK", "codec=OGG route=BUFFER");
+            return true;
+        }
+        Trace("RECOVERY_BUFFER_FAIL", "codec=OGG");
+    }
+
+    wchar_t archiveWide[MAX_PATH * 4]{};
+    ArchiveEntry entry;
+    std::wstring path;
+    if (!CharPathToWidePath(state->archivePathUtf8.c_str(), archiveWide, std::size(archiveWide)) ||
+        !ArchiveUnifiedCache::LookupEntry(archiveWide, state->entryIndex, entry, error) ||
+        entry.size != state->encodedSize ||
+        !PrepareDiskLastAudio(archiveWide, entry, preferences, path, error))
+    {
+        Trace("RECOVERY_FAIL", "codec=OGG reason=cache_unavailable");
+        return false;
+    }
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"rb") != 0 || !file ||
+        offset > static_cast<uint64_t>(INT64_MAX) ||
+        _fseeki64(file, static_cast<int64_t>(offset), SEEK_SET) != 0)
+    {
+        if (file)
+            fclose(file);
+        Trace("RECOVERY_FAIL", "codec=OGG reason=cache_seek");
+        return false;
+    }
+    ArchiveCloseEntryStream(&state->stream);
+    state->isStreaming = false;
+    state->cachedEncodedFile = file;
+    state->cachedEncodedPath = path;
+    state->diskCached = true;
+    Trace("RECOVERY_OK", "codec=OGG route=CACHE");
+    return true;
+}
+
 static DWORD CALLBACK EncodedFileRead(void* buffer, DWORD length, void* user)
 {
     auto* state = static_cast<ArchivePcm*>(user);
     if (!state || !buffer)
         return 0;
     if (state->isStreaming)
-        return static_cast<DWORD>(ArchiveReadEntryStream(&state->stream, buffer, length));
+    {
+        DWORD read = 0;
+#if defined(AST_NATIVE_TEST_HOOKS)
+        wchar_t text[32]{};
+        const DWORD n = GetEnvironmentVariableW(L"AST_NATIVE_TEST_STREAM_FAIL_AFTER", text, std::size(text));
+        const uint64_t cutoff = n > 0 && n < std::size(text) ? _wcstoui64(text, nullptr, 10) : 0;
+        const bool injected = gInjectPlaybackReadFailure && cutoff >= 4096 &&
+            state->stream.position >= cutoff;
+        if (injected)
+            Trace("RECOVERY_TEST_FAULT", "codec=OGG");
+        else
+#endif
+            read = static_cast<DWORD>(ArchiveReadEntryStream(&state->stream, buffer, length));
+        if (read || state->stream.position >= state->encodedSize)
+            return read;
+        const uint64_t failedOffset = state->stream.position;
+        if (!RecoverOggEncodedSource(state, failedOffset))
+            return 0;
+        // Re-enter exactly once now that the source is RAM or cache.
+        return EncodedFileRead(buffer, length, user);
+    }
     if (state->cachedEncodedFile)
         return static_cast<DWORD>(fread(buffer, 1, length, state->cachedEncodedFile));
     if (state->memoryCursor >= state->encoded.size())
@@ -223,7 +320,12 @@ static BOOL CALLBACK EncodedFileSeek(QWORD position, void* user)
     if (!state || position > state->encodedSize)
         return FALSE;
     if (state->isStreaming)
-        return ArchiveSeekEntryStream(&state->stream, position) ? TRUE : FALSE;
+    {
+        if (ArchiveSeekEntryStream(&state->stream, position))
+            return TRUE;
+        // A failed compressed seek must not reposition PCM inaccurately.
+        return RecoverOggEncodedSource(state, position) ? TRUE : FALSE;
+    }
     if (state->cachedEncodedFile)
         return _fseeki64(state->cachedEncodedFile, static_cast<int64_t>(position), SEEK_SET) == 0 ? TRUE : FALSE;
     if (position > state->encoded.size())
@@ -246,9 +348,6 @@ static HSTREAM OpenArchiveHostDecoder(ArchivePcm* state)
     gOpeningNestedFile = false;
     return stream;
 }
-
-static bool PrepareDiskLastAudio(const wchar_t* archivePath, const ArchiveEntry& entry,
-    const ArchiveAdapterPreferences& settings, std::wstring& cachePath, std::string& error);
 
 static bool IsMediaFoundationFormat(AudioFormat format)
 {

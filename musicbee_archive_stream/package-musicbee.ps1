@@ -66,7 +66,10 @@ M4A/WMA enlarged-container tests do not extend their audio duration.
 Chained OGG seek validation uses a valid multi-link, CRC-checked fixture.
 Native WAV, FLAC and MP3 can recover once after an unexpected decoded
 stream interruption: memory first, shared encoded cache last.
-Fault-injection PCM tests passed; real MusicBee GUI recovery remains open.
+OGG/Vorbis encoded-source recovery keeps the same BASS decoder open,
+switching to RAM then cache at the exact compressed-byte position.
+ZIP/7z/RAR fault-injection PCM and chained-OGG seek tests passed;
+Media Foundation midstream and real MusicBee GUI recovery remain open.
 Real MusicBee solid-file GUI acceptance remains unverified because
 the DEV interactive desktop was unavailable.
 Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.
