@@ -9,3 +9,4 @@ EXPORTS
     ArchiveStreamFormatNativeTitleW=_ArchiveStreamFormatNativeTitleW@12
     ArchiveStreamWriteNativeBufferedTracksW=_ArchiveStreamWriteNativeBufferedTracksW@8
     ArchiveStreamWriteNativeDiskLastTracksW=_ArchiveStreamWriteNativeDiskLastTracksW@8
+    ArchiveStreamWriteNativeDiskPcmTracksW=_ArchiveStreamWriteNativeDiskPcmTracksW@8

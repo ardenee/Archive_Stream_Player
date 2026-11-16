@@ -29,9 +29,11 @@ int wmain(int argc, wchar_t** argv)
     const bool allowSeven = argc == 6 && wcscmp(argv[5], L"seven") == 0;
     const bool allowBuffered = argc == 6 && wcscmp(argv[5], L"buffered") == 0;
     const bool allowDisk = argc == 6 && wcscmp(argv[5], L"disk") == 0;
-    if (argc == 6 && !allowPcm && !allowAudio && !allowFour && !allowSeven && !allowBuffered && !allowDisk)
+    const bool allowDiskPcm = argc == 6 && wcscmp(argv[5], L"diskpcm") == 0;
+    if (argc == 6 && !allowPcm && !allowAudio && !allowFour && !allowSeven && !allowBuffered && !allowDisk && !allowDiskPcm)
         return 2;
-    const char* exportName = allowDisk ? "ArchiveStreamWriteNativeDiskLastTracksW" :
+    const char* exportName = allowDiskPcm ? "ArchiveStreamWriteNativeDiskPcmTracksW" :
+        allowDisk ? "ArchiveStreamWriteNativeDiskLastTracksW" :
         allowBuffered ? "ArchiveStreamWriteNativeBufferedTracksW" :
         allowSeven ? "ArchiveStreamWriteNativeSevenCodecsW" :
         allowFour ? "ArchiveStreamWriteNativeFourCodecsW" :
@@ -42,7 +44,7 @@ int wmain(int argc, wchar_t** argv)
         return 6;
     const int n = scan(argv[2], argv[3]);
     int expected = _wtoi(argv[4]);
-    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowDisk ? "disk" : allowBuffered ? "buffered" : allowSeven ? "seven" : allowFour ? "four" : allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
+    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowDiskPcm ? "diskpcm" : allowDisk ? "disk" : allowBuffered ? "buffered" : allowSeven ? "seven" : allowFour ? "four" : allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
     if (n != expected)
         return 7;
     int files = 0;

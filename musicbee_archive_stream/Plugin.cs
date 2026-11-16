@@ -40,6 +40,10 @@ namespace MusicBeePlugin
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int WriteNativeDiskLastTracks(string archive, string folder);
 
+        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeDiskPcmTracksW",
+            CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        private static extern int WriteNativeDiskPcmTracks(string archive, string folder);
+
         [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamFormatNativeTitleW",
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int FormatNativeTitle(string virtualPath, StringBuilder output, uint capacity);
@@ -156,7 +160,7 @@ namespace MusicBeePlugin
             info.Author = "Archive Stream Player";
             info.TargetApplication = "";
             info.VersionMajor = 1;
-            info.VersionMinor = 9;
+            info.VersionMinor = 10;
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
@@ -365,7 +369,14 @@ namespace MusicBeePlugin
                 {
                     try
                     {
-                        count = WriteNativeDiskLastTracks(archive, folder);
+                        try
+                        {
+                            count = WriteNativeDiskPcmTracks(archive, folder);
+                        }
+                        catch (EntryPointNotFoundException)
+                        {
+                            count = WriteNativeDiskLastTracks(archive, folder);
+                        }
                     }
                     catch (EntryPointNotFoundException)
                     {
