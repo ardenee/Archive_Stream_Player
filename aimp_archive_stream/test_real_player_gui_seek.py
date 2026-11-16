@@ -29,6 +29,9 @@ import win32con
 ROOT=Path(__file__).resolve().parents[1]
 INSTALL=Path(r"D:\Temp\ArchiveStreamPlayerAdapters")
 AUDIO=Path(r"C:\audiotest\01.MP3File.mp3")
+FAULT_ROUTE=os.environ.get("AST_AIMP_GUI_FAULT_ROUTE","")
+FAULT_MODE=os.environ.get("AST_AIMP_GUI_FAULT_MODE","read")
+assert FAULT_ROUTE in ("","memory","cache") and FAULT_MODE in ("read","seek")
 USER32=ctypes.windll.user32
 USER32.SendMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
 USER32.SendMessageW.restype=ctypes.c_ssize_t
@@ -67,7 +70,7 @@ def ipc(window, query):
 
 def run(arch):
     src=INSTALL/("aimp-"+arch+"-portable")/"AIMP"
-    dll=ROOT/"aimp_archive_stream"/("Release" if arch=="x86" else "x64/Release")/"aimp_archive_stream.dll"
+    dll=(Path(os.environ.get("ARCHIVE_AIMP_FAULT_TEST_BIN_DIR",r"D:\Temp\ArchiveStreamAimpFaultTest"))/("Win32" if arch=="x86" else "x64")/"aimp_archive_stream.dll" if FAULT_ROUTE else ROOT/"aimp_archive_stream"/("Release" if arch=="x86" else "x64/Release")/"aimp_archive_stream.dll")
     assert (src/"AIMP.exe").is_file() and dll.is_file() and AUDIO.is_file()
     with tempfile.TemporaryDirectory(prefix="AST-AIMP-Host-"+arch+"-",dir=r"D:\Temp") as folder:
         qa=Path(folder)
@@ -85,6 +88,8 @@ def run(arch):
         env.update(APPDATA=str(qa/"Roaming"),LOCALAPPDATA=str(qa/"Local"),
                    TEMP=str(qa/"Temp"),TMP=str(qa/"Temp"),
                    ARCHIVE_STREAM_ADAPTER_DEBUG="1")
+        if FAULT_ROUTE:
+            env.update(AST_AIMP_FAULT_MODE=FAULT_MODE,AST_AIMP_FAULT_MEMORY_MB="50" if FAULT_ROUTE=="memory" else "1")
         proc=None
         try:
             proc=subprocess.Popen([str(dest/"AIMP.exe"),"/ADD_PLAY",str(archive)],
@@ -124,10 +129,16 @@ def run(arch):
             assert log.is_file(),"Missing opt-in native AIMP route log"
             trace=log.read_text(encoding="utf-8-sig",errors="replace")
             assert "EXPAND_OK" in trace and "ROUTE_STREAM" in trace,trace[-1500:]
-            assert not re.search(r"\bROUTE_CACHE\b",trace),trace[-1500:]
-            print("AIMP_REAL_NATIVE_GUI_SEEK_RESUME_DIRECT_STREAM_PASS",arch,
-                  f"position_ms={first}->{before}->{jumped}->{after}",
-                  f"duration_s={duration}","cache=0",flush=True)
+            if FAULT_ROUTE:
+                assert "STREAM_RECOVER_OK" in trace and ("route="+FAULT_ROUTE) in trace,trace[-1500:]
+                assert ("ROUTE_MEMORY" if FAULT_ROUTE=="memory" else "ROUTE_CACHE") in trace,trace[-1500:]
+                print("AIMP_REAL_NATIVE_RECOVERY_GUI_SEEK_PASS",arch,"mode="+FAULT_MODE,"route="+FAULT_ROUTE,
+                      f"position_ms={first}->{before}->{jumped}->{after}","http=0",flush=True)
+            else:
+                assert not re.search(r"\bROUTE_CACHE\b",trace),trace[-1500:]
+                print("AIMP_REAL_NATIVE_GUI_SEEK_RESUME_DIRECT_STREAM_PASS",arch,
+                      f"position_ms={first}->{before}->{jumped}->{after}",
+                      f"duration_s={duration}","cache=0",flush=True)
         finally:
             if proc and proc.poll() is None:
                 proc.terminate()
@@ -143,7 +154,10 @@ def main():
                           capture_output=True,text=True).stdout.lower().count("aimp.exe")>0:
             raise SystemExit("AIMP is already running; refusing to disturb the user process")
         run(arch)
-    print("AIMP_X86_X64_NATIVE_GUI_SEEK_VERIFIED_PASS",flush=True)
+    if FAULT_ROUTE:
+        print("AIMP_X86_X64_NATIVE_RECOVERY_GUI_SEEK_VERIFIED_PASS mode="+FAULT_MODE+" route="+FAULT_ROUTE,flush=True)
+    else:
+        print("AIMP_X86_X64_NATIVE_GUI_SEEK_VERIFIED_PASS",flush=True)
 
 if __name__=="__main__":
     main()
