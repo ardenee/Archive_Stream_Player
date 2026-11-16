@@ -1,48 +1,47 @@
-# Archive Stream Player — player setup
+# Archive Stream Player — installation
 
-Archive Stream Player offers native player plugins wherever the host supports them, with a compatibility playlist mode for other configurations.
+## One installer, multiple players
 
-## Choosing an integration
+Use **ArchiveStreamPlayer-Setup.exe**, built with Inno Setup 7 from \`installer/build-installer.ps1\`.
 
-| Player | How it connects |
-| --- | --- |
-| **Winamp 32-bit** | Native input and archive playlist plugins |
-| **foobar2000 32/64-bit** | Native component |
-| **WACUP 32-bit** | Winamp-compatible native plugins |
-| **WACUP 64-bit** | Compatibility playlist |
-| **AIMP 32/64-bit** | Native plugin |
-| **XMPlay 32-bit** | Archive plugin for 7z/RAR; XMPlay's own ZIP support for compatible ZIP files |
-| **MusicBee 32-bit** | Native archive audio plugin and Tools integration |
-| **MediaMonkey 5 / 2024** | Two companion add-ons for native-first playback |
-| **VLC 3 64-bit** | Native access package and archive launcher |
-| **Windows Media Player** | Experimental compatibility playlist |
+1. Start setup and choose the players you want.
+2. Installed, compatible players are detected and selected automatically.
+3. For a portable player, tick its entry and browse to the folder containing its executable.
+4. Close the players before Setup copies their native plugin files.
+5. Restart the selected players. Use **Configure Archive Stream Player** from the Start Menu to adjust shared settings.
 
-## Getting started
+The installer blocks selecting a folder containing the wrong 32/64-bit player executable.
 
-Build or install the integration for your player, choose a ZIP, 7z or RAR archive, and add its audio entries to the player's playlist. Compatible native integrations read tracks directly from the archive. Some formats use the compatibility mode automatically.
+## Player-specific notes
 
-The following package builders are included with the source:
+- **Winamp 32-bit and WACUP 32-bit:** input playback and playlist expansion plugins are installed together.
+- **foobar2000 32/64-bit:** installs the matching native component. Choose the correct executable folder, including when running a portable copy.
+- **AIMP 32/64-bit:** installs the matching native archive plugin.
+- **XMPlay 32-bit:** installs the 7z/RAR archive plugin. XMPlay's built-in ZIP engine operates independently of Archive Stream's shared settings.
+- **MusicBee 32-bit:** installs the BASS archive module and Tools menu plugin; do not manually replace MusicBee's own BASS runtime.
+- **MediaMonkey 5/2024:** the installer puts **two MMIP packages** in the Archive Stream Player program folder. Open MediaMonkey → Tools → Addons → Add and install **both** packages. The host must approve them; ordinary file copying alone is not sufficient.
+- **VLC 3 64-bit:** installs an external archive-access module and **Open an archive in VLC** Start Menu shortcut. VLC's installed program files are not modified.
+- **WACUP 64-bit:** no native plugin. Compatibility-playlist mode remains separate.
+- **Windows Media Player:** experimental; not part of the selectable native installer.
 
-- **foobar2000:** `foo_archive_stream/package-foobar.ps1`
-- **MusicBee:** `musicbee_archive_stream/package-musicbee.ps1`
-- **MediaMonkey:** `mediamonkey_archive_stream/package-mmip.ps1` and `mediamonkey_archive_stream/package-native-addon.ps1` (install both)
-- **VLC:** `vlc_archive_stream/package-native-vlc.ps1`
-- **Other supported players:** `archive_player_bridge/package-native-adapters.ps1` and the appropriate native plugin project
+## Shared controls
 
-A complete set of public, ready-made installers is not yet available. See the relevant player folder for its source and package scripts.
+When Archive Stream handles the archive, one shared settings page controls password prompts and optional saved passwords, memory allocation, managed encoded-audio cache and cleanup, title templates and logging.
 
-## Playback and settings
+Playback priority is **direct stream → memory → cache**. Cache is the last resort, not the default. Saved passwords are plaintext and require explicit consent.
 
-The shared playback order is **direct archive stream → bounded memory → reusable managed cache**. Cache files contain extracted audio entries, not the contents of an entire album. You can set a memory limit, manage or clear the cache, choose title presets, configure passwords and enable optional logging.
+The plugin works with ZIP, 7z and RAR/RAR5, including common encrypted, solid and multi-part archives. An incorrect password, missing volume, unsupported compression method or a song larger than the allowed RAM/cache may prevent playback.
 
-Encrypted archives prompt for a password when needed. Saving a password requires your consent. Supported codecs and archive layouts depend on the player.
+## For developers
 
-## Known limitations
+Build each native plugin first, then run:
 
-- WACUP 64-bit uses the compatibility path rather than the 32-bit Winamp input plugin.
-- XMPlay can use its own ZIP handling, which does not use every Archive Stream preference.
-- Some hosts cannot change already-queued track titles without readding or reloading the playlist.
-- Windows Media Player support is experimental.
-- Unsupported archive and codec combinations may use a fallback or be rejected.
+\`\`\`powershell
+.\installer\build-installer.ps1
+\`\`\`
 
-See the [feature matrix](FEATURE-MATRIX.md) and [third-party licensing information](third_party/README.md).
+Output: \`installer\output\ArchiveStreamPlayer-Setup.exe\`.
+
+The compiler stages the Release binaries, MediaMonkey add-ons and required third-party licence notices into the installer. Runtime archive libraries are statically linked. The build script deliberately does not include any private QA material.
+
+[Project homepage](https://www.arden.ie/projects/archive-stream-player/) · [Feature matrix](FEATURE-MATRIX.md) · [Licensing](LICENSING.md)

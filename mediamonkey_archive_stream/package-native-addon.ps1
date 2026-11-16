@@ -35,61 +35,31 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'LICENSING.md') -Destination (Join-Path $stage 'LICENSING.md')
     Copy-Item -LiteralPath (Join-Path $root 'third_party\README.md') -Destination (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
     @'
-Archive Stream Player - MediaMonkey 5/2024 JavaScript addon
+Archive Stream Player for MediaMonkey 5 / 2024
 
-Install through MediaMonkey: Tools > Addons > Add, select the .mmip, then
-restart MediaMonkey (or reload the window when asked).
+Install BOTH MediaMonkey companion packages in:
+  MediaMonkey > Tools > Addons > Add
 
-Four Tools menu items:
-  Archive Stream: Add Archive Audio... (native-first)
-  Archive Stream: Add Archive Audio (HTTP compatibility)...
-  Archive Stream: Settings...
-  Archive Stream: Refresh Queued Titles
+  ArchiveStreamPlayer-MediaMonkey5.mmip
+  ArchiveStreamPlayer-MediaMonkey5-Native.mmip
 
-Native mode requires the MATCHING x86 in_archive_stream.dll installed in
-MediaMonkey's Plugins folder using the companion MediaMonkey5 input MMIP.
-The launcher checks its SHA-256 against the matching DLL bundled here.
-Missing/different DLLs retain the existing authenticated loopback HTTP mode.
-Native ZIP/7z/RAR listing uses the static backend to generate small .ast
-track references; MediaMonkey's native input decoder streams compressed
-archive entries directly, falling back to bounded RAM or managed cache only
-when required. No HTTP listener or extracted audio file in native mode.
-The addon never installs the obsolete Winamp general-purpose expander.
-Use the explicit HTTP compatibility menu action if needed.
-The original audio files and their embedded tags are not modified.
-Existing titles are refreshed from authenticated bridge playlists only for
-single-entry archive sessions. The third Tools action can refresh immediately.
-Multi-entry sessions retain their existing row titles to protect playback;
-new tracks still use the configured shared title template. No tags are changed.
-For validated native .ast sessions only, unknown Now Playing track durations
-are synchronized from the verified player length to enable GUI seek bars.
-This never changes real music-library tracks, tags or persisted metadata.
-Single-entry ZIP MP3 title refresh passed real portable MediaMonkey 2024 QA.
-MP3/OGG/FLAC/WAV/WMA/M4A/AAC ZIP streams pass real-host playback and
-GUI seek/resume acceptance. Vorbis duration is obtained via bounded archive
-stream header/tail reads when safe, allowing direct OGG seeking without
-extracting. Synthetic AES non-solid 7z plays/seeks through direct stream.
-Synthetic encrypted RAR5 plays/seeks using bounded RAM fallback if direct
-streaming is unsupported. The real host passed password entry, cancellation
-for both formats, and wrong-password rejection for RAR5 without saving keys.
-First-use encrypted RAR5 filenames also pass native password entry, queue,
-playback/seek, cancellation and wrong-password rejection without saved keys.
-Four-volume encrypted-filename RAR5 AAC and two-track solid encrypted RAR5
-MP3/AAC pass real native GUI seeks with memory fallback and no HTTP/cache.
-The addon synchronizes only verified temporary .ast track durations after
-stable playback, avoiding a previous track's duration on fast switches.
-A process-local ARCHIVE_STREAM_RAR_PASSWORD_LIST absolute path may be used
-to isolate the native decoder password list without modifying HKCU.
-Other archive layouts use the shared stream -> memory -> cache policy.
+Restart MediaMonkey. Use Tools > Archive Stream: Add Archive Audio
+to add tracks from ZIP, 7z and RAR archives to Now Playing.
 
-Native manifest files and HTTP bridge sessions end when MediaMonkey closes
-(after a short grace period), or automatically after at most two hours.
-The native manifest helper exits before starting any listening socket.
-Host playback is not yet certified
-for every codec/archive/encryption format. Archive files are never modified.
+Supported audio: MP3, WAV, FLAC, OGG Vorbis, AAC, M4A and WMA.
+The native plugin provides archive playback; the optional compatibility
+menu item can be used for other configurations.
 
-Shared preferences live at HKCU\Software\ArchiveStreamPlayer\Adapters.
-Debug tracing is opt-in; it does not log passwords or bridge session tokens.
+Set passwords, RAM, managed cache, title presets and logging through
+Archive Stream Settings. The original archives and music tags are not
+modified. Existing multi-track playlist titles may need to be re-added
+after changing a title preset.
+
+Project homepage:
+https://www.arden.ie/projects/archive-stream-player/
+
+Original project source uses the MIT License. Third-party licences
+remain in force; see THIRD-PARTY-NOTICES.md.
 '@ | Set-Content -LiteralPath (Join-Path $stage 'INSTALL.txt') -Encoding UTF8
     New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
     $target = Join-Path $OutputFolder 'ArchiveStreamPlayer-MediaMonkey5-Native.mmip'

@@ -36,88 +36,31 @@ try {
     Copy-Item -LiteralPath (Join-Path $repo 'third_party\unrar\license.txt') -Destination (Join-Path $thirdPartyNotices 'unrar')
     Copy-Item -LiteralPath (Join-Path $repo 'third_party\zlib\LICENSE') -Destination (Join-Path $thirdPartyNotices 'zlib')
     @'
-Archive Stream Player - MusicBee 3.7 (32-bit only)
+Archive Stream Player for MusicBee 3.7 (32-bit)
 
-INSTALL
-Extract the contents of this ZIP into the MusicBee application folder:
-C:\Program Files (x86)\MusicBee\
-
-Main binaries have this layout (Notices includes required licence texts):
-  bass_archive_stream.dll
+Install this package into the MusicBee application folder:
+  bass_archive_stream.dll            (MusicBee application root)
   Plugins\MB_ArchiveStream.dll
   Plugins\archive_player_bridge.exe
   Plugins\configure-adapters.ps1
 
-Do not place bass_archive_stream.dll inside Plugins. The native add-on is
-loaded by the existing 32-bit BASS runtime inside MusicBee. Do not overwrite
-MusicBee's own bass.dll or install/redistribute a separate BASS runtime.
+Restart MusicBee. Choose Tools > Archive Stream: Add Archive Audio
+to open a ZIP, 7z or RAR album, or use the Archive Stream Settings command.
 
-Restart MusicBee, then use Tools > Archive Stream: Add Archive Audio...
-or Tools > Archive Stream: Settings...
+Play MP3, WAV, FLAC, OGG Vorbis, AAC, M4A and WMA. Supported solid
+or encrypted archives may use memory or the managed cache when direct
+streaming is not available. Passwords are stored only with permission.
+Changing title preferences for existing MusicBee queue entries may
+require re-adding those entries.
 
-NATIVE MODE
-Streamable MP3, PCM16 WAV, FLAC16/24, OGG/Vorbis, AAC,
-M4A and WMA play natively inside ZIP, non-solid 7z and RAR archives.
-Solid 7z and RAR MP3/OGG entries may also play from bounded RAM.
-Oversized unencrypted FLAC, PCM16 WAV, MP3, OGG/Vorbis, AAC, M4A
-and WMA may use the shared encoded cache after stream/RAM fail, if
-CacheLimitMB permits. All seven passed standalone cache/PCM/seek tests.
-M4A/WMA enlarged-container tests do not extend their audio duration.
-Chained OGG seek validation uses a valid multi-link, CRC-checked fixture.
-Native WAV, FLAC and MP3 can recover once after an unexpected decoded
-stream interruption: memory first, shared encoded cache last.
-OGG/Vorbis encoded-source recovery keeps the same BASS decoder open,
-switching to RAM then cache at the exact compressed-byte position.
-ZIP/7z/RAR fault-injection PCM and chained-OGG seek tests passed;
-Shared MF byte-stream AAC/M4A/WMA midstream recovery also passed
-ZIP/7z/RAR BUFFER/CACHE PCM-parity and 75-second seeking tests.
-The original MF decoder stays alive; no test fault hooks ship.
-Real MusicBee GUI/speaker recovery acceptance remains open.
-Real MusicBee solid-file GUI acceptance remains unverified because
-the DEV interactive desktop was unavailable.
-ZIP AES-256, AES 7z (visible/hidden filenames), and RAR5 (visible/
-hidden filenames) use native credential UI and shared password policy.
-Passwords are saved only with user consent after verified PCM decode.
-Wrong password or cancellation never starts an HTTP helper.
-All seven codecs passed synthetic encrypted archive PCM/seek tests;
-real isolated MusicBee GUI passed ZIP/7z/RAR5 password entry and playback,
-wrong/cancel rejection and explicit verified Save=Yes.
-Encrypted GUI seeking and speaker audibility are not yet certified.
-Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.
-AAC/M4A/WMA reuse Windows Media Foundation and the shared archive reader.
-No helper executable, HTTP listener or decoded-audio cache is used for
-these native routes. Small .ast path references are cleaned normally.
-Real MusicBee GUI seek/resume passed for all seven codecs across all
-three tested archive formats and a mixed seven-track playlist.
-Full MF PCM parity and chained Vorbis playback/seek tests also passed.
-ADTS AAC duration is computed from exact audio-frame counts.
-Newly queued native tracks display the shared TitleTemplate presets. The
-titles are applied to temporary .ast filenames without editing archives.
-Unsafe filename characters are replaced; duplicates remain unique.
-Changes to presets apply on the next queue, not existing rows.
-Unsupported encoded variants retain the compatibility route.
-COMPATIBILITY MODE
-Other codecs, unsupported encoded layouts or encryption modes, other solid entries,
-unsupported streaming layouts, or missing/unloadable BASS add-ons retain
-the established MusicBee compatibility bridge, which uses direct streaming
-first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; fallback OGG/FLAC/
-WAV/WMA/M4A need bounded temporary local files due to MusicBee host
-limitations. The bridge only binds to 127.0.0.1. Temporary media may persist
-after a crash and should be cleared from shared settings. A zero cache limit
-prevents the bridge's local fallback when the host requires it.
+Do not replace the MusicBee bass.dll or install another BASS runtime.
+The package does not include third-party BASS runtime binaries.
 
-Default saved passwords: %LOCALAPPDATA%\WinampArchiveStream\keeps.txt
-Shared settings: HKCU\Software\ArchiveStreamPlayer\Adapters
-Avoid sharing temporary tokenized HTTP playlist URLs publicly.
+Project homepage:
+https://www.arden.ie/projects/archive-stream-player/
 
-No BASS SDK headers/import library or bass.dll are included in this package.
-The Archive Stream source code uses MIT; third-party code retains its own
-licenses. See Notices/LICENSE, Notices/LICENSING.md and Notices/third_party.
-Libarchive, UnRAR and zlib upstream licence texts are included there.
-
-The tested native path verified host Playing state, advancing position, and
-streaming PCM delivery; a full audible speaker and native GUI seek certification
-for every codec and archive layout is not yet claimed.
+The original project code is MIT-licensed. See Notices for the
+licence of the included third-party sources.
 '@ | Set-Content -LiteralPath (Join-Path $stage 'INSTALL.txt') -Encoding ASCII
 
     New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null

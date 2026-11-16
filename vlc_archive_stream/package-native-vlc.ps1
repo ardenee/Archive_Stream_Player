@@ -25,69 +25,29 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'LICENSING.md') -Destination (Join-Path $stage 'LICENSING.md')
     Copy-Item -LiteralPath (Join-Path $root 'third_party\README.md') -Destination (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
     @'
-Archive Stream Player - VLC 3.0 x64 native archive access module
+Archive Stream Player for VLC 3 (64-bit)
 
-The built-in VLC archive handling does not support every tested 7z layout.
-This pack includes a versioned v1.3 native access DLL for in-process
-album enumeration and playback, the legacy external builder for older
-native DLLs, and HTTP fallback for explicitly requested/incompatible hosts.
+Extract the package to a writable folder; no change to VLC's
+installation directory is required.
 
-Tested: isolated VLC 3.0.24 x64 on Windows 11. No external archive DLLs.
-Do not install into VLC 4, 32-bit VLC, or an untested build without QA.
+Use the archive launcher in this folder to open a ZIP, 7z or RAR album:
 
-Extract this package anywhere writable; no modification to your installed VLC is needed:
-- plugins\access\libarchive_stream_plugin.dll is loaded as an external VLC module through VLC_PLUGIN_PATH
-- vlc_native_playlist.exe -> older native DLL compatibility (not required by v1.1+)
-- launch-archive.ps1, configure-adapters.ps1 -> same folder as builder
-- x64\Release\archive_player_bridge.exe -> same folder hierarchy as launcher
+  powershell -File .\launch-archive.ps1 -Player VLC
+    -PlayerPath "C:\Path\To\VLC\vlc.exe" -Archive "C:\Music\album.7z"
 
-Simply keep the files in this extracted folder and pass -PlayerPath to your
-VLC 3 x64 executable. The launcher sets VLC_PLUGIN_PATH for its child process
-and restores the caller's original environment immediately afterward. It
-can alternatively use a DLL already installed in VLC/plugins/access. It is
-not necessary to copy DLLs into Program Files or use elevation.
+VLC plays the audio using its own codecs. Archive Stream supplies the
+ZIP/7z/RAR reader, encrypted archive passwords, streaming, RAM and
+managed-cache fallbacks, and album playlists.
 
-Launch, passing your exact VLC executable:
-powershell -File .\launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z"
+Use configure-adapters.ps1 to change shared settings. An explicit
+compatibility mode is available for older VLC versions where supported.
+VLC 4 and VLC 32-bit are not part of this native package.
 
-When a compatible v1.1+ DLL is available inside VLC or externally, the
-launcher opens ast://hexpath/list/album.m3u8 directly in VLC; album and
-tracks run in the same process with shared session password state.
-Older unversioned native DLLs use the packaged external builder.
-The v1.3 DLL also supports -MemoryMB (1..512), -CacheLimitMB
-(0..20480; 0 disables disk) and -TitleTemplate (the six shared title
-presets) natively. They apply only to the launched VLC process and do
-not update global HKCU settings. Real VLC 3.0.24 x64 passed two-track
-ZIP custom titles, solid 7z memory-limit fail-closed with cache disabled,
-and verified byte-identical disk fallback when a cache budget was allowed.
-Older DLLs keep HTTP for those per-launch flags; -UseHttpBridge forces HTTP.
-Older v1.1 native DLLs retain HTTP fallback for -PasswordList.
-With the included v1.3 DLL, native per-launch password lists work:
-powershell -File .\launch-archive.ps1 -Player VLC -PlayerPath "D:\Apps\VLC\vlc.exe" -Archive "D:\Audio\album.7z" -PasswordList "D:\Audio\passwords\keeps.txt"
-Create the destination parent folder first. The path is passed only to the
-VLC child process; the global settings registry is not changed.
-Passwords are saved in plaintext only after consent and verification.
+Project homepage:
+https://www.arden.ie/projects/archive-stream-player/
 
-Use -UseHttpBridge to force the prior HTTP scheme. When native setup is
-not installed or explicit HTTP is requested, or an older DLL receives
-memory/cache/title overrides, HTTP remains the
-working fallback (the bundled bridge EXE is included for this reason).
-Settings and passwords follow the project shared adapter preferences.
-Generated small playlists contain archive paths and titles, never audio
-payloads or passwords. They are under your local ArchiveStreamPlayer data.
-Real VLC 3.0.24 passed 7z and RAR5 data/header encryption with credential
-entry, Save=No and exact PCM; Cancel and wrong passwords produce no audio.
-RAR5 encrypted entries use RAM, not unsupported libarchive encrypted streaming.
-Actual launcher tests also passed two-track header-encrypted 7z and RAR5
-albums with a single prompt per album, no HTTP or disk, and unchanged
-password lists. For v1.2+, -PasswordList remains native instead of HTTP;
-real two-track encrypted-header 7z/RAR5 launcher tests passed Save=Yes,
-wrong+Yes and Cancel with only verified saves to a disposable plaintext
-list, no HKCU changes. Physical speaker audio remains unverified.
-
-The VLC official SDK headers are not redistributed here.
-Source + build instructions: repository vlc_archive_stream/README.md
-Original project code MIT; bundled third-party libraries retain licenses.
+Our original source code is MIT-licensed. Third-party licences remain
+in force; see LICENSING.md and THIRD-PARTY-NOTICES.md.
 '@ | Set-Content -LiteralPath (Join-Path $stage 'INSTALL.txt') -Encoding UTF8
     New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
     $name = Join-Path $OutputFolder 'ArchiveStreamPlayer-VLC3-x64.zip'
