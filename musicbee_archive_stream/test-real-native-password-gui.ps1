@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$BassCoreSdkRoot,
     [ValidateSet('zip','7z','rar')][string]$ArchiveKind='7z',
     [switch]$EncryptedHeaders,
+    [switch]$RequireGuiSeek,
     [ValidateSet('accept','save','wrong','cancel')][string]$Mode='accept',
     [string]$SevenZipExe='C:\Program Files\7-Zip\7z.exe',
     [string]$RarExe='C:\Program Files\WinRAR\Rar.exe'
@@ -10,7 +11,7 @@ param(
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $old=@{}
-foreach($k in @('AST_MUSICBEE_GUI_ARTIFACT_DIR','AST_NATIVE_ARCHIVE_TEST_PATH','AST_NATIVE_CODEC','AST_GUI_SYNTHETIC_PASSWORD','AST_GUI_PASSWORD_MODE')){
+foreach($k in @('AST_MUSICBEE_GUI_ARTIFACT_DIR','AST_NATIVE_ARCHIVE_TEST_PATH','AST_NATIVE_CODEC','AST_GUI_SYNTHETIC_PASSWORD','AST_GUI_PASSWORD_MODE','AST_GUI_REQUIRE_SEEK')){
     $old[$k]=[Environment]::GetEnvironmentVariable($k)
 }
 $workspace=Join-Path $env:TEMP ('ArchiveStreamMusicBeePasswordGui-'+[Guid]::NewGuid().ToString('N'))
@@ -22,6 +23,9 @@ try {
     $env:AST_MUSICBEE_GUI_ARTIFACT_DIR=$workspace
     $env:AST_NATIVE_CODEC='AAC'
     $env:AST_GUI_PASSWORD_MODE=$Mode
+    if($RequireGuiSeek){
+        $env:AST_GUI_REQUIRE_SEEK='1'
+    }
     $env:AST_GUI_SYNTHETIC_PASSWORD='MB-Gui-'+[Guid]::NewGuid().ToString('N')
     $source='C:\audiotest\07.AACFile.aac'
     Copy-Item $source (Join-Path $workspace 'track.aac')
