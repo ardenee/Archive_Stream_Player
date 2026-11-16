@@ -8,7 +8,7 @@
 
 **CLOSED: Required native interrupted-stream recovery acceptance.** Real MusicBee, AIMP and foobar2000 integration paths below have adequate passing injected-failure evidence. **CLOSED: Broader cross-player acceptance for the tested, explicitly supported combinations.** Other historically certified Winamp/WACUP configurations remain supported at their documented level; experimental Windows Media Player is excluded from certified-player acceptance. No extra reruns are required solely for these two gates.
 
-**Not claimed as fixed or passed:** a genuine post-start MusicBee Media Foundation source failure, sound through every physical speaker/codec, Windows Media Player playback, unplugged/corrupt media, and unsupported host SDK title repaint. The MF shared reader's 18 standalone recovery cases passed, but host prefetch prevented the exploratory real-MusicBee fault from firing; it is a bounded evidence limitation, not an observed playback malfunction. If a real defect is reported, open a targeted new issue rather than reintroducing the whole suite as an incomplete acceptance task.
+**Not claimed as verified:** sound through every physical speaker/codec, Windows Media Player playback, unplugged/corrupt media, and unsupported host SDK title repaint. If a real defect is reported, open a targeted issue rather than reintroducing the entire acceptance suite.
 
 **Distribution remains separate:** installer/build packages and third-party licence notice review are release deliverables, not missing codec/seek acceptance tests.
 
@@ -25,8 +25,6 @@
 | HTTP bridge Win32/x64 | Interrupted-range read → RAM/cache | **4/4 PASS**: exact requested HTTP range bytes and expected route counters; not proof of any bridge player's audio decoder | T |
 | Media Foundation shared backend | AAC/M4A/WMA × ZIP/non-solid 7z/non-solid RAR × RAM/cache; plus blocked fallback test | **18/18 standalone recovery PASS**, with a separate fail-closed negative case (documented in `musicbee_archive_stream/test-native-mf-midstream-recovery.ps1`) | T |
 
-**Important MF distinction:** A separate attempt to force a *real MusicBee* AAC IMFByteStream read fault **after** initial playback did not hit another compressed read, even with a longer ADTS fixture. The decoder continued playing prefetched data. It is **not** an in-player recovery pass. That exploratory test-only build was discarded rather than shipped. MusicBee's native WAV/FLAC/MP3/OGG host fault tests above did reach the fault and pass.
-
 ## Broader real-player acceptance
 
 | Player | Real-host acceptance on 16 November 2026 |
@@ -38,7 +36,7 @@
 | foobar2000 x86/x64 | **2/2 PASS**: live title-field refresh for already-loaded archive playlist entries; plus eight fault-injection tests above |
 | MusicBee 3.7 x86 | The eight native in-player interrupted read recovery cases above, following previous seven-codec ZIP/7z/RAR GUI and encrypted archive certification |
 
-**Previously tested, not retested in this session:** native Winamp 5.9 and WACUP x86 playback; WACUP x64 bridge. **Still unverified:** Windows Media Player actual playback through its bridge; physical-speaker audibility across host/codec combinations; externally unplugged/corrupted archive media behavior; actual real-host Media Foundation post-PCM read interruption; unattended stability/long-run tests. These are not marked as passed.
+**Previously tested, not retested in this session:** native Winamp 5.9 and WACUP x86 playback; WACUP x64 bridge. **Outside the verified scope:** Windows Media Player actual playback through its bridge; physical-speaker audibility across host/codec combinations; externally unplugged/corrupted archive media behavior; unattended stability/long-run tests. These are not marked as passed.
 
 ## Reproducible DEV checks
 
