@@ -19,7 +19,7 @@ set(CPACK_RESOURCE_FILE_README ${zlib_SOURCE_DIR}/README)
 # configuration
 # ============================================================================
 
-option(ZLIB_BUILD_TESTING "Enable Zlib Examples as tests" ON)
+option(ZLIB_BUILD_TESTING "Enable Zlib Examples as tests" OFF)
 option(ZLIB_BUILD_SHARED "Enable building zlib shared library" ON)
 option(ZLIB_BUILD_STATIC "Enable building zlib static library" ON)
 option(ZLIB_INSTALL "Enable installation of zlib" ON)
@@ -302,9 +302,9 @@ endif(ZLIB_INSTALL)
 # ============================================================================
 # Tests
 # ============================================================================
-if(ZLIB_BUILD_TESTING)
+if(ZLIB_BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/CMakeLists.txt")
     enable_testing()
     add_subdirectory(test)
-endif(ZLIB_BUILD_TESTING)
+endif()
 
 add_subdirectory(contrib)

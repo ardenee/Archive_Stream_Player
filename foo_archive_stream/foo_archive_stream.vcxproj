@@ -91,7 +91,7 @@
   <ItemGroup>
     <ClCompile Include="foobar_adapter.cpp" />
     <ClCompile Include="foobar_archive_reader.cpp" />
-    <ClCompile Include="foobar_decode_test.cpp" />
+    <ClCompile Include="foobar_archive_verify.cpp" />
     <ClCompile Include="foobar_settings.cpp" />
     <ClCompile Include="foobar_preferences.cpp" />
     <ClCompile Include="foobar_title_provider.cpp" />
@@ -102,7 +102,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="foobar_archive_reader.h" />
-    <ClInclude Include="foobar_decode_test.h" />
+    <ClInclude Include="foobar_archive_verify.h" />
     <ClInclude Include="foobar_resource.h" />
     <ClInclude Include="foobar_settings.h" />
     <ClInclude Include="foobar_title_provider.h" />

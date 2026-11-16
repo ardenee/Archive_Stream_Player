@@ -182,10 +182,7 @@ unrar_static.lib
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="playback.cpp" />
   </ItemGroup>
-  <ItemGroup>
-    <None Include="test_pcm_output_writer.cpp" />
-    <None Include="test_pcm_output_writer.ps1" />
-  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\archive_backend\archive_backend.vcxproj">
       <Project>{dc0bf523-30b5-4444-b720-6dd924a1b282}</Project>

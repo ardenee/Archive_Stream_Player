@@ -35,14 +35,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="test_pcm_output_writer.cpp">
-      <Filter>Source Files</Filter>
-    </None>
-    <None Include="test_pcm_output_writer.ps1">
-      <Filter>Source Files</Filter>
-    </None>
-  </ItemGroup>
-  <ItemGroup>
     <ClCompile Include="dllmain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

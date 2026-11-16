@@ -223,8 +223,7 @@ static void LoadRarPasswords(RarPasswordContext& ctx)
     const char* passwordListPath = g_rarBackendPasswordListPath;
 
     
-    //    archive_backend_test.exe does not load the Winamp config UI,
-    //    so allow command-line/backend testing through an environment variable.
+    // Allow a process-specific password-list override without changing the shared settings.
     
     if (!passwordListPath || !passwordListPath[0])
     {

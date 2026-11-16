@@ -1,5 +1,5 @@
 #include <foobar2000/SDK/foobar2000.h>
-#include "foobar_decode_test.h"
+#include "foobar_archive_verify.h"
 #include "foobar_archive_reader.h"
 #include "debug_log.h"
 

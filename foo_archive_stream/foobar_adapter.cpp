@@ -6,7 +6,7 @@
 #include "archive_common.h"
 #include "foobar_settings.h"
 #include "foobar_archive_reader.h"
-#include "foobar_decode_test.h"
+#include "foobar_archive_verify.h"
 #include "foobar_title_provider.h"
 #include "debug_log.h"
 #include <commdlg.h>

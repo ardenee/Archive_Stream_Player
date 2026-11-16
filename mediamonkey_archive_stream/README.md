@@ -1,120 +1,36 @@
-# MediaMonkey 5 / MediaMonkey 2024 — Archive Stream Player
+# Archive Stream Player for MediaMonkey 5 / 2024
 
-Archive Stream Player now has **native-first playback** for MediaMonkey 5/2024.
-MediaMonkey's JavaScript Tools action enumerates ZIP, 7z and RAR archives with
-the statically linked archive backend, then queues tiny local `.ast` track
-references. The matching x86 Winamp-compatible `in_archive_stream.dll` input
-module accepts those references and decodes the compressed archive directly.
-No localhost HTTP listener or extracted audio file is needed in this mode.
+**Add songs directly from ZIP, 7z and RAR archives to MediaMonkey's playlist.**
 
-## Installation
+MediaMonkey uses a Tools-menu add-on together with a companion audio input plugin. Native playback is preferred; compatibility mode remains available for unsupported configurations.
 
-Build both companions from the repo root after compiling the Win32 input DLL
-and x64 bridge/listing executable:
+## Features
+
+- Browse an archive and add individual tracks to Now Playing.
+- Play supported MP3, FLAC, WAV, OGG, AAC, M4A and WMA entries.
+- Seek within tracks and use shared track-title presets.
+- Open supported encrypted, solid and multipart archives.
+- Configure shared passwords, memory, cache cleanup and logging.
+- Preserve the original archive and audio tags.
+
+## Install
+
+Create the two MediaMonkey packages from the repository root:
 
 ```powershell
 .\mediamonkey_archive_stream\package-mmip.ps1
 .\mediamonkey_archive_stream\package-native-addon.ps1
 ```
 
-Install both MMIPs through **MediaMonkey → Tools → Addons → Add**:
+In **MediaMonkey → Tools → Addons → Add**, install both:
 
-1. `ArchiveStreamPlayer-MediaMonkey5.mmip` — x86 input decoder registered in
-   MediaMonkey's Plugins directory.
-2. `ArchiveStreamPlayer-MediaMonkey5-Native.mmip` — Tools menu actions,
-   static listing executable and companion hash of the decoder.
+1. `ArchiveStreamPlayer-MediaMonkey5.mmip` — audio input plugin.
+2. `ArchiveStreamPlayer-MediaMonkey5-Native.mmip` — archive actions and companion tools.
 
-Restart MediaMonkey after installation. The add-on checks that the installed
-input DLL matches the companion included in its package (SHA-256) before using
-native playback. An old, absent, inaccessible or mismatched DLL automatically
-retains the previous authenticated loopback HTTP compatibility route. The Tools
-menu also has **Add Archive Audio (HTTP compatibility)** as an explicit override.
+Restart MediaMonkey, then use the Archive Stream command in its Tools menu to select an archive. An explicit compatibility option is available.
 
-No Winamp *general-purpose* plugin is installed: MediaMonkey 5 can load Winamp
-*input* modules but does not provide Winamp's general-plugin archive expansion.
+## Status
 
-## Native routing and lifecycle
+Native-first archive playback is working for the supported formats. Some layouts require fallback handling. Shared title presets apply when tracks are added; updating titles for an existing multi-track playlist may require readding it.
 
-- The native list-only helper runs `archive_player_bridge.exe --archive <file>
-  --native-manifest-dir <session-folder>` and **exits before creating any
-  network socket**. It writes one small `entry-<index>.ast` reference per
-  supported track and a local `archive-stream-native.m3u8` with shared titles.
-- Each reference contains `ARCHIVE_STREAM_NATIVE_TRACK_V1` followed by the
-  canonical archive/index/internal-name virtual path. It never contains decoded
-  audio, passwords or HTTP tokens. The Winamp-compatible input DLL validates
-  the signature, size and archive entry before invoking the existing decoder.
-- The decoder retains the shared policy: direct compressed archive stream
-  first, bounded RAM when streaming is impossible, managed cache only last.
-  Shared settings, logging, password handling and cache controls remain in the
-  static backend. Existing archive files and embedded tags are never edited.
-- The JavaScript add-on uses `app.player.addTracksAsync` and only accepts local
-  native references from the session directory reported by its launcher.
-  Previously queued tracks are not rewritten when title preferences change.
-- The launcher keeps native references alive while MediaMonkey is running
-  (maximum two hours), then deletes its session files. The HTTP compatibility
-  bridge retains its previous session handling.
-
-## Native PCM corruption prevention
-
-Winamp's output ABI (`third_party/winamp/OUT.H`) requires `Out_Module::Write` to
-receive no more than **8,192 bytes per call**. The return value **1** means the
-data was not accepted and must be retried; **0** means accepted. Ignoring this
-contract can produce initially clean audio followed by scrambling as the host
-output queue fills.
-
-The shared source `in_archive_stream/pcm_output_writer.h` now enforces this
-contract for native MP3, WAV, FLAC, OGG and MF AAC/M4A/WMA decoding. It also
-keeps complete interleaved PCM frames and stops sending stale samples on a
-seek/stop. Run `in_archive_stream/test_pcm_output_writer.cpp` on both Win32
-and x64 to verify exact received bytes under deliberately rejected writes,
-bad capacity and interrupted playback. The real Winamp and WACUP x86 PCM silent sinks verified 367,264 and 367,926
-source-identical samples respectively before/after seeking. Real MediaMonkey
-ZIP and RAR album tests confirm the first MP3 write is ≤8,192 bytes, with
-real player seek and progression. A separate post-fix native encrypted RAR5
-MP3 test passed password entry, 37→43-second playback, GUI seek to 223 seconds,
-resume to 228 seconds, bounded memory/no HTTP/cache, first accepted PCM write
-8192 bytes, and unchanged normal MediaMonkey profile. The test-only
-`AST_MM5_QA_AUTOPLAY=1` mode can avoid occasional missing accessibility rows
-in a fresh disposable MM5 surface without changing production queueing.
-
-**Real audible listening update (15 November 2026):** Following the PCM output
-fix, the user confirmed that playback sounded good for the entire observed
-session. Treat this as a **passed user listening check for that playback**, not
-as automated loopback capture or proof across all codecs, archives and seeks.
-The isolated host tests still run muted, so their clock progress alone is not
-audible evidence.
-
-## Actual host verification — 15 November 2026
-
-- ZIP, non-solid 7z and RAR5 each passed **two native MP3/OGG tracks** with real
-  MediaMonkey 2024 playing state, SDK seek to ~90 seconds and continuing
-  positions, direct archive streams and no HTTP/disk cache. Each used a unique
-  portable-profile clone, leaving normal MediaMonkey database and preferences
-  unchanged. Test: `test_real_native_manifest_album.py`.
-- The complete **packaged** add-on with matching staged input DLL passed
-  native ZIP MP3+OGG queue, title visibility, actual mouse-click seek and
-  resumed playback. The individual ZIP WAV and AAC native GUI tests also
-  passed. A combined seven-codec native ZIP test queued and played all seven;
-  the earlier combined sequence had WAV/AAC continuation-display failures,
-  but the post-PCM-fix **seven-track native ZIP run passed all 7/7 GUI seeks**
-  with 7 actual input decoder seek requests, all 3 MF seeks successful,
-  direct STREAM routing for each track, zero HTTP/cache and isolated cleanup.
-  Test: `test_native_portable_codecs.py`, using `AST_MM5_QA_NATIVE=1`.
-- `test_native_manifest_generator.py` validates 2-track ZIP/7z/RAR manifest
-  files with zero socket or decoded-audio generation.
-- `test_native_actions.js` checks native-path scope, malformed/untrusted
-  URLs, queue acknowledgement, HTTP compatibility, user cancellation and
-  shared settings.
-
-**Encrypted native RAR5 (15 November 2026):** First-use password dialogs and actual playback pass in MediaMonkey 2024 without HTTP for both encrypted MP3 (bounded memory; no cache) and encrypted AAC (originally managed cache; now bounded RAM when it fits). The input DLL runs in `MediaMonkeyEngine.exe`; no password was saved without consent. Since encrypted RAR5 streaming is not available for these members, do not label either case `STREAM`. AAC, WMA and M4A now use a shared memory-backed Media Foundation decoder when the entry fits the configured playback buffer. Cache remains available for larger entries. Native encrypted RAR5 **MP3** GUI seek/resume is certified (19→223→228s via bounded memory, no cache or HTTP). Native encrypted RAR5 AAC **SDK and graphical seek now both pass in real MediaMonkey 2024** with the packaged native addon. Two isolated player runs using `app.player.seekMSAsync(150000)` invoked `SEEK_REQUEST` and `MF_SEEK_DISPATCH`, returned successful `SEEK_READER_RETURN`, and advanced playback beyond 150 seconds (172s in the asserted run). The earlier cache-backed MF SourceReader reported 251,785ms duration; the new RAM-backed decoder also obtained valid duration and completed native SDK seeking. The true GUI failure was a mismatched queued Track: `app.player.trackLengthMS=251785` but its temporary `songLength=-1`, making the slider maximum -0.001 seconds. The production native add-on now synchronizes the verified duration **only for exact validated `.ast` paths it queued**, using in-memory `notifyChanged()` without `commitAsync` or tag writes. A real GUI slider click passed **48→160→166s**, with all native input/MF seek callbacks, zero HTTP/cache and unchanged original user profile. The earlier test-only `#EXTINF` override had not updated the queued Track. Run the isolated host with `AST_MM5_QA_NATIVE=1`, `AST_MM5_QA_AES=accept`, `AST_MM5_QA_ARCHIVE=rar`, `AST_MM5_QA_AES_CODEC=AAC`, `AST_MM5_QA_AUTOPLAY=1`, `AST_MM5_QA_SDK_SEEK=1` to verify without changing normal profile settings. Native encrypted-filename RAR5 **AAC and four-volume AAC** now independently pass native GUI seeking in real MediaMonkey 2024 (49→160→166s and 47→160→166s). A two-track encrypted-filename solid RAR5 also passes **MP3 15→222→228s and AAC 15→161→167s** with correct native decoder durations 350.173s/251.785s, two bounded-memory routes and no HTTP/cache. Input DLL duration is reset between tracks; the Tools add-on waits for stable playback and only corrects duration values it inserted. Native encrypted-header Cancel/wrong-password each fail closed. The native input supports an optional process-only ARCHIVE_STREAM_RAR_PASSWORD_LIST absolute-path override, which allows disposable QA to keep native/password-helper credentials away from global settings. Other untested encrypted archive combinations remain separate acceptance gates. Run the real host test with `AST_MM5_QA_NATIVE=1` `AST_MM5_QA_AES=accept` `AST_MM5_QA_ARCHIVE=rar` and `AST_MM5_QA_AES_CODEC=MP3` or `AAC`.
-
-**Native Media Foundation RAM routing (15 November 2026):** Real isolated MediaMonkey 2024 encrypted RAR5 AAC, WMA and M4A used `route=BUFFER` and `OPEN_MEMORY_OK`, with native password entry, 150s SDK seek/resume, **zero HTTP and zero managed disk cache**. WMA/M4A tests use shortened copies of DEV audio staged only inside disposable test folders. The shared byte stream borrows the bounded playback buffer without a separate Media Foundation-owned encoded-file copy (the existing extraction transfer still applies). Win32/x64 console PCM tests against the MF file decoder verified **6 MiB exact parity** across the three codecs, with start-of-track and post-30s-seek comparisons. Reproduce using `archive_backend_test.exe mfmemoryparity C:\audiotest\07.AACFile.aac` (also 05.WMAFile.wma / 06.M4AFile.m4a). Real player: `AST_MM5_QA_NATIVE=1`, `AST_MM5_QA_AES=accept`, `AST_MM5_QA_ARCHIVE=rar`, `AST_MM5_QA_AES_CODEC=AAC|WMA|M4A`, `AST_MM5_QA_AUTOPLAY=1`, `AST_MM5_QA_SDK_SEEK=1`; add `AST_MM5_QA_SHORT_MF=1` for WMA/M4A. GUI seeking for encrypted RAR5 AAC, WMA and M4A now passes with native add-on **v1.6.1** verified track-duration synchronization: AAC 50→160→166s, WMA 50→134→141s and M4A 49→134→140s. These are separate native real-host sessions with successful Media Foundation seek callbacks, zero HTTP/cache and unchanged personal profiles. SDK seeking and independent decoded PCM parity also pass.
-
-**Encrypted native 7z (15 November 2026):** Actual MediaMonkey 2024 showed a native archive password dialog hosted by `MediaMonkeyEngine.exe`. After entering a synthetic password, AAC played through direct AES+LZMA2 streaming, not HTTP or disk cache. The shared 7z reader now rejects an initial empty AES password during open, with full Win32/x64 layout regression coverage. **Native encrypted AAC GUI seek/resume now passes twice in the actual host:** after the Windows credential prompt, the test restores the maximized MediaMonkey window and clicks the actual seek bar. Both isolated sessions jumped from 43–44s to 162s, resumed at 167s, logged an input `SEEK_REQUEST`, a Media Foundation `MF_SEEK_DISPATCH` and a successful `SEEK_READER_RETURN`; zero HTTP/cache and no profile changes. The QA now refuses to call elapsed-clock movement a seek without the decoder events. Other encrypted RAR5/7z layouts still require separate native host acceptance; explicit HTTP compatibility remains available. QA: `test_native_portable_codecs.py` with `AST_MM5_QA_NATIVE=1` and `AST_MM5_QA_AES=accept`, plus `archive_backend_test/test_7z_encrypted_layouts.py`.
-
-**Still unverified:** all seven codecs across every archive type in native
-mode, all encrypted/multipart layouts through the new native host path,
-automatic repaint of already-queued native titles, audible speakers and
-full PCM-content parity of actual player output. Earlier encryption, title
-refresh and seven-codec HTTP integration tests remain valid for the explicit
-or automatically selected compatibility route.
+See the [project feature matrix](../FEATURE-MATRIX.md) and [licensing](../LICENSING.md).
