@@ -1,5 +1,5 @@
 // Official MusicBee v3.1+ plugin SDK partial class. No MusicBee SDK source is bundled.
-// Native bridge provides decoded archive bytes via loopback HTTP range reads.
+// Native BASS streams archive bytes directly; HTTP/local compatibility is retained.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -31,6 +31,10 @@ namespace MusicBeePlugin
         [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeSevenCodecsW",
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int WriteNativeSevenCodecs(string archive, string folder);
+
+        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamFormatNativeTitleW",
+            CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        private static extern int FormatNativeTitle(string virtualPath, StringBuilder output, uint capacity);
 
 
         private static readonly object traceLock = new object();
@@ -144,7 +148,7 @@ namespace MusicBeePlugin
             info.Author = "Archive Stream Player";
             info.TargetApplication = "";
             info.VersionMajor = 1;
-            info.VersionMinor = 6;
+            info.VersionMinor = 7;
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
@@ -263,10 +267,79 @@ namespace MusicBeePlugin
             return prepared;
         }
 
+        private static string SafeNativeTitleFileName(string title, int number, HashSet<string> used, string folder)
+        {
+            // MusicBee displays the basename of local temporary .ast tracks.
+            // Preserve the preset wherever Windows filenames permit; preserve
+            // playlist order separately from filename sorting.
+            var clean = new StringBuilder();
+            char[] invalid = Path.GetInvalidFileNameChars();
+            foreach (char c in title)
+            {
+                if (Char.IsControl(c) || Array.IndexOf(invalid, c) >= 0)
+                    clean.Append('-');
+                else
+                    clean.Append(c);
+            }
+            string basename = clean.ToString().Trim().TrimEnd('.');
+            if (basename.Length == 0)
+                basename = "Archive Track " + number;
+            if (basename.Length > 96)
+            {
+                basename = basename.Substring(0, 96).TrimEnd(' ', '.');
+                if (basename.Length > 0 && Char.IsHighSurrogate(basename[basename.Length - 1]))
+                    basename = basename.Substring(0, basename.Length - 1);
+            }
+            string firstPart = basename.Split('.')[0];
+            string upper = firstPart.ToUpperInvariant();
+            if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" ||
+                (upper.Length == 4 && (upper.StartsWith("COM") || upper.StartsWith("LPT")) && upper[3] >= '1' && upper[3] <= '9'))
+                basename = "_" + basename;
+
+            string filename = basename + ".ast";
+            int duplicate = 0;
+            while (used.Contains(filename) || File.Exists(Path.Combine(folder, filename)))
+            {
+                ++duplicate;
+                filename = basename + " (" + number.ToString("D4") + "-" + duplicate + ").ast";
+            }
+            used.Add(filename);
+            return filename;
+        }
+
+        private static void ApplyNativeSharedTitles(string folder, List<string> tracks, List<string> virtualPaths)
+        {
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int renamed = 0;
+            for (int i = 0; i < tracks.Count; ++i)
+            {
+                try
+                {
+                    var title = new StringBuilder(2048);
+                    if (FormatNativeTitle(virtualPaths[i], title, (uint)title.Capacity) != 1 || title.Length == 0)
+                        continue;
+                    string destination = Path.Combine(folder, SafeNativeTitleFileName(title.ToString(), i + 1, used, folder));
+                    File.Move(tracks[i], destination);
+                    tracks[i] = destination;
+                    ++renamed;
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    Trace("NATIVE_TITLE_SKIP reason=old_addon");
+                    break; // older BASS DLLs retain their original native route
+                }
+                catch (Exception e)
+                {
+                    Trace("NATIVE_TITLE_SKIP index=" + i + " reason=" + e.GetType().Name);
+                }
+            }
+            Trace("NATIVE_TITLE_READY renamed=" + renamed + " total=" + tracks.Count + " preset=SHARED");
+        }
+
         private string[] TryStartNativeAudioSession(string archive, string sessionFolder)
         {
-            // Only validated, unencrypted, streamable MP3/WAV ZIP, 7z and RAR use this route.
-            // Mixed codecs, encrypted or unsupported archives retain bridge compatibility.
+            // Validated MP3/WAV/FLAC/OGG/AAC/M4A/WMA from streamable ZIP/7z/RAR.
+            // Encrypted, solid and unsupported archive layouts retain bridge compatibility.
             if (!nativeMp3Loaded ||
                 !(archive.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
                   archive.EndsWith(".7z", StringComparison.OrdinalIgnoreCase) ||
@@ -290,6 +363,7 @@ namespace MusicBeePlugin
                     return null;
 
                 var tracks = new List<string>();
+                var virtualPaths = new List<string>();
                 foreach (string path in manifests)
                 {
                     string target = Path.GetFullPath(path);
@@ -307,9 +381,11 @@ namespace MusicBeePlugin
                           lines[1].EndsWith(".wma", StringComparison.OrdinalIgnoreCase)))
                         return null;
                     tracks.Add(target);
+                    virtualPaths.Add(lines[1]);
                 }
                 if (tracks.Count == 0)
                     return null;
+                ApplyNativeSharedTitles(folder, tracks, virtualPaths);
                 Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + tracks.Count + " helper=DLL http=0 cache=0");
                 return tracks.ToArray();
             }

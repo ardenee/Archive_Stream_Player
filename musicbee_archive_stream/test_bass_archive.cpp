@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <vector>
+#include <cstring>
 #include "bass.h"
 
 int wmain(int argc, wchar_t** argv)
@@ -31,6 +32,18 @@ int wmain(int argc, wchar_t** argv)
     BASS_CHANNELINFO info{};
     BASS_ChannelGetInfo(stream, &info);
     printf("BASS_ARCHIVE_CHANNEL_INFO freq=%u chans=%u ctype=%u\n", info.freq, info.chans, info.ctype);
+    const char* title = BASS_ChannelGetTags(stream, BASS_TAG_OGG);
+    if (!title || strncmp(title, "TITLE=", 6) != 0 || strlen(title) <= 6 ||
+        title[strlen(title) + 1] != '\0')
+    {
+        printf("BASS_ARCHIVE_TITLE_TAG_FAIL title=%s\n", title ? title : "(null)");
+        return 9;
+    }
+    const char* apeTitle = BASS_ChannelGetTags(stream, BASS_TAG_APE);
+    const char* mfTitle = BASS_ChannelGetTags(stream, BASS_TAG_MF);
+    if (!apeTitle || !mfTitle || strcmp(title, apeTitle) != 0 || strcmp(title, mfTitle) != 0)
+        return 10;
+    printf("BASS_ARCHIVE_NATIVE_TITLE_TAG_PASS %s\n", title);
     const QWORD length = BASS_ChannelGetLength(stream, BASS_POS_BYTE);
     printf("BASS_ARCHIVE_LENGTH_PCM_BYTES=%llu\n", static_cast<unsigned long long>(length));
     fflush(stdout);

@@ -72,10 +72,12 @@ struct ArchivePcm
     DWORD channels = 0;
     DWORD sampleRate = 0;
     QWORD pcmBytes = 0;
+    std::vector<char> displayTitleTags; // BASS TAG_* UTF-8 TITLE=<shared preset>, double-NUL
 
     static const ADDON_FUNCTIONS callbacks;
     static void WINAPI Free(void* ptr);
     static QWORD WINAPI Length(void* ptr, DWORD mode);
+    static const char* WINAPI GetTags(void* ptr, DWORD type);
     static void WINAPI Info(void* ptr, BASS_CHANNELINFO* info);
     static BOOL WINAPI CanSeek(void* ptr, QWORD pos, DWORD mode);
     static QWORD WINAPI Seek(void* ptr, QWORD pos, DWORD mode);
@@ -360,7 +362,7 @@ const ADDON_FUNCTIONS ArchivePcm::callbacks = {
     ADDON_LOCK,
     Free,
     Length,
-    nullptr,
+    GetTags,
     nullptr,
     Info,
     CanSeek,
@@ -392,6 +394,29 @@ QWORD WINAPI ArchivePcm::Length(void* ptr, DWORD mode)
     if (!state || (mode & 0xFF) != BASS_POS_BYTE)
         errorn(BASS_ERROR_NOTAVAIL);
     noerrorn(state->pcmBytes);
+}
+
+// Expose the same native title presets used by other adapters without writing
+// tags into the archive or temporary .ast descriptor. BASS tag arrays remain
+// valid until the stream is freed; changing a setting affects newly opened
+// native tracks, while in-place playlist repaint is still host-dependent.
+const char* WINAPI ArchivePcm::GetTags(void* ptr, DWORD type)
+{
+    auto* state = static_cast<ArchivePcm*>(ptr);
+    if (!state || state->displayTitleTags.empty())
+        return nullptr;
+    switch (type)
+    {
+    case BASS_TAG_OGG:
+    case BASS_TAG_APE:
+    case BASS_TAG_MP4:
+    case BASS_TAG_WMA:
+    case BASS_TAG_MF:
+        Trace("TITLE_TAG_READ", "route=NATIVE");
+        return state->displayTitleTags.data();
+    default:
+        return nullptr;
+    }
 }
 
 void WINAPI ArchivePcm::Info(void* ptr, BASS_CHANNELINFO* info)
@@ -533,6 +558,14 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     mz_uint index = 0;
     if (!ParseVirtualArchivePath(virtualTrack.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
         return 0;
+    const auto title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archive),
+        ArchiveAdapterUtf8ToWide(member), static_cast<unsigned>(index) + 1,
+        ArchiveAdapterPreferencesLoad().titleTemplate);
+    const std::string titleUtf8 = ArchiveAdapterWideToUtf8(title);
+    if (titleUtf8.empty() || titleUtf8.size() > 4096 ||
+        titleUtf8.find('\r') != std::string::npos || titleUtf8.find('\n') != std::string::npos ||
+        titleUtf8.find('\0') != std::string::npos)
+        return 0;
     const AudioFormat format = GetAudioFormatFromPath(member);
     if (format != AUDIO_FORMAT_MP3 && format != AUDIO_FORMAT_WAV && format != AUDIO_FORMAT_FLAC &&
         !IsBassFileDecodedFormat(format) && !IsMediaFoundationFormat(format))
@@ -540,6 +573,10 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 
     Trace("MANIFEST_OK", FormatNote(format));
     auto state = std::make_unique<ArchivePcm>();
+    const std::string titleField = "TITLE=" + titleUtf8;
+    state->displayTitleTags.assign(titleField.begin(), titleField.end());
+    state->displayTitleTags.push_back('\0');
+    state->displayTitleTags.push_back('\0');
     state->format = format;
     std::string error;
     if (IsBassFileDecodedFormat(format) || IsMediaFoundationFormat(format))
@@ -980,6 +1017,38 @@ extern "C" int __stdcall ArchiveStreamWriteNativeFourCodecsW(const wchar_t* arch
 extern "C" int __stdcall ArchiveStreamWriteNativeSevenCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
     return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true);
+}
+
+// Shared title-preset renderer for host adapters. Using the same
+// ArchiveAdapterFormatTitle implementation avoids duplicating six presets
+// in the managed MusicBee plug-in. This NEVER writes archive/member bytes.
+extern "C" int __stdcall ArchiveStreamFormatNativeTitleW(const wchar_t* virtualTrack, wchar_t* output, DWORD capacity)
+{
+    if (!virtualTrack || !*virtualTrack || !output || capacity < 2 || capacity > 4096)
+        return 0;
+    output[0] = L'\0';
+    try
+    {
+        const std::string encoded = ArchiveAdapterWideToUtf8(virtualTrack);
+        if (encoded.empty() || encoded.size() > 16384)
+            return 0;
+        char archive[MAX_PATH * 4]{};
+        char member[1024]{};
+        mz_uint index = 0;
+        if (!ParseVirtualArchivePath(encoded.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
+            return 0;
+        const std::wstring title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archive),
+            ArchiveAdapterUtf8ToWide(member), static_cast<unsigned>(index) + 1,
+            ArchiveAdapterPreferencesLoad().titleTemplate);
+        if (title.empty() || title.size() >= capacity)
+            return 0;
+        std::copy_n(title.c_str(), title.size() + 1, output);
+        return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
 }
 
 extern "C" const void* WINAPI BASSplugin(DWORD face)

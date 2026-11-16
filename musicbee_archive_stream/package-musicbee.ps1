@@ -66,6 +66,10 @@ Real MusicBee GUI seek/resume passed for all seven codecs across all
 three tested archive formats and a mixed seven-track playlist.
 Full MF PCM parity and chained Vorbis playback/seek tests also passed.
 ADTS AAC duration is computed from exact audio-frame counts.
+Newly queued native tracks display the shared TitleTemplate presets. The
+titles are applied to temporary .ast filenames without editing archives.
+Unsafe filename characters are replaced; duplicates remain unique.
+Changes to presets apply on the next queue, not existing rows.
 Unsupported encoded variants retain the compatibility route.
 COMPATIBILITY MODE
 Other codecs or unsupported encoded layouts, encrypted archives, solid entries,
