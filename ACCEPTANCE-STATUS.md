@@ -4,6 +4,14 @@
 **Environment:** DEV `game-amd`, isolated portable player instances and disposable test files.
 **Meaning:** **H** = verified inside a real player; **T** = verified by an adapter/backend/transport test harness. Neither means physical-speaker audibility. No user archives, real password lists, or normal player profiles were used by these tests.
 
+## Closeout decision — 16 November 2026
+
+**CLOSED: Required native interrupted-stream recovery acceptance.** Real MusicBee, AIMP and foobar2000 integration paths below have adequate passing injected-failure evidence. **CLOSED: Broader cross-player acceptance for the tested, explicitly supported combinations.** Other historically certified Winamp/WACUP configurations remain supported at their documented level; experimental Windows Media Player is excluded from certified-player acceptance. No extra reruns are required solely for these two gates.
+
+**Not claimed as fixed or passed:** a genuine post-start MusicBee Media Foundation source failure, sound through every physical speaker/codec, Windows Media Player playback, unplugged/corrupt media, and unsupported host SDK title repaint. The MF shared reader's 18 standalone recovery cases passed, but host prefetch prevented the exploratory real-MusicBee fault from firing; it is a bounded evidence limitation, not an observed playback malfunction. If a real defect is reported, open a targeted new issue rather than reintroducing the whole suite as an incomplete acceptance task.
+
+**Distribution remains separate:** installer/build packages and third-party licence notice review are release deliverables, not missing codec/seek acceptance tests.
+
 ## Interrupted-stream recovery
 
 | Component | Scope | Acceptance outcome | Level |

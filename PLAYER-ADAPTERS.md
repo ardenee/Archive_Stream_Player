@@ -1,6 +1,6 @@
 # Player adapters: streaming behavior, setup and tests
 
-For a player-by-player status overview with explicit real-host, automated-test and unverified distinctions, see [FEATURE-MATRIX.md](FEATURE-MATRIX.md). This document supplies the implementation details and evidence behind those statuses.
+For a player-by-player status overview with explicit real-host, automated-test and unverified distinctions, see [FEATURE-MATRIX.md](FEATURE-MATRIX.md). The current closed-gate acceptance decision and test evidence are in [ACCEPTANCE-STATUS.md](ACCEPTANCE-STATUS.md). Historical implementation milestones below document what was open at the time, not tasks to retest after the 16 November 2026 closeout.
 
 ## Stream-first routing and failure recovery (13 November 2026)
 
