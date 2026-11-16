@@ -64,6 +64,9 @@ and WMA may use the shared encoded cache after stream/RAM fail, if
 CacheLimitMB permits. All seven passed standalone cache/PCM/seek tests.
 M4A/WMA enlarged-container tests do not extend their audio duration.
 Chained OGG seek validation uses a valid multi-link, CRC-checked fixture.
+Native WAV, FLAC and MP3 can recover once after an unexpected decoded
+stream interruption: memory first, shared encoded cache last.
+Fault-injection PCM tests passed; real MusicBee GUI recovery remains open.
 Real MusicBee solid-file GUI acceptance remains unverified because
 the DEV interactive desktop was unavailable.
 Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.

@@ -64,6 +64,10 @@ struct ArchivePcm
     MfAudioDecoder* mf = nullptr;
     bool mfArchiveStream = false;
     bool diskCached = false;
+    bool recoveryAttempted = false;
+    std::string archivePathUtf8;
+    mz_uint entryIndex = 0;
+    uint64_t pcmFrameCursor = 0;
     std::wstring cachedEncodedPath;
     HSTREAM hostStream = 0;
     FILE* cachedEncodedFile = nullptr; // BASS file-user callback retains compressed OGG cache
@@ -88,9 +92,26 @@ struct ArchivePcm
     static DWORD CALLBACK ReadPcm(HSTREAM handle, void* buffer, DWORD length, void* ptr);
 };
 
+#if defined(AST_NATIVE_TEST_HOOKS)
+static thread_local bool gInjectPlaybackReadFailure = false;
+#endif
+
 static size_t ReadEncoded(void* context, void* output, size_t length)
 {
-    return ArchiveReadEntryStream(static_cast<ArchiveStreamContext*>(context), output, length);
+    auto* stream = static_cast<ArchiveStreamContext*>(context);
+#if defined(AST_NATIVE_TEST_HOOKS)
+    // Fault injection exists only in a deliberately instrumented QA build.
+    // Production DLLs are never compiled with AST_NATIVE_TEST_HOOKS.
+    wchar_t text[32]{};
+    const DWORD n = GetEnvironmentVariableW(L"AST_NATIVE_TEST_STREAM_FAIL_AFTER", text, std::size(text));
+    if (gInjectPlaybackReadFailure && n > 0 && n < std::size(text))
+    {
+        const uint64_t cutoff = _wcstoui64(text, nullptr, 10);
+        if (cutoff >= 4096 && stream->position >= cutoff)
+            return 0;
+    }
+#endif
+    return ArchiveReadEntryStream(stream, output, length);
 }
 
 static drmp3_bool32 SeekEncoded(void* context, int offset, drmp3_seek_origin origin)
@@ -430,6 +451,131 @@ static void CloseDecoder(ArchivePcm* state)
     state->mfArchiveStream = false;
 }
 
+// Native midstream recovery for the three decoders with exact PCM-frame
+// seeking. Recover only once, after an unexpected short read; do not turn
+// ordinary EOF into a cache extraction. The codec state is single-threaded
+// under the BASS add-on lock when this callback executes.
+static bool RecoverNativePcmAtFrame(ArchivePcm* state, uint64_t targetFrame)
+{
+    if (!state || !state->opened || !state->isStreaming || state->recoveryAttempted ||
+        (state->format != AUDIO_FORMAT_WAV && state->format != AUDIO_FORMAT_FLAC &&
+         state->format != AUDIO_FORMAT_MP3) || state->archivePathUtf8.empty() ||
+        !state->channels || !state->sampleRate || targetFrame >=
+        state->pcmBytes / (state->channels * sizeof(int16_t)))
+        return false;
+
+    char remainingNote[128]{};
+    sprintf_s(remainingNote, "remaining_frames=%llu",
+        static_cast<unsigned long long>(state->pcmBytes / (state->channels * sizeof(int16_t)) - targetFrame));
+    Trace("RECOVERY_REMAINING", remainingNote);
+    // dr_mp3 can report a handful of padding frames beyond real EOF.
+    // Never extract/cache for that normal decoder-tail discrepancy.
+    const uint64_t missingFrames = state->pcmBytes / (state->channels * sizeof(int16_t)) - targetFrame;
+    if (state->format == AUDIO_FORMAT_MP3 && missingFrames <= 2304)
+        return false;
+    state->recoveryAttempted = true;
+    Trace("RECOVERY_START", FormatNote(state->format));
+    const DWORD oldRate = state->sampleRate;
+    const DWORD oldChannels = state->channels;
+    const uint64_t expectedFrames = state->pcmBytes / (oldChannels * sizeof(int16_t));
+    CloseDecoder(state);
+    if (state->isStreaming)
+    {
+        ArchiveCloseEntryStream(&state->stream);
+        state->isStreaming = false;
+    }
+    const ArchiveAdapterPreferences preferences = ArchiveAdapterPreferencesLoad();
+    std::string error;
+    char name[1024]{};
+    uint64_t size = 0;
+    if (!ArchiveGetEntryInfo(state->archivePathUtf8.c_str(), state->entryIndex,
+                             name, sizeof(name), &size) || !size)
+    {
+        Trace("RECOVERY_FAIL", "reason=entry_info");
+        return false;
+    }
+
+    auto openMemory = [&]() -> bool
+    {
+        if (size > static_cast<uint64_t>(preferences.memoryMb) * 1024u * 1024u ||
+            !ArchiveExtractEntryToMemory(state->archivePathUtf8.c_str(), state->entryIndex, state->encoded, error) ||
+            state->encoded.size() != size)
+            return false;
+        if (state->format == AUDIO_FORMAT_WAV)
+            state->opened = drwav_init_memory(&state->wav, state->encoded.data(), state->encoded.size(), nullptr) != 0;
+        else if (state->format == AUDIO_FORMAT_FLAC)
+        {
+            state->flac = drflac_open_memory(state->encoded.data(), state->encoded.size(), nullptr);
+            state->opened = state->flac != nullptr;
+        }
+        else
+            state->opened = drmp3_init_memory(&state->decoder, state->encoded.data(), state->encoded.size(), nullptr) != 0;
+        return state->opened;
+    };
+
+    auto verifyAndSeek = [&]() -> bool
+    {
+        if (!state->opened)
+            return false;
+        const uint64_t frames = state->format == AUDIO_FORMAT_WAV ? state->wav.totalPCMFrameCount :
+            state->format == AUDIO_FORMAT_FLAC ? state->flac->totalPCMFrameCount :
+            drmp3_get_pcm_frame_count(&state->decoder);
+        const DWORD rate = state->format == AUDIO_FORMAT_WAV ? state->wav.sampleRate :
+            state->format == AUDIO_FORMAT_FLAC ? state->flac->sampleRate : state->decoder.sampleRate;
+        const DWORD channels = state->format == AUDIO_FORMAT_WAV ? state->wav.channels :
+            state->format == AUDIO_FORMAT_FLAC ? state->flac->channels : state->decoder.channels;
+        const bool formatMatches = rate == oldRate && channels == oldChannels &&
+            frames == expectedFrames;
+        const bool seeked = formatMatches &&
+            (state->format == AUDIO_FORMAT_WAV ? drwav_seek_to_pcm_frame(&state->wav, targetFrame) != 0 :
+             state->format == AUDIO_FORMAT_FLAC ? drflac_seek_to_pcm_frame(state->flac, targetFrame) != 0 :
+             drmp3_seek_to_pcm_frame(&state->decoder, targetFrame) != 0);
+        if (!seeked)
+        {
+            CloseDecoder(state);
+            return false;
+        }
+        return true;
+    };
+
+    if (openMemory() && verifyAndSeek())
+    {
+        state->diskCached = false;
+        Trace("RECOVERY_OK", "route=BUFFER");
+        return true;
+    }
+    state->encoded.clear();
+    std::wstring path;
+    ArchiveEntry entry;
+    std::wstring cachePath;
+    wchar_t archiveWide[MAX_PATH * 4]{};
+    if (!CharPathToWidePath(state->archivePathUtf8.c_str(), archiveWide, std::size(archiveWide)) ||
+        !ArchiveUnifiedCache::LookupEntry(archiveWide, state->entryIndex, entry, error) ||
+        !PrepareDiskLastAudio(archiveWide, entry, preferences, cachePath, error))
+    {
+        Trace("RECOVERY_FAIL", "reason=memory_cache_unavailable");
+        return false;
+    }
+    if (state->format == AUDIO_FORMAT_WAV)
+        state->opened = drwav_init_file_w(&state->wav, cachePath.c_str(), nullptr) != 0;
+    else if (state->format == AUDIO_FORMAT_FLAC)
+    {
+        state->flac = drflac_open_file_w(cachePath.c_str(), nullptr);
+        state->opened = state->flac != nullptr;
+    }
+    else
+        state->opened = drmp3_init_file_w(&state->decoder, cachePath.c_str(), nullptr) != 0;
+
+    if (!verifyAndSeek())
+    {
+        Trace("RECOVERY_FAIL", "reason=cached_decoder_or_position");
+        return false;
+    }
+    state->diskCached = true;
+    Trace("RECOVERY_OK", "route=CACHE");
+    return true;
+}
+
 const ADDON_FUNCTIONS ArchivePcm::callbacks = {
     ADDON_LOCK,
     Free,
@@ -529,9 +675,15 @@ QWORD WINAPI ArchivePcm::Seek(void* ptr, QWORD bytePosition, DWORD mode)
                     : drmp3_seek_to_pcm_frame(&state->decoder, frame) != 0;
     if (!ok)
     {
-        Trace("SEEK_FAIL", "");
-        errorn(BASS_ERROR_POSITION);
+        // Seek failure can be an encoded stream failure; use exact frame seek
+        // on bounded memory/cache before reporting a positioning error.
+        if (!RecoverNativePcmAtFrame(state, frame))
+        {
+            Trace("SEEK_FAIL", "");
+            errorn(BASS_ERROR_POSITION);
+        }
     }
+    state->pcmFrameCursor = frame;
     Trace("SEEK_OK", "");
     noerrorn(bytePosition);
 }
@@ -547,6 +699,9 @@ DWORD CALLBACK ArchivePcm::ReadPcm(HSTREAM, void* buffer, DWORD length, void* pt
     if (!frames)
         return 0;
 
+#if defined(AST_NATIVE_TEST_HOOKS)
+    gInjectPlaybackReadFailure = state->firstRead && state->isStreaming;
+#endif
     uint64_t read = 0;
     if (IsBassFileDecodedFormat(state->format))
     {
@@ -561,6 +716,30 @@ DWORD CALLBACK ArchivePcm::ReadPcm(HSTREAM, void* buffer, DWORD length, void* pt
         read = drflac_read_pcm_frames_s16(state->flac, frames, static_cast<int16_t*>(buffer));
     else
         read = drmp3_read_pcm_frames_s16(&state->decoder, frames, static_cast<int16_t*>(buffer));
+#if defined(AST_NATIVE_TEST_HOOKS)
+    gInjectPlaybackReadFailure = false;
+#endif
+    // A short read before known PCM EOF is an interrupted archive stream,
+    // not normal track completion. Preserve the already decoded prefix, then
+    // recover exactly at its next frame and fill the remaining callback.
+    const uint64_t totalFrames = state->pcmBytes / bytesPerFrame;
+    if (read < frames && state->isStreaming &&
+        state->pcmFrameCursor + read < totalFrames &&
+        RecoverNativePcmAtFrame(state, state->pcmFrameCursor + read))
+    {
+        const DWORD remaining = frames - static_cast<DWORD>(read);
+        uint64_t continuation = 0;
+        auto* destination = static_cast<unsigned char*>(buffer) + read * bytesPerFrame;
+        if (state->format == AUDIO_FORMAT_WAV)
+            continuation = drwav_read_pcm_frames_s16(&state->wav, remaining, reinterpret_cast<int16_t*>(destination));
+        else if (state->format == AUDIO_FORMAT_FLAC)
+            continuation = drflac_read_pcm_frames_s16(state->flac, remaining, reinterpret_cast<int16_t*>(destination));
+        else
+            continuation = drmp3_read_pcm_frames_s16(&state->decoder, remaining, reinterpret_cast<int16_t*>(destination));
+        read += continuation;
+        Trace(continuation ? "RECOVERY_PCM_RESUMED" : "RECOVERY_PCM_EMPTY", FormatNote(state->format));
+    }
+    state->pcmFrameCursor += read;
     if (!state->firstRead && read > 0)
     {
         state->firstRead = true;
@@ -651,6 +830,8 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     state->displayTitleTags.push_back('\0');
     state->displayTitleTags.push_back('\0');
     state->format = format;
+    state->archivePathUtf8 = archive;
+    state->entryIndex = index;
     std::string error;
     if (IsBassFileDecodedFormat(format) || IsMediaFoundationFormat(format))
     {

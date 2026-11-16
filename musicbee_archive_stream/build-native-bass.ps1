@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$BassAddonSdkRoot,
     [Parameter(Mandatory=$true)][string]$BassCoreSdkRoot,
-    [string]$VcVars32 = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat'
+    [string]$VcVars32 = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat',
+    [string]$OutputPath = '',
+    [switch]$TestFaultInjection
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -11,12 +13,17 @@ $import = Join-Path $BassCoreSdkRoot 'bass.lib'
 foreach ($p in @($addon, $core, $import, $VcVars32)) {
     if (!(Test-Path -LiteralPath $p -PathType Leaf)) { throw "Missing external tool/SDK file: $p" }
 }
-$out = Join-Path $PSScriptRoot 'Release\bass_archive_stream.dll'
+$defaultOutput = Join-Path $PSScriptRoot 'Release\bass_archive_stream.dll'
+if ($TestFaultInjection -and (!$OutputPath -or [IO.Path]::GetFullPath($OutputPath) -eq [IO.Path]::GetFullPath($defaultOutput))) {
+    throw 'Test fault injection requires an explicit, isolated non-Release OutputPath.'
+}
+$out = if ($OutputPath) { $OutputPath } else { $defaultOutput }
+$testFlag = if ($TestFaultInjection) { '/DAST_NATIVE_TEST_HOOKS ' } else { '' }
 New-Item -ItemType Directory -Force -Path (Split-Path $out) | Out-Null
 Push-Location $repo
 try {
     $command = 'call "' + $VcVars32 + '" >nul && cl /nologo /LD /MD /EHsc /std:c++20 /W3 /O2 /DNDEBUG ' +
-        '/I "' + $BassAddonSdkRoot + '" /I "' + $BassCoreSdkRoot + '" ' +
+        $testFlag + '/I "' + $BassAddonSdkRoot + '" /I "' + $BassCoreSdkRoot + '" ' +
         '/I "third_party\dr_libs" /I "archive_backend" /I "shared" /I "in_archive_stream" ' +
         'musicbee_archive_stream\bass_archive_stream.cpp shared\debug_log.cpp ' +
         '/link /NOLOGO /LTCG /OUT:"' + $out + '" /DEF:musicbee_archive_stream\bass_archive_stream.def ' +
