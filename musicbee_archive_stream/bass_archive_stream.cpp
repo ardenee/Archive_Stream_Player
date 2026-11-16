@@ -593,7 +593,13 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     }
     else
     {
-        state->isStreaming = ArchiveOpenValidatedEntryStream(&state->stream, archive, index, 4096, &error);
+        // Do not trust an archive stream-open result for solid RAR/7z.
+        // A solid RAR may return bytes before its decoder dependency chain has
+        // been restored. Follow the shared capability decision instead.
+        const bool streamSupported = ArchiveGetEntryStreamCapability(archive, index) ==
+            ARCHIVE_STREAM_CAPABILITY_SUPPORTED;
+        state->isStreaming = streamSupported &&
+            ArchiveOpenValidatedEntryStream(&state->stream, archive, index, 4096, &error);
         Trace("STREAM_VALIDATED", state->isStreaming ? "route=STREAM" : "route=FALLBACK");
         if (state->isStreaming)
         {
@@ -735,10 +741,62 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     return stream;
 }
 
+// Solid 7z/RAR entries cannot be assumed streamable. Accept a bounded RAM
+// route only after full extraction and actual PCM decode + seek verification.
+// Keep other codecs/layouts on the proven compatibility route until certified.
+static bool PreflightSolidBufferedMp3Ogg(const char* archive, const ArchiveEntry& entry, AudioFormat format, unsigned memoryMb)
+{
+    if (!entry.isSolid || (format != AUDIO_FORMAT_MP3 && format != AUDIO_FORMAT_OGG) ||
+        !entry.size || entry.size > static_cast<uint64_t>(memoryMb) * 1024u * 1024u)
+        return false;
+    std::vector<unsigned char> encoded;
+    std::string error;
+    if (!ArchiveExtractEntryToMemory(archive, entry.index, encoded, error) || encoded.size() != entry.size)
+        return false;
+
+    unsigned char pcm[8192]{};
+    if (format == AUDIO_FORMAT_MP3)
+    {
+        drmp3 decoder{};
+        if (!drmp3_init_memory(&decoder, encoded.data(), encoded.size(), nullptr))
+            return false;
+        const bool header = decoder.sampleRate >= 8000 && decoder.sampleRate <= 384000 &&
+            (decoder.channels == 1 || decoder.channels == 2);
+        bool valid = header && drmp3_read_pcm_frames_s16(&decoder, 1024, reinterpret_cast<drmp3_int16*>(pcm)) == 1024;
+        if (valid)
+            valid = drmp3_seek_to_pcm_frame(&decoder, decoder.sampleRate) &&
+                drmp3_read_pcm_frames_s16(&decoder, 1024, reinterpret_cast<drmp3_int16*>(pcm)) == 1024;
+        drmp3_uninit(&decoder);
+        return valid;
+    }
+
+    auto check = std::make_unique<ArchivePcm>();
+    check->format = AUDIO_FORMAT_OGG;
+    check->encoded = std::move(encoded);
+    check->encodedSize = check->encoded.size();
+    check->memoryCursor = 0;
+    check->hostStream = OpenArchiveHostDecoder(check.get());
+    BASS_CHANNELINFO info{};
+    bool valid = check->hostStream && BASS_ChannelGetInfo(check->hostStream, &info) &&
+        info.freq >= 8000 && info.freq <= 384000 && (info.chans == 1 || info.chans == 2) &&
+        BASS_ChannelGetLength(check->hostStream, BASS_POS_BYTE) != static_cast<QWORD>(-1);
+    if (valid)
+    {
+        valid = BASS_ChannelGetData(check->hostStream, pcm, sizeof(pcm)) == sizeof(pcm);
+        const QWORD second = static_cast<QWORD>(info.freq) * info.chans * sizeof(int16_t);
+        if (valid && BASS_ChannelGetLength(check->hostStream, BASS_POS_BYTE) > second + sizeof(pcm))
+            valid = BASS_ChannelSetPosition(check->hostStream, second, BASS_POS_BYTE) &&
+                BASS_ChannelGetData(check->hostStream, pcm, sizeof(pcm)) == sizeof(pcm);
+    }
+    if (check->hostStream)
+        BASS_StreamFree(check->hostStream);
+    return valid;
+}
+
 // List-only native MusicBee integration: no separate helper executable, HTTP
 // listener, PCM extraction or BASS runtime redistribution is required.
 // The managed adapter calls this on its background archive-opening worker.
-static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg, bool allowMf)
+static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg, bool allowMf, bool allowSolidBuffer)
 {
     if (!archivePath || !*archivePath || !outputFolder || !*outputFolder)
         return 0;
@@ -787,13 +845,23 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
                 entry.path.find('\0') != std::string::npos)
                 return 0;
 
-            // This native prototype has no disk-last recovery yet. Only queue
-            // entries that the shared backend can actually stream; all others
-            // retain the existing bridge's stream/RAM/disk-last recovery policy.
+            // Stream first. The v1.8 opt-in ABI additionally accepts proven,
+            // unencrypted solid MP3/Vorbis via the configured bounded RAM buffer.
+            // Other layouts continue to the bridge (RAM/disk-last there).
             if (ArchiveGetEntryStreamCapability(archiveUtf8.c_str(), entry.index) != ARCHIVE_STREAM_CAPABILITY_SUPPORTED)
             {
-                Trace("NATIVE_ENUM_FALLBACK", "reason=non_streamable_entry");
-                return 0;
+                const unsigned memoryMb = ArchiveAdapterPreferencesLoad().memoryMb;
+                if (!allowSolidBuffer ||
+                    !PreflightSolidBufferedMp3Ogg(archiveUtf8.c_str(), entry, entryFormat, memoryMb))
+                {
+                    Trace("NATIVE_ENUM_FALLBACK", "reason=non_streamable_or_buffer_invalid");
+                    return 0;
+                }
+                Trace("NATIVE_ENUM_BUFFER_OK", FormatNote(entryFormat));
+                selected.push_back(&entry);
+                if (selected.size() > 10000)
+                    return 0;
+                continue;
             }
             std::string probeError;
             if (!ArchiveValidateEntryStreamRead(archiveUtf8.c_str(), entry.index, 4096, &probeError))
@@ -992,31 +1060,38 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
 // is used by v1.3+ for mixed MP3/WAV albums, without changing old clients.
 extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false, false, false);
 }
 
 extern "C" int __stdcall ArchiveStreamWriteNativePcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false, false, false);
 }
 
 // New ABI retains older MP3-only and MP3/WAV scanners for installed adapters.
 extern "C" int __stdcall ArchiveStreamWriteNativeAudioTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false, false, false);
 }
 
 // v1.5 accepts actual Vorbis OGG files; older ABI selectors remain unchanged.
 extern "C" int __stdcall ArchiveStreamWriteNativeFourCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, false, false);
 }
 
 // v1.6 extends the native BASS byte-stream path to Media Foundation codecs,
 // without changing the older four in-process scanner ABIs.
 extern "C" int __stdcall ArchiveStreamWriteNativeSevenCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, false);
+}
+
+// v1.8 adds tested unencrypted solid 7z/RAR MP3 and Vorbis through bounded
+// memory while preserving all earlier scanner ABI contracts.
+extern "C" int __stdcall ArchiveStreamWriteNativeBufferedTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true);
 }
 
 // Shared title-preset renderer for host adapters. Using the same

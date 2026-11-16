@@ -32,6 +32,10 @@ namespace MusicBeePlugin
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int WriteNativeSevenCodecs(string archive, string folder);
 
+        [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamWriteNativeBufferedTracksW",
+            CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        private static extern int WriteNativeBufferedTracks(string archive, string folder);
+
         [DllImport("bass_archive_stream.dll", EntryPoint = "ArchiveStreamFormatNativeTitleW",
             CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern int FormatNativeTitle(string virtualPath, StringBuilder output, uint capacity);
@@ -148,7 +152,7 @@ namespace MusicBeePlugin
             info.Author = "Archive Stream Player";
             info.TargetApplication = "";
             info.VersionMajor = 1;
-            info.VersionMinor = 7;
+            info.VersionMinor = 8;
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
@@ -339,7 +343,8 @@ namespace MusicBeePlugin
         private string[] TryStartNativeAudioSession(string archive, string sessionFolder)
         {
             // Validated MP3/WAV/FLAC/OGG/AAC/M4A/WMA from streamable ZIP/7z/RAR.
-            // Encrypted, solid and unsupported archive layouts retain bridge compatibility.
+            // Supported unencrypted solid MP3/Vorbis can use bounded RAM; other
+            // solid, encrypted and unsupported layouts retain the bridge.
             if (!nativeMp3Loaded ||
                 !(archive.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
                   archive.EndsWith(".7z", StringComparison.OrdinalIgnoreCase) ||
@@ -351,7 +356,15 @@ namespace MusicBeePlugin
             {
                 // The statically-linked native BASS DLL enumerates the archive in
                 // this MusicBee process. No bridge executable, HTTP or playlist.
-                int count = WriteNativeSevenCodecs(archive, folder);
+                int count;
+                try
+                {
+                    count = WriteNativeBufferedTracks(archive, folder);
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    count = WriteNativeSevenCodecs(archive, folder);
+                }
                 if (count <= 0 || count > 10000)
                     return null;
 

@@ -34,7 +34,7 @@ try {
 
     function Verify([string]$archive, [int]$count, [string]$mode = 'mp3') {
         $folder = Join-Path $temp ([IO.Path]::GetFileName($archive) + "-$mode-manifests")
-        if ($mode -in @('pcm','audio','four','seven')) {
+        if ($mode -in @('pcm','audio','four','seven','buffered')) {
             & $exe (Join-Path $temp 'bass_archive_stream.dll') $archive $folder $count $mode
         }
         else {
@@ -164,6 +164,7 @@ try {
     }
     finally { $zip.Dispose() }
     Verify $zipSeven 7 'seven'
+    Verify $zipSeven 7 'buffered' # direct-streamable seven-codec path remains unchanged
     Verify $zipSeven 0 'four' # existing four-codec ABI remains unchanged
 
     foreach ($item in @(@('aac', $FixtureAac), @('m4a', $FixtureM4a), @('wma', $FixtureWma))) {
@@ -229,11 +230,17 @@ try {
             Verify (Join-Path $temp 'solid.7z') 0
             Verify (Join-Path $temp 'solid.7z') 0 'pcm'
             Verify (Join-Path $temp 'solid.7z') 0 'seven'
+            Verify (Join-Path $temp 'solid.7z') 2 'buffered' # two verified RAM-buffered MP3 entries
+            & $SevenZipExe a '-t7z' '-mx=1' '-ms=on' (Join-Path $temp 'solid-ogg.7z') 'a.mp3' 'D.ogg' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Solid 7z MP3/Vorbis fixture creation failed' }
+            Verify (Join-Path $temp 'solid-ogg.7z') 2 'buffered'
+            Verify (Join-Path $temp 'solid-ogg.7z') 0 'seven'
             & $SevenZipExe a '-tzip' '-mem=AES256' '-pAST-QA-TEST-ONLY' (Join-Path $temp 'encrypted.zip') 'a.mp3' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'encrypted ZIP fixture creation failed' }
             Verify (Join-Path $temp 'encrypted.zip') 0
             Verify (Join-Path $temp 'encrypted.zip') 0 'pcm'
             Verify (Join-Path $temp 'encrypted.zip') 0 'seven'
+            Verify (Join-Path $temp 'encrypted.zip') 0 'buffered' # encrypted entries still use password-compatible bridge
         }
         finally { Pop-Location }
     }
@@ -269,11 +276,16 @@ try {
             Verify (Join-Path $temp 'solid.rar') 0
             Verify (Join-Path $temp 'solid.rar') 0 'pcm'
             Verify (Join-Path $temp 'solid.rar') 0 'seven'
+            Verify (Join-Path $temp 'solid.rar') 2 'buffered' # first entry may stream, second uses RAM
+            & $RarExe a '-s' '-m1' (Join-Path $temp 'solid-ogg.rar') 'a.mp3' 'D.ogg' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Solid RAR MP3/Vorbis fixture creation failed' }
+            Verify (Join-Path $temp 'solid-ogg.rar') 2 'buffered'
+            Verify (Join-Path $temp 'solid-ogg.rar') 0 'seven'
         }
         finally { Pop-Location }
     }
     else { Write-Output 'MUSICBEE_NATIVE_ENUM_RAR_SKIPPED external Rar.exe unavailable' }
-    Write-Output 'MUSICBEE_NATIVE_INPROCESS_ENUM_SEVEN_CODEC_REGRESSIONS_PASS'
+    Write-Output 'MUSICBEE_NATIVE_INPROCESS_ENUM_SEVEN_CODEC_AND_SOLID_BUFFER_REGRESSIONS_PASS'
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue

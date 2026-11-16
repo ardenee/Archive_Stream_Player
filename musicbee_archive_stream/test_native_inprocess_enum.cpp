@@ -27,9 +27,11 @@ int wmain(int argc, wchar_t** argv)
     const bool allowAudio = argc == 6 && wcscmp(argv[5], L"audio") == 0;
     const bool allowFour = argc == 6 && wcscmp(argv[5], L"four") == 0;
     const bool allowSeven = argc == 6 && wcscmp(argv[5], L"seven") == 0;
-    if (argc == 6 && !allowPcm && !allowAudio && !allowFour && !allowSeven)
+    const bool allowBuffered = argc == 6 && wcscmp(argv[5], L"buffered") == 0;
+    if (argc == 6 && !allowPcm && !allowAudio && !allowFour && !allowSeven && !allowBuffered)
         return 2;
-    const char* exportName = allowSeven ? "ArchiveStreamWriteNativeSevenCodecsW" :
+    const char* exportName = allowBuffered ? "ArchiveStreamWriteNativeBufferedTracksW" :
+        allowSeven ? "ArchiveStreamWriteNativeSevenCodecsW" :
         allowFour ? "ArchiveStreamWriteNativeFourCodecsW" :
         allowAudio ? "ArchiveStreamWriteNativeAudioTracksW" :
         allowPcm ? "ArchiveStreamWriteNativePcmTracksW" : "ArchiveStreamWriteNativeMp3TracksW";
@@ -38,7 +40,7 @@ int wmain(int argc, wchar_t** argv)
         return 6;
     const int n = scan(argv[2], argv[3]);
     int expected = _wtoi(argv[4]);
-    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowSeven ? "seven" : allowFour ? "four" : allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
+    printf("QA_NATIVE_AUDIO_SCAN mode=%s count=%d expected=%d\n", allowBuffered ? "buffered" : allowSeven ? "seven" : allowFour ? "four" : allowAudio ? "audio" : allowPcm ? "pcm" : "mp3", n, expected);
     if (n != expected)
         return 7;
     int files = 0;

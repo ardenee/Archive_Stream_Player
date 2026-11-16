@@ -58,6 +58,9 @@ or Tools > Archive Stream: Settings...
 NATIVE MODE
 Unencrypted streamable MP3, PCM16 WAV, FLAC16/24, OGG/Vorbis, AAC,
 M4A and WMA play natively inside ZIP, non-solid 7z and RAR archives.
+Solid 7z and RAR MP3/OGG entries may also play from bounded RAM, with
+standalone native PCM and seek tests passing. Actual GUI acceptance of
+solid files remains unverified due to the locked DEV desktop.
 Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.
 AAC/M4A/WMA reuse Windows Media Foundation and the shared archive reader.
 No helper executable, HTTP listener or decoded-audio cache is used for
@@ -72,7 +75,7 @@ Unsafe filename characters are replaced; duplicates remain unique.
 Changes to presets apply on the next queue, not existing rows.
 Unsupported encoded variants retain the compatibility route.
 COMPATIBILITY MODE
-Other codecs or unsupported encoded layouts, encrypted archives, solid entries,
+Other codecs or unsupported encoded layouts, encrypted archives, other solid entries,
 unsupported streaming layouts, or missing/unloadable BASS add-ons retain
 the established MusicBee compatibility bridge, which uses direct streaming
 first, bounded memory where supported and disk only when required. MP3/AAC bridge playback uses local HTTP range requests; fallback OGG/FLAC/
