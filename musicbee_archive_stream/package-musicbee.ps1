@@ -59,9 +59,9 @@ NATIVE MODE
 Unencrypted streamable MP3, PCM16 WAV, FLAC16/24, OGG/Vorbis, AAC,
 M4A and WMA play natively inside ZIP, non-solid 7z and RAR archives.
 Solid 7z and RAR MP3/OGG entries may also play from bounded RAM.
-Oversized unencrypted solid FLAC and PCM16 WAV may use the shared
-managed encoded cache only after stream/RAM fail, if CacheLimitMB permits.
-Both disk-last routes passed byte-exact cache, PCM, seek and reuse tests.
+Oversized unencrypted solid FLAC, PCM16 WAV and MP3 may use the
+shared encoded cache after stream/RAM fail, if CacheLimitMB permits.
+All three routes passed byte-exact cache, PCM, seek and reuse tests.
 Real MusicBee solid-file GUI acceptance remains unverified because
 the DEV interactive desktop was unavailable.
 Mixed seven-codec playlists are supported by MusicBee's native BASS add-on.

@@ -213,7 +213,7 @@ static HSTREAM OpenArchiveHostDecoder(ArchivePcm* state)
     return stream;
 }
 
-static bool PrepareDiskLastPcm(const wchar_t* archivePath, const ArchiveEntry& entry,
+static bool PrepareDiskLastAudio(const wchar_t* archivePath, const ArchiveEntry& entry,
     const ArchiveAdapterPreferences& settings, std::wstring& cachePath, std::string& error);
 
 static bool IsMediaFoundationFormat(AudioFormat format)
@@ -667,24 +667,27 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
             else
                 Trace("MEMORY_FALLBACK_FAIL", "route=MEMORY");
         }
-        if (!state->opened && (state->format == AUDIO_FORMAT_FLAC || state->format == AUDIO_FORMAT_WAV))
+        if (!state->opened && (state->format == AUDIO_FORMAT_FLAC || state->format == AUDIO_FORMAT_WAV ||
+                               state->format == AUDIO_FORMAT_MP3))
         {
             wchar_t archiveWide[MAX_PATH * 4]{};
             ArchiveEntry cacheEntry;
             std::wstring cachePath;
             const bool ready = CharPathToWidePath(archive, archiveWide, std::size(archiveWide)) &&
                 ArchiveUnifiedCache::LookupEntry(archiveWide, index, cacheEntry, error) &&
-                PrepareDiskLastPcm(archiveWide, cacheEntry, settings, cachePath, error);
+                PrepareDiskLastAudio(archiveWide, cacheEntry, settings, cachePath, error);
             if (ready)
             {
                 state->encoded.clear();
                 if (state->format == AUDIO_FORMAT_WAV)
                     state->opened = drwav_init_file_w(&state->wav, cachePath.c_str(), nullptr) != 0;
-                else
+                else if (state->format == AUDIO_FORMAT_FLAC)
                 {
                     state->flac = drflac_open_file_w(cachePath.c_str(), nullptr);
                     state->opened = state->flac != nullptr;
                 }
+                else
+                    state->opened = drmp3_init_file_w(&state->decoder, cachePath.c_str(), nullptr) != 0;
                 state->diskCached = state->opened;
                 Trace(state->opened ? "CACHE_OPEN_OK" : "CACHE_OPEN_FAIL", FormatNote(state->format));
             }
@@ -781,29 +784,44 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 // Keep other codecs/layouts on the proven compatibility route until certified.
 // Reuse the same identity-checked, atomically published managed cache as
 // VLC/Winamp and bridge clients. Never extract if streaming/RAM can work.
-// v1.9 accepted FLAC only; v1.10 extends the opt-in route to PCM16 WAV.
-// Existing seven-codec, buffered and FLAC-only ABI contracts stay unchanged.
-static bool PrepareDiskLastPcm(const wchar_t* archivePath, const ArchiveEntry& entry,
+// v1.9 accepted FLAC, v1.10 added PCM16 WAV, and v1.11 adds MP3.
+// Each previous scanner export retains its original accepted formats.
+static bool PrepareDiskLastAudio(const wchar_t* archivePath, const ArchiveEntry& entry,
     const ArchiveAdapterPreferences& settings, std::wstring& cachePath, std::string& error)
 {
     if (!archivePath || entry.isEncrypted || !entry.isSupportedAudio || entry.isFolder ||
         !entry.size || (GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_FLAC &&
-         GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_WAV) ||
+         GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_WAV &&
+         GetAudioFormatFromPath(entry.path.c_str()) != AUDIO_FORMAT_MP3) ||
         settings.cacheLimitMb == 0 || entry.size > static_cast<uint64_t>(settings.cacheLimitMb) * 1024u * 1024u)
         return false;
     return ArchiveUnifiedCache::Prepare(archivePath, entry, settings, cachePath, error);
 }
 
-static bool PreflightDiskLastPcm(const wchar_t* archivePath, const ArchiveEntry& entry,
+static bool PreflightDiskLastAudio(const wchar_t* archivePath, const ArchiveEntry& entry,
     const ArchiveAdapterPreferences& settings)
 {
     if (entry.size <= static_cast<uint64_t>(settings.memoryMb) * 1024u * 1024u)
         return false;
     std::wstring cachePath;
     std::string error;
-    if (!PrepareDiskLastPcm(archivePath, entry, settings, cachePath, error))
+    if (!PrepareDiskLastAudio(archivePath, entry, settings, cachePath, error))
         return false;
     int16_t pcm[2048]{};
+    if (GetAudioFormatFromPath(entry.path.c_str()) == AUDIO_FORMAT_MP3)
+    {
+        drmp3 decoder{};
+        if (!drmp3_init_file_w(&decoder, cachePath.c_str(), nullptr))
+            return false;
+        bool valid = decoder.sampleRate >= 8000 && decoder.sampleRate <= 384000 &&
+            (decoder.channels == 1 || decoder.channels == 2);
+        if (valid)
+            valid = drmp3_read_pcm_frames_s16(&decoder, 1024, pcm) == 1024 &&
+                drmp3_seek_to_pcm_frame(&decoder, decoder.sampleRate) &&
+                drmp3_read_pcm_frames_s16(&decoder, 1024, pcm) == 1024;
+        drmp3_uninit(&decoder);
+        return valid;
+    }
     if (GetAudioFormatFromPath(entry.path.c_str()) == AUDIO_FORMAT_WAV)
     {
         drwav wav{};
@@ -886,7 +904,7 @@ static bool PreflightSolidBufferedMp3Ogg(const char* archive, const ArchiveEntry
 // List-only native MusicBee integration: no separate helper executable, HTTP
 // listener, PCM extraction or BASS runtime redistribution is required.
 // The managed adapter calls this on its background archive-opening worker.
-static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg, bool allowMf, bool allowSolidBuffer, bool allowDiskPcm, bool allowDiskWav)
+static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* outputFolder, bool allowWav, bool allowFlac, bool allowOgg, bool allowMf, bool allowSolidBuffer, bool allowDiskPcm, bool allowDiskWav, bool allowDiskMp3)
 {
     if (!archivePath || !*archivePath || !outputFolder || !*outputFolder)
         return 0;
@@ -943,8 +961,10 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
                 const unsigned memoryMb = ArchiveAdapterPreferencesLoad().memoryMb;
                 const bool buffered = allowSolidBuffer &&
                     PreflightSolidBufferedMp3Ogg(archiveUtf8.c_str(), entry, entryFormat, memoryMb);
-                const bool cached = !buffered && allowDiskPcm && (entryFormat == AUDIO_FORMAT_FLAC || (allowDiskWav && entryFormat == AUDIO_FORMAT_WAV)) &&
-                    PreflightDiskLastPcm(archivePath, entry, ArchiveAdapterPreferencesLoad());
+                const bool cached = !buffered && allowDiskPcm && (entryFormat == AUDIO_FORMAT_FLAC ||
+                    (allowDiskWav && entryFormat == AUDIO_FORMAT_WAV) ||
+                    (allowDiskMp3 && entryFormat == AUDIO_FORMAT_MP3)) &&
+                    PreflightDiskLastAudio(archivePath, entry, ArchiveAdapterPreferencesLoad());
                 if (!buffered && !cached)
                 {
                     Trace("NATIVE_ENUM_FALLBACK", "reason=non_streamable_or_memory_cache_invalid");
@@ -1153,52 +1173,59 @@ static int WriteNativeTracksInternal(const wchar_t* archivePath, const wchar_t* 
 // is used by v1.3+ for mixed MP3/WAV albums, without changing old clients.
 extern "C" int __stdcall ArchiveStreamWriteNativeMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, false, false, false, false, false, false, false, false);
 }
 
 extern "C" int __stdcall ArchiveStreamWriteNativePcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, false, false, false, false, false, false, false);
 }
 
 // New ABI retains older MP3-only and MP3/WAV scanners for installed adapters.
 extern "C" int __stdcall ArchiveStreamWriteNativeAudioTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, false, false, false, false, false, false);
 }
 
 // v1.5 accepts actual Vorbis OGG files; older ABI selectors remain unchanged.
 extern "C" int __stdcall ArchiveStreamWriteNativeFourCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, false, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, false, false, false, false, false);
 }
 
 // v1.6 extends the native BASS byte-stream path to Media Foundation codecs,
 // without changing the older four in-process scanner ABIs.
 extern "C" int __stdcall ArchiveStreamWriteNativeSevenCodecsW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, false, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, false, false, false, false);
 }
 
 // v1.8 adds tested unencrypted solid 7z/RAR MP3 and Vorbis through bounded
 // memory while preserving all earlier scanner ABI contracts.
 extern "C" int __stdcall ArchiveStreamWriteNativeBufferedTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, false, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, false, false, false);
 }
 
 // v1.9 opt-in: retain direct stream and bounded memory; only validated
 // over-budget solid FLAC may fall back to the shared managed disk cache.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskLastTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, false);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, false, false);
 }
 
 // v1.10 opt-in adds PCM16 WAV to the shared cache fallback while retaining
 // the v1.9 FLAC-only API for older clients.
 extern "C" int __stdcall ArchiveStreamWriteNativeDiskPcmTracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
 {
-    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true);
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, false);
+}
+
+// v1.11 opt-in adds oversized unencrypted MP3 to the shared encoded-file
+// cache route; older exports preserve their original codec contracts.
+extern "C" int __stdcall ArchiveStreamWriteNativeDiskMp3TracksW(const wchar_t* archivePath, const wchar_t* outputFolder)
+{
+    return WriteNativeTracksInternal(archivePath, outputFolder, true, true, true, true, true, true, true, true);
 }
 
 // Shared title-preset renderer for host adapters. Using the same

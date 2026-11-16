@@ -9,9 +9,10 @@
 
 int wmain(int argc, wchar_t** argv)
 {
-    if (argc != 3)
+    const bool lateSeek = argc == 4 && wcscmp(argv[3], L"late") == 0;
+    if (argc != 3 && !lateSeek)
     {
-        puts("Usage: bass_archive_probe.exe BASS-Archive-Plugin.dll entry-0.ast");
+        puts("Usage: bass_archive_probe.exe BASS-Archive-Plugin.dll entry-0.ast [late]");
         return 2;
     }
     if (!BASS_Init(0, 44100, 0, nullptr, nullptr))
@@ -53,7 +54,14 @@ int wmain(int argc, wchar_t** argv)
     fflush(stdout);
     if (read != pcm.size())
         return 6;
-    QWORD seek = length / 3;
+    // Optional large-track test seeks beyond the original MP3 source
+    // segment. Do not weaken the existing short-track / one-third test.
+    if (lateSeek && length < 200000000ULL)
+    {
+        printf("BASS_ARCHIVE_LATE_SEEK_INVALID_LENGTH=%llu\n", static_cast<unsigned long long>(length));
+        return 11;
+    }
+    QWORD seek = lateSeek ? (length / 4) * 3 : length / 3;
     seek -= seek % (static_cast<QWORD>(info.chans) * sizeof(int16_t));
     BOOL seeked = BASS_ChannelSetPosition(stream, seek, BASS_POS_BYTE);
     printf("BASS_ARCHIVE_NATIVE_SEEK_RESULT=%d error=%d target_pcm_bytes=%llu\n", seeked, BASS_ErrorGetCode(), static_cast<unsigned long long>(seek));
