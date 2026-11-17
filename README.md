@@ -24,11 +24,13 @@ Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows 
 | MediaMonkey | 5 / 2024 |
 | VLC | 3, 64-bit |
 
-The installer detects supported players and lets you choose which plugins to install. **MediaMonkey** is installed directly; no separate add-on steps are needed. **VLC** includes a shortcut to open archives.
+The installer detects supported players and lets you choose which plugins to install. **VLC** includes a shortcut to open archives.
 
 WACUP 64-bit has no native plugin. Windows Media Player integration remains experimental and is not included in the installer.
 
-Audio playback uses Archive Stream's decoders in Winamp, MusicBee and MediaMonkey; foobar2000, AIMP, XMPlay and VLC use their own audio decoders. See the [feature matrix](FEATURE-MATRIX.md) for differences and limitations.
+Audio playback uses Archive Stream's decoders in Winamp, MusicBee and MediaMonkey; 
+foobar2000, AIMP, XMPlay and VLC use their own audio decoders. 
+See the [feature matrix](FEATURE-MATRIX.md) for differences and limitations.
 
 ## Build
 
