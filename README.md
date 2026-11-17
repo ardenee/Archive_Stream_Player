@@ -55,7 +55,7 @@ See the [feature matrix](FEATURE-MATRIX.md) for the differences that affect play
 
 ## Install
 
-**[Download Archive Stream Player for Windows (Preview 1)](https://github.com/ardenee/Archive_Stream_Player/releases/download/v0.1.0-preview.1/ArchiveStreamPlayer-Setup.exe)** · [Release notes and checksum](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.0-preview.1)
+**[Download Archive Stream Player for Windows (v0.1.0)](https://github.com/ardenee/Archive_Stream_Player/releases/download/v0.1.0/ArchiveStreamPlayer-Setup.exe)** · [Release notes and checksum](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.0)
 
 **One Windows installer covers the supported native players.** It detects installed players, preselects compatible versions, lets you choose only the players you want, and allows manual paths for portable installations.
 
@@ -80,7 +80,7 @@ Shared settings are available from the **Configure Archive Stream Player** Start
 
 Core playback, playlist handling, passwords and cache management are implemented for the configurations above. Updates to titles already queued depend on the player's playlist API: foobar2000 can refresh them live, while MusicBee and XMPlay may require readding the tracks. XMPlay's built-in ZIP handling does not use Archive Stream password/cache settings.
 
-The Windows installer is available as a **public preview release**. It is not digitally signed, so Windows may display a SmartScreen warning. Review the release notes before installing.
+The Windows installer is available as an official **v0.1.0 release**. It is not digitally signed, so Windows may display a SmartScreen warning. Review the release notes before installing.
 
 ## Licence
 

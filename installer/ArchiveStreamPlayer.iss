@@ -7,7 +7,7 @@
 AppId={{B8C3136D-DFAF-4A70-9E3F-3913109487C5}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion} Preview
+AppVerName={#AppName} {#AppVersion}
 AppPublisher=arden
 AppPublisherURL={#HomeURL}
 AppSupportURL={#HomeURL}
