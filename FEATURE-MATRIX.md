@@ -12,7 +12,7 @@
 | **AIMP 32/64-bit** | Archive Stream opens archive; **AIMP decodes audio** | Archive Stream passwords, RAM and cache | Title presets; already-queued rows may not redraw | Native plugin |
 | **XMPlay 32-bit** | Archive Stream handles **7z/RAR**; XMPlay can handle ordinary ZIP itself; **XMPlay decodes audio** | Archive Stream passwords/RAM/cache for plugin-handled 7z/RAR; built-in ZIP bypasses them | Reimport to update existing titles | Native archive plugin |
 | **MusicBee 32-bit** | Archive Stream native audio modules play **all seven listed formats** | ZIP/7z/RAR passwords, RAM/cache and fallback | New-track titles; requeue after template changes | Native plugin + Tools integration |
-| **MediaMonkey 5 / 2024** | Archive Stream native input module plays **all seven listed formats** | ZIP/7z/RAR passwords, RAM/cache and fallback | Track titles; multi-track in-place refresh limited | Two MMIP add-ons |
+| **MediaMonkey 5 / 2024** | Archive Stream native input module plays **all seven listed formats** | ZIP/7z/RAR passwords, RAM/cache and fallback | Embedded ID3/FLAC/Ogg tags, track times and persistent playlists | Direct installer |
 | **VLC 3 64-bit** | Archive Stream opens archive; **VLC decodes audio** | Passwords, RAM/cache and fallback | Titles on newly opened albums | Native launcher |
 | **WACUP 64-bit** | Compatibility mode, **not a native plugin** | Depends on compatibility route | Playlist reload may be needed | Not a native installer selection |
 | **Windows Media Player** | Experimental compatibility only | Not certified | Not certified | Not in installer |
@@ -40,6 +40,6 @@ It does not automatically add missing **player-specific audio decoders** to foob
 
 ## Installer
 
-The **single selectable Inno Setup installer** installs matching native components into chosen, compatible player folders. Portable installations can be selected manually. MediaMonkey needs confirmation through its own Addons interface; VLC uses an external native launcher. WACUP 64-bit and experimental Windows Media Player are not native installer choices.
+The **single selectable Inno Setup installer** installs matching native components into chosen, compatible player folders. Portable installations can be selected manually. MediaMonkey is installed directly; VLC uses an external native launcher. WACUP 64-bit and experimental Windows Media Player are not native installer choices.
 
 [Project homepage](https://www.arden.ie/projects/archive-stream-player/) · [README](README.md) · [Setup instructions](PLAYER-ADAPTERS.md)

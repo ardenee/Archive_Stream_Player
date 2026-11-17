@@ -1,6 +1,6 @@
 # Player installation
 
-[Download the installer](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.2), run it and select your installed music players. Portable installations can be chosen manually.
+[Download the installer](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.7), run it and select your installed music players. Portable installations can be chosen manually.
 
 | Player | Installation |
 | --- | --- |
@@ -9,7 +9,7 @@
 | AIMP 32/64-bit | Installs the matching native plugin |
 | XMPlay 32-bit | Installs the 7z/RAR plugin; XMPlay handles ordinary ZIP files itself |
 | MusicBee 32-bit | Installs native playback and Tools menu plugins |
-| MediaMonkey 5 / 2024 | Open **MediaMonkey → Tools → Addons → Add** and install both included MMIP packages |
+| MediaMonkey 5 / 2024 | Installs native playback and archive Tools menu directly |
 | VLC 3 64-bit | Use the **Open an archive in VLC** Start Menu shortcut |
 
 The **Configure Archive Stream Player** shortcut manages shared passwords, cache, titles and logging.

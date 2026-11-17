@@ -2,7 +2,7 @@
 
 Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows music player, without extracting entire albums.
 
-**[Download v0.1.2](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.2)** · [Project website](https://www.arden.ie/projects/archive-stream-player/) · [Feature matrix](FEATURE-MATRIX.md)
+**[Download v0.1.7](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.7)** · [Project website](https://www.arden.ie/projects/archive-stream-player/) · [Feature matrix](FEATURE-MATRIX.md)
 
 ## Features
 
@@ -24,7 +24,7 @@ Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows 
 | MediaMonkey | 5 / 2024 |
 | VLC | 3, 64-bit |
 
-The installer detects supported players and lets you choose which plugins to install. **MediaMonkey** requires installing its two add-ons through MediaMonkey's Addons menu. **VLC** includes a shortcut to open archives.
+The installer detects supported players and lets you choose which plugins to install. **MediaMonkey** is installed directly; no separate add-on steps are needed. **VLC** includes a shortcut to open archives.
 
 WACUP 64-bit has no native plugin. Windows Media Player integration remains experimental and is not included in the installer.
 

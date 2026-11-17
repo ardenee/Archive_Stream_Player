@@ -2,7 +2,7 @@
   "title": "Archive Stream Player",
   "id": "archiveStreamPlayerNative",
   "description": "Native-first ZIP, 7z and RAR archive playback through MediaMonkey 5 input DLL, with optional HTTP compatibility.",
-  "version": "1.6.4",
+  "version": "1.6.9",
   "type": "general",
   "author": "Archive Stream Player",
   "minAppVersion": "5.0.0"

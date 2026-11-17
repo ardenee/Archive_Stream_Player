@@ -13,6 +13,8 @@ foreach ($file in @(
     (Join-Path $source 'info.json'),
     (Join-Path $source 'actions_add.js'),
     (Join-Path $source 'launch-mediamonkey.ps1'),
+    (Join-Path $source 'choose-archive.ps1'),
+    (Join-Path $source 'launch-hidden.vbs'),
     $bridge,
     $nativeInput,
     $settings,
@@ -28,6 +30,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $source 'info.json') -Destination (Join-Path $stage 'info.json')
     Copy-Item -LiteralPath (Join-Path $source 'actions_add.js') -Destination (Join-Path $stage 'actions_add.js')
     Copy-Item -LiteralPath (Join-Path $source 'launch-mediamonkey.ps1') -Destination (Join-Path $stage 'launch-mediamonkey.ps1')
+    Copy-Item -LiteralPath (Join-Path $source 'choose-archive.ps1') -Destination (Join-Path $stage 'choose-archive.ps1')
+    Copy-Item -LiteralPath (Join-Path $source 'launch-hidden.vbs') -Destination (Join-Path $stage 'launch-hidden.vbs')
     Copy-Item -LiteralPath $bridge -Destination (Join-Path $stage 'archive_player_bridge.exe')
     Copy-Item -LiteralPath $nativeInput -Destination (Join-Path $stage 'in_archive_stream.dll')
     Copy-Item -LiteralPath $settings -Destination (Join-Path $stage 'configure-adapters.ps1')

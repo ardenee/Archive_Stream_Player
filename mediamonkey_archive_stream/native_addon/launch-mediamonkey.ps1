@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $bridge = Join-Path $PSScriptRoot 'archive_player_bridge.exe'
 $bridgeProcess = $null
+$bridgeSessionFolder = ''
 $shutdownUrl = ''
 $ready = $false
 $nativeReady = $false
@@ -51,20 +52,33 @@ try {
         }
     }
 
-    # The matching x86 Winamp input DLL must be installed as a MediaMonkey input
-    # plugin. An old DLL may load but does not know the .ast manifest format.
-    # Compare the actual installed DLL with the companion shipped in this
-    # addon; mismatch safely retains the old HTTP bridge.
+    # MediaMonkey installs user add-on input DLLs in its profile Plugins
+    # directory. Check that location before the application Plugins directory;
+    # an older DLL may be present in Program Files at the same time.
     $companion = Join-Path $PSScriptRoot 'in_archive_stream.dll'
-    $installed = if ($PlayerExe) { Join-Path (Split-Path $PlayerExe -Parent) 'Plugins\in_archive_stream.dll' } else { '' }
+    $addonScriptsDir = Split-Path $PSScriptRoot -Parent
+    $addonProfileRoot = Split-Path $addonScriptsDir -Parent
+    $installedCandidates = @(
+        (Join-Path $addonProfileRoot 'Plugins\in_archive_stream.dll'),
+        (Join-Path $env:APPDATA 'MediaMonkey5\Plugins\in_archive_stream.dll')
+    )
+    if ($PlayerExe) {
+        $installedCandidates += Join-Path (Split-Path $PlayerExe -Parent) 'Plugins\in_archive_stream.dll'
+    }
     $useNative = $false
-    if (!$UseHttpBridge -and !$NoLaunch -and $installed -and
-        (Test-Path -LiteralPath $companion -PathType Leaf) -and
-        (Test-Path -LiteralPath $installed -PathType Leaf)) {
+    if (!$UseHttpBridge -and !$NoLaunch -and
+        (Test-Path -LiteralPath $companion -PathType Leaf)) {
         try {
             $expectedHash = (Get-FileHash -LiteralPath $companion -Algorithm SHA256).Hash
-            $installedHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash
-            $useNative = $expectedHash -eq $installedHash
+            foreach ($installed in ($installedCandidates | Select-Object -Unique)) {
+                if (!(Test-Path -LiteralPath $installed -PathType Leaf)) { continue }
+                $installedHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash
+                if ($expectedHash -eq $installedHash) {
+                    $useNative = $true
+                    Trace-Adapter 'NATIVE_INPUT_HASH_MATCH'
+                    break
+                }
+            }
         }
         catch {
             $useNative = $false
@@ -73,16 +87,39 @@ try {
     }
     if ($useNative) {
         $mode = 'native'
-        $nativeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ArchiveStreamMM5Native-' + [Guid]::NewGuid().ToString('N'))
+        # MediaMonkey persists real .ast filenames in its playlists. They are
+        # tiny references to archive entries, never extracted audio. Keep them
+        # under persistent app data, outside both TEMP and managed audio cache.
+        # Hash only the normalized archive pathname, not its contents or CRC.
+        $archiveIdentity = [Text.Encoding]::UTF8.GetBytes($Archive.ToUpperInvariant())
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try {
+            $archiveKey = [BitConverter]::ToString($hasher.ComputeHash($archiveIdentity)).Replace('-', '').ToLowerInvariant()
+        }
+        finally {
+            $hasher.Dispose()
+        }
+        $nativeBase = Join-Path $env:LOCALAPPDATA 'ArchiveStreamPlayer\NativePlaylists\MediaMonkey'
+        $nativeRoot = Join-Path $nativeBase $archiveKey
         New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
-        Trace-Adapter 'MODE_NATIVE_READY http=0'
+        Trace-Adapter 'MODE_NATIVE_READY http=0 persistent_references=1'
     }
     else {
         Trace-Adapter 'MODE_HTTP_COMPAT reason=missing_or_mismatched_native_input_or_override'
     }
 
+    # Never run the binary in the installed add-on directory: Windows locks a
+    # running EXE, preventing MediaMonkey's Addons manager from updating it.
+    $bridgeSessionFolder = Join-Path ([System.IO.Path]::GetTempPath()) ('ArchiveStreamMM5Bridge-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $bridgeSessionFolder -Force | Out-Null
+    $sessionBridge = Join-Path $bridgeSessionFolder 'archive_player_bridge.exe'
+    Copy-Item -LiteralPath $bridge -Destination $sessionBridge -Force
+    if ((Get-FileHash -LiteralPath $bridge -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $sessionBridge -Algorithm SHA256).Hash) {
+        throw 'Archive Stream bridge session copy failed verification.'
+    }
     $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = $bridge
+    $start.FileName = $sessionBridge
     $start.Arguments = '--archive "' + $Archive + '" --lifetime 7200'
     if ($useNative) {
         $start.Arguments += ' --native-manifest-dir "' + $nativeRoot + '"'
@@ -153,9 +190,10 @@ try {
         Start-Process -FilePath $PlayerExe -ArgumentList @('/NoSplash', '/Add', ('"' + $playlist + '"'))
         Trace-Adapter "PLAYLIST_IMPORT_DISPATCHED entries=$entries"
     }
-    # HTTP keeps the bridge alive. Native mode keeps only the tiny .ast
-    # reference files until MediaMonkey closes; no HTTP process remains alive.
-    # Both modes are bounded to two hours and end after host exit.
+    # HTTP sessions stay alive while MediaMonkey is open. Native sessions
+    # leave the small persistent .ast references in place for saved playlists;
+    # the decoder still streams directly from the original archive at playback.
+    # Both launcher/bridge processes exit when MediaMonkey closes.
     $until = [DateTime]::UtcNow.AddSeconds(7190)
     $hostWasSeen = $false
     $hostMissing = 0
@@ -166,9 +204,9 @@ try {
             $hostWasSeen = $true
             $hostMissing = 0
         }
-        elseif ($hostWasSeen) {
+        else {
             $hostMissing++
-            if ($hostMissing -ge 6) { break }
+            if ($hostMissing -ge 2) { break }
         }
     }
 }
@@ -200,8 +238,11 @@ finally {
         }
         $bridgeProcess.Dispose()
     }
-    if ($nativeRoot -and (Split-Path $nativeRoot -Leaf) -like 'ArchiveStreamMM5Native-*' -and
-        (Test-Path -LiteralPath $nativeRoot -PathType Container)) {
-        Remove-Item -LiteralPath $nativeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    # Do not delete $nativeRoot: MediaMonkey saves these .ast references in
+    # Now Playing and user playlists. They are metadata, not managed cache.
+    # Only the temporary bridge executable session is removed.
+    if ($bridgeSessionFolder -and (Split-Path $bridgeSessionFolder -Leaf) -like 'ArchiveStreamMM5Bridge-*' -and
+        (Test-Path -LiteralPath $bridgeSessionFolder -PathType Container)) {
+        Remove-Item -LiteralPath $bridgeSessionFolder -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

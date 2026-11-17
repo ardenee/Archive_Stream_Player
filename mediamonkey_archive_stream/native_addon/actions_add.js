@@ -13,6 +13,9 @@
     const queuedNativePaths = new Set();
     const synchronizedNativeLengths = new Map();
     const nativeDurationSessions = new Map();
+    const nativeTagSessions = new Map();
+    const nativeTagScansFinished = new Set();
+    let updatingNativeTags = false;
     const attemptedDroppedArchives = new Set();
     let updatingArchiveDurations = false;
     let expandingDroppedArchive = false;
@@ -62,11 +65,40 @@
 
     async function spawn(script, argumentsList) {
         const file = await addonFile(script);
-        const command = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' +
-            quote(file) + ' ' + argumentsList;
-        const result = app.utils.shellExecute('powershell.exe', command);
+        const hiddenLauncher = await addonFile('launch-hidden.vbs');
+        // Launch through Windows Script Host. PowerShell -WindowStyle Hidden
+        // alone still flashes a console before the process initializes.
+        const command = '//B //Nologo ' + quote(hiddenLauncher) + ' ' +
+            quote(file) + (argumentsList ? ' ' + argumentsList : '');
+        const result = app.utils.shellExecute('wscript.exe', command);
         if (typeof result === 'number' && result <= 32)
             throw new Error('Windows could not start the Archive Stream launcher (code ' + result + ').');
+    }
+
+    async function chooseArchive() {
+        // The embedded MediaMonkey file picker can paint a black rectangle
+        // over Explorer. Use a separate Windows common file dialog instead.
+        const temporary = await app.utils.getTempFilePathAsync();
+        const answerFile = temporary + '.archive-stream-picker.json';
+        try {
+            await spawn('choose-archive.ps1', '-ResultFile ' + quote(answerFile));
+            // Do not time out quickly: browsing a large archive drive may take
+            // several minutes. The picker writes a response even on Cancel.
+            for (let attempt = 0; attempt < 2400; ++attempt) {
+                if (await app.filesystem.fileExistsAsync(answerFile)) {
+                    const result = JSON.parse(await app.filesystem.loadTextFromFileAsync(answerFile));
+                    if (!result || result.ok !== true)
+                        throw new Error(result && result.error ? result.error : 'Archive picker failed.');
+                    return typeof result.path === 'string' ? result.path : '';
+                }
+                await new Promise(resolve => setTimeout(resolve, 250));
+            }
+            throw new Error('Archive picker did not respond.');
+        }
+        finally {
+            try { await app.filesystem.deleteFileAsync(answerFile); } catch (error) {}
+            try { await app.filesystem.deleteFileAsync(temporary); } catch (error) {}
+        }
     }
 
     async function awaitReady(path) {
@@ -212,6 +244,201 @@
         finally {
             updatingArchiveDurations = false;
         }
+    }
+
+    function persistentNativeReferenceFolder(path) {
+        if (typeof path !== 'string')
+            return '';
+        const value = path.replace(/\//g, '\\').toLowerCase();
+        if (!/^[a-z]:\\.+\\archivestreamplayer\\nativeplaylists\\mediamonkey\\[0-9a-f]{64}\\entry-[0-9]+\.ast$/i.test(value))
+            return '';
+        return value.slice(0, value.lastIndexOf('\\'));
+    }
+
+    async function refreshNativeArchiveTags() {
+        if (updatingNativeTags)
+            return;
+        updatingNativeTags = true;
+        try {
+            const songs = app.player.getSongList().getTracklist();
+            await songs.whenLoaded();
+            const ownedPaths = new Set();
+            songs.forEach(track => {
+                if (!track || typeof track.path !== 'string')
+                    return;
+                const path = track.path.replace(/\//g, '\\').toLowerCase();
+                const folder = persistentNativeReferenceFolder(path);
+                if (!folder)
+                    return;
+                ownedPaths.add(path);
+                if (!nativeTagScansFinished.has(folder) && !nativeTagSessions.has(folder))
+                    nativeTagSessions.set(folder, new Map());
+            });
+            if (!ownedPaths.size)
+                return;
+            let changes = 0;
+            for (const [folder, applied] of nativeTagSessions) {
+                let content;
+                try {
+                    content = await app.filesystem.loadTextFromFileAsync(folder + '\\archive-stream-tags.tsv');
+                }
+                catch (error) {
+                    continue;
+                }
+                const lines = content.split(/\r?\n/);
+                if (lines[0] !== 'ARCHIVE_STREAM_TAGS_V1')
+                    continue;
+                const data = new Map();
+                let complete = false;
+                for (const row of lines.slice(1)) {
+                    if (row === 'DONE') { complete = true; break; }
+                    const fields = row.split('\t');
+                    if (fields.length !== 8 || !/^[0-9]+$/.test(fields[0]))
+                        continue;
+                    const index = Number(fields[0]);
+                    if (!Number.isSafeInteger(index) || index < 0 || index > 100000)
+                        continue;
+                    try {
+                        const number = Number(fields[5]);
+                        if (!Number.isInteger(number) || number < 0 || number > 9999)
+                            continue;
+                        data.set(folder + '\\entry-' + index + '.ast', {
+                            title: decodeURIComponent(fields[1]),
+                            artist: decodeURIComponent(fields[2]),
+                            album: decodeURIComponent(fields[3]),
+                            albumArtist: decodeURIComponent(fields[4]),
+                            trackNumber: number,
+                            genre: decodeURIComponent(fields[6]),
+                            year: decodeURIComponent(fields[7])
+                        });
+                    }
+                    catch (error) {
+                        // Skip malformed/incomplete metadata, not the playlist.
+                    }
+                }
+                songs.forEach(track => {
+                    if (!track || typeof track.path !== 'string')
+                        return;
+                    const path = track.path.replace(/\//g, '\\').toLowerCase();
+                    if (!ownedPaths.has(path) || applied.has(path))
+                        return;
+                    const tag = data.get(path);
+                    if (!tag)
+                        return;
+                    let changed = false;
+                    for (const field of ['title', 'artist', 'album', 'albumArtist', 'genre']) {
+                        if (tag[field] && track[field] !== tag[field]) {
+                            track[field] = tag[field];
+                            changed = true;
+                        }
+                    }
+                    if (tag.trackNumber > 0 && track.trackNumberInt !== tag.trackNumber) {
+                        track.trackNumberInt = tag.trackNumber;
+                        changed = true;
+                    }
+                    if (/^[0-9]{4}$/.test(tag.year) && Number(track.year) !== Number(tag.year)) {
+                        track.year = Number(tag.year);
+                        changed = true;
+                    }
+                    applied.set(path, true);
+                    if (changed) {
+                        track.notifyChanged();
+                        ++changes;
+                    }
+                });
+                if (complete) {
+                    nativeTagSessions.delete(folder);
+                    nativeTagScansFinished.add(folder);
+                }
+            }
+            if (changes)
+                songs.notifyChanged();
+        }
+        finally {
+            updatingNativeTags = false;
+        }
+    }
+
+    function isNowPlayingDropTarget(element) {
+        // Intercept only the Playing panel, never MediaMonkey's Addons manager
+        // or general file drops. ZIP files are also valid MM add-on packages.
+        const allowed = /^(nowplaying|nowplayinglist|nowplayinglistcontainer|playinglistcontainer|nowplayingview|nowplayingviewcontent)$/i;
+        for (let current = element; current; current = current.parentElement) {
+            const id = typeof current.getAttribute === 'function' ?
+                (current.getAttribute('data-id') || current.id || '') : (current.id || '');
+            if (allowed.test(id))
+                return true;
+        }
+        return false;
+    }
+
+    function droppedArchivePaths(event) {
+        // MediaMonkey's native Windows-drop API exposes absolute paths. The
+        // Chromium FileList may expose only the basename, which is unusable.
+        let paths = [];
+        const dropped = app.utils.getDroppedFiles();
+        if (dropped && typeof dropped.getValue === 'function') {
+            const read = function () {
+                const count = Math.min(Number(dropped.count) || 0, 16);
+                for (let i = 0; i < count; ++i)
+                    paths.push(dropped.getValue(i));
+            };
+            if (typeof dropped.locked === 'function')
+                dropped.locked(read);
+            else
+                read();
+        }
+        else if (Array.isArray(dropped)) {
+            paths = dropped.slice(0, 16);
+        }
+        if (!paths.length && event.dataTransfer && event.dataTransfer.files) {
+            for (const file of Array.from(event.dataTransfer.files).slice(0, 16))
+                paths.push(file.path || file.name);
+        }
+        if (!paths.length || paths.length > 16)
+            return [];
+        // Never treat an .mmip or arbitrary ZIP from outside Now Playing as
+        // an audio archive. Let the player's own add-on handler handle those.
+        if (!paths.every(path => typeof path === 'string' &&
+                /^[a-z]:[\\/].+\.(zip|7z|rar|001)$/i.test(path)))
+            return [];
+        return [...new Set(paths)];
+    }
+
+    function installNowPlayingArchiveDropHandler() {
+        window.addEventListener('drop', function (event) {
+            if (!isNowPlayingDropTarget(event.target))
+                return;
+            let paths = [];
+            try {
+                paths = droppedArchivePaths(event);
+            }
+            catch (error) {
+                return; // Leave unsupported drops to the host.
+            }
+            if (!paths.length)
+                return;
+            // Catch the event before MediaMonkey's ZIP-as-add-on importer.
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (expandingDroppedArchive) {
+                notice('Another archive is already being added.');
+                return;
+            }
+            expandingDroppedArchive = true;
+            (async function () {
+                try {
+                    for (const path of paths)
+                        await addArchive(path);
+                }
+                catch (error) {
+                    notice(error && error.message ? error.message : 'Could not load dropped archive.');
+                }
+                finally {
+                    expandingDroppedArchive = false;
+                }
+            }());
+        }, true);
     }
 
     async function expandDroppedArchives() {
@@ -426,9 +653,12 @@
             if (manifest.mode === 'native') {
                 for (const path of tracks.nativePaths)
                     queuedNativePaths.add(path);
-                if (typeof manifest.nativeRoot === 'string' && manifest.nativeRoot)
-                    nativeDurationSessions.set(
-                        manifest.nativeRoot.replace(/\//g, '\\').toLowerCase(), new Map());
+                if (typeof manifest.nativeRoot === 'string' && manifest.nativeRoot) {
+                    const root = manifest.nativeRoot.replace(/\//g, '\\').toLowerCase();
+                    nativeDurationSessions.set(root, new Map());
+                    nativeTagScansFinished.delete(root);
+                    nativeTagSessions.set(root, new Map());
+                }
                 while (queuedNativePaths.size > 10000) {
                     const oldPath = queuedNativePaths.values().next().value;
                     queuedNativePaths.delete(oldPath);
@@ -451,9 +681,7 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                const archive = await app.utils.dialogOpenFile('',
-                    'zip;7z;rar;001', 'Archives (*.zip;*.7z;*.rar;*.001)|*.zip;*.7z;*.rar;*.001',
-                    'Choose audio archive', false);
+                const archive = await chooseArchive();
                 if (!archive)
                     return;
                 await addArchive(quote(archive).slice(1, -1));
@@ -469,9 +697,7 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                const archive = await app.utils.dialogOpenFile('',
-                    'zip;7z;rar;001', 'Archives (*.zip;*.7z;*.rar;*.001)|*.zip;*.7z;*.rar;*.001',
-                    'Choose audio archive for HTTP compatibility', false);
+                const archive = await chooseArchive();
                 if (!archive)
                     return;
                 await addArchive(quote(archive).slice(1, -1), true);
@@ -510,12 +736,17 @@
         }
     };
 
+    // MediaMonkey treats dropped ZIPs as possible add-on installers. Handle
+    // archives on the Now Playing panel before its built-in ZIP drop action.
+    installNowPlayingArchiveDropHandler();
+
     // Reload only authenticated playlists belonging to archive sessions
     // queued through this addon. Never touch embedded audio tags or unrelated
     // user tracks. The companion bridge rewrites its M3U8 on template change.
     setInterval(function () {
         try { synchronizeNativePlayingDuration(); } catch (error) {}
         refreshNativeArchiveDurations().catch(function () {});
+        refreshNativeArchiveTags().catch(function () {});
         expandDroppedArchives().catch(function () {});
         refreshQueuedArchiveTitles().catch(function () {});
     }, 3000);

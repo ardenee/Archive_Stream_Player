@@ -1,6 +1,6 @@
 # Installer
 
-[Download Archive Stream Player v0.1.2](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.2)
+[Download Archive Stream Player v0.1.7](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.7)
 
 To build it yourself, first compile the plugin Release binaries and the two MediaMonkey MMIP packages. Then:
 
@@ -10,6 +10,6 @@ To build it yourself, first compile the plugin Release binaries and the two Medi
 
 The installer is saved to `installer/output/ArchiveStreamPlayer-Setup.exe`.
 
-It automatically detects compatible players and lets you choose which ones to install into, including portable installations. MediaMonkey requires its two add-ons to be approved through its own Addons menu.
+It automatically detects compatible players and lets you choose which ones to install into, including portable installations. MediaMonkey is installed directly; the two MMIP packages are included for optional manual installation.
 
 [Project website](https://www.arden.ie/projects/archive-stream-player/)

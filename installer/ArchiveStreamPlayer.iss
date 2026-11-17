@@ -1,6 +1,6 @@
 ; Open in Inno Setup 7 and choose Build > Compile.
 #define AppName "Archive Stream Player"
-#define AppVersion "0.1.2"
+#define AppVersion "0.1.7"
 #define HomeURL "https://www.arden.ie/projects/archive-stream-player/"
 
 [Setup]
@@ -41,7 +41,7 @@ Name: "aimp32"; Description: "AIMP 32-bit - native plugin"; Types: custom
 Name: "aimp64"; Description: "AIMP 64-bit - native plugin"; Types: custom
 Name: "xmplay"; Description: "XMPlay 32-bit - native 7z/RAR plugin"; Types: custom
 Name: "musicbee"; Description: "MusicBee 32-bit - native plugin and Tools menu"; Types: custom
-Name: "mediamonkey"; Description: "MediaMonkey 5/2024 - two companion add-on packages"; Types: custom
+Name: "mediamonkey"; Description: "MediaMonkey 5/2024 - native playback and archive Tools menu"; Types: custom
 Name: "vlc"; Description: "VLC 3 64-bit - native archive launcher"; Types: custom
 
 [Files]
@@ -78,7 +78,23 @@ Source: "..\musicbee_archive_stream\Release\MB_ArchiveStream.dll"; DestDir: "{co
 Source: "..\archive_player_bridge\Release\archive_player_bridge.exe"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
 Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
 
-; MediaMonkey requires its own Add-ons UI to install the packaged MMIPs.
+; MediaMonkey: install the add-on itself, not just the MMIP files.
+; Check the currently logged-in user profile and MediaMonkey program folder.
+; CloseApplications=yes lets Windows Restart Manager handle loaded DLLs.
+Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{userappdata}\MediaMonkey5\Plugins"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|mediamonkey}\Plugins"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\native_addon\info.json"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\native_addon\actions_add.js"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\native_addon\launch-mediamonkey.ps1"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\native_addon\choose-archive.ps1"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\native_addon\launch-hidden.vbs"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\archive_player_bridge\x64\Release\archive_player_bridge.exe"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\LICENSING.md"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\third_party\README.md"; DestName: "THIRD-PARTY-NOTICES.md"; DestDir: "{userappdata}\MediaMonkey5\Scripts\archiveStreamPlayerNative"; Components: mediamonkey; Flags: ignoreversion
+; Retain optional MMIPs for users with portable MediaMonkey configurations.
 Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
 Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5-Native.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
 
@@ -94,10 +110,9 @@ Source: "Open-VLC-Archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ig
 Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\configure-adapters.ps1"""
 Name: "{group}\Project homepage"; Filename: "{#HomeURL}"
 Name: "{group}\Open an archive in VLC"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\VLC\Open-VLC-Archive.ps1"" -VlcExe ""{code:GetPlayerExe|vlc}"""; Components: vlc
-Name: "{group}\Install MediaMonkey add-ons"; Filename: "{app}\MediaMonkey"; Components: mediamonkey
+Name: "{group}\MediaMonkey add-on packages (portable installs)"; Filename: "{app}\MediaMonkey"; Components: mediamonkey
 
 [Run]
-Filename: "{app}\MediaMonkey"; Description: "Open MediaMonkey add-on packages (install both in MediaMonkey Tools > Addons > Add)"; Flags: shellexec postinstall skipifsilent; Components: mediamonkey
 Filename: "{#HomeURL}"; Description: "Visit the project website"; Flags: shellexec postinstall skipifsilent unchecked
 
 [Code]

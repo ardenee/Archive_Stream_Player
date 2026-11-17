@@ -30,6 +30,7 @@
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
+#include "../shared/archive_track_tags.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -820,6 +821,88 @@ bool WriteText(const std::filesystem::path &p, const std::string &text)
     output.write(text.data(), (std::streamsize)text.size());
     return output.good();
 }
+bool WriteNativeTrackReference(const std::filesystem::path& path, const std::string& contents)
+{
+    // Saved MediaMonkey playlists keep this stable .ast filename. If another
+    // session opens the same archive, don't truncate an unchanged reference
+    // while the input plugin might be reading it.
+    std::ifstream existing(path, std::ios::binary | std::ios::ate);
+    if (existing && existing.tellg() == static_cast<std::streampos>(contents.size()))
+    {
+        existing.seekg(0);
+        std::string previous(contents.size(), '\0');
+        existing.read(previous.data(), static_cast<std::streamsize>(previous.size()));
+        if (existing && previous == contents)
+            return true;
+    }
+    existing.close();
+    return WriteText(path, contents);
+}
+void ScanNativeManifestTags()
+{
+    // MediaMonkey can display embedded tags rather than synthetic archive
+    // labels. Probe only a small prefix through the shared streaming backend;
+    // no extraction, cache writes, CRC calculations, or password prompts.
+    const std::filesystem::path folder(g_settings.nativeManifestDir);
+    const auto finalPath = folder / L"archive-stream-tags.tsv";
+    const auto stagingPath = folder / L"archive-stream-tags.tsv.partial";
+    std::string progress = "ARCHIVE_STREAM_TAGS_V1\n";
+    const auto publish = [&]() {
+        if (!WriteText(stagingPath, progress))
+            return false;
+        return MoveFileExW(stagingPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    };
+    if (!publish())
+        return;
+
+    ArchivePasswordSetPromptAllowedForCurrentThread(false);
+    constexpr size_t maximumPrefix = 256 * 1024;
+    size_t found = 0;
+    for (const auto& entry : g_entries)
+    {
+        if (entry.isFolder || !entry.isSupportedAudio || !entry.size ||
+            entry.isEncrypted || entry.isSolid)
+            continue;
+        const std::string extension = Extension(entry);
+        if (extension != "mp3" && extension != "flac" && extension != "ogg" && extension != "opus")
+            continue;
+
+        ArchiveStreamOwner reader;
+        std::string error;
+        if (!reader.Open(g_settings.archive.c_str(), entry.index, error))
+            continue;
+        const size_t maximum = static_cast<size_t>((std::min)(entry.size, static_cast<uint64_t>(maximumPrefix)));
+        std::vector<unsigned char> prefix(maximum);
+        size_t received = 0;
+        while (received < maximum)
+        {
+            const auto result = reader.ReadDetailed(prefix.data() + received, maximum - received);
+            received += result.bytesRead;
+            if (result.errorKind != ArchiveStreamErrorKind::None || result.bytesRead == 0)
+                break;
+        }
+        reader.Close();
+        ArchiveTrackTags tags;
+        if (!ArchiveTrackTagParser::Parse(extension, prefix.data(), received, tags) || !tags.Any())
+            continue;
+
+        progress += std::to_string(entry.index) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.title) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.artist) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.album) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.albumArtist) + "\t" +
+            std::to_string(tags.trackNumber) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.genre) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.year) + "\n";
+        ++found;
+        if (!publish())
+            return;
+    }
+    progress += "DONE\n";
+    publish();
+    DebugLogWrite("INFO", "BRIDGE", "NATIVE_TAG_SCAN_COMPLETE", "tracks=%zu | tagged=%zu", g_entries.size(), found);
+}
+
 void ScanNativeManifestDurations()
 {
     // MediaMonkey has already received its native playlist. Publish duration
@@ -894,11 +977,11 @@ bool WriteNativeManifestPlaylist()
         if (virtualPath.size() > 16300)
             return false;
         const std::filesystem::path manifest = folder / (L"entry-" + std::to_wstring(entry.index) + L".ast");
-        if (!WriteText(manifest, "ARCHIVE_STREAM_NATIVE_TRACK_V1\n" + virtualPath + "\n"))
+        if (!WriteNativeTrackReference(manifest, "ARCHIVE_STREAM_NATIVE_TRACK_V1\n" + virtualPath + "\n"))
             return false;
-        std::string title = Title(entry, g_settings.titleTemplate);
-        if (title.empty())
-            title = Name(entry);
+        // Use the actual filename until an embedded audio tag is discovered.
+        // Archive type/index labels are not ID3/Vorbis metadata.
+        std::string title = Name(entry);
         for (char& value : title)
             if (value == '\r' || value == '\n' || value == '\0')
                 value = ' ';
@@ -988,6 +1071,7 @@ int wmain(int argc, wchar_t **argv)
             std::fputs("NATIVE_MANIFEST_WRITE_FAIL\r\n", stderr);
             return 9;
         }
+        ScanNativeManifestTags();
         ScanNativeManifestDurations();
         return 0;
     }
