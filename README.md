@@ -2,7 +2,7 @@
 
 Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows music player, without extracting entire albums.
 
-**[Download v0.1.0](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.0)** · [Project website](https://www.arden.ie/projects/archive-stream-player/) · [Feature matrix](FEATURE-MATRIX.md)
+**[Download v0.1.1](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.1)** · [Project website](https://www.arden.ie/projects/archive-stream-player/) · [Feature matrix](FEATURE-MATRIX.md)
 
 ## Features
 

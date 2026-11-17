@@ -1,6 +1,6 @@
 # Installer
 
-[Download Archive Stream Player v0.1.0](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.0)
+[Download Archive Stream Player v0.1.1](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.1)
 
 To build it yourself, first compile the plugin Release binaries and the two MediaMonkey MMIP packages. Then:
 

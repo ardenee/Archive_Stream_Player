@@ -367,7 +367,7 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                await spawn('configure-adapters.ps1', '-ShowSettings');
+                await spawn('configure-adapters.ps1', '');
                 notice('Opening shared settings.');
             }
             catch (error) {
