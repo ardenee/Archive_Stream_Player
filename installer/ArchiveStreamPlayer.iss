@@ -1,4 +1,4 @@
-; Unified Windows installer. Build with build-installer.ps1.
+; Open in Inno Setup 7 and choose Build > Compile.
 #define AppName "Archive Stream Player"
 #define AppVersion "0.1.0"
 #define HomeURL "https://www.arden.ie/projects/archive-stream-player/"
@@ -45,38 +45,50 @@ Name: "mediamonkey"; Description: "MediaMonkey 5/2024 - two companion add-on pac
 Name: "vlc"; Description: "VLC 3 64-bit - native archive launcher"; Types: custom
 
 [Files]
-Source: "payload\Shared\configure-adapters.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "payload\Notices\*"; DestDir: "{app}\Notices"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}\Notices"; Flags: ignoreversion
+Source: "..\LICENSING.md"; DestDir: "{app}\Notices"; Flags: ignoreversion
+Source: "..\third_party\README.md"; DestDir: "{app}\Notices\third_party"; Flags: ignoreversion
+Source: "..\third_party\libarchive\COPYING"; DestDir: "{app}\Notices\third_party\libarchive"; Flags: ignoreversion
+Source: "..\third_party\libarchive\README.md"; DestDir: "{app}\Notices\third_party\libarchive"; Flags: ignoreversion
+Source: "..\third_party\lzma-sdk\README.md"; DestDir: "{app}\Notices\third_party\lzma-sdk"; Flags: ignoreversion
+Source: "..\third_party\unrar\license.txt"; DestDir: "{app}\Notices\third_party\unrar"; Flags: ignoreversion
+Source: "..\third_party\unrar\README.md"; DestDir: "{app}\Notices\third_party\unrar"; Flags: ignoreversion
+Source: "..\third_party\zlib\LICENSE"; DestDir: "{app}\Notices\third_party\zlib"; Flags: ignoreversion
+Source: "..\third_party\zlib\README.md"; DestDir: "{app}\Notices\third_party\zlib"; Flags: ignoreversion
+Source: "..\third_party\dr_libs\README.md"; DestDir: "{app}\Notices\third_party\dr_libs"; Flags: ignoreversion
+Source: "..\third_party\stb\README.md"; DestDir: "{app}\Notices\third_party\stb"; Flags: ignoreversion
+Source: "..\third_party\winamp\README.md"; DestDir: "{app}\Notices\third_party\winamp"; Flags: ignoreversion
 
-Source: "payload\Winamp\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
-Source: "payload\Winamp\gen_archive_stream.dll"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
-Source: "payload\Winamp\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
-Source: "payload\Winamp\gen_archive_stream.dll"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
+Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
+Source: "..\gen_archive_stream\Release\gen_archive_stream.dll"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
+Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
+Source: "..\gen_archive_stream\Release\gen_archive_stream.dll"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
 
-Source: "payload\Foobar32\foo_archive_stream.dll"; DestDir: "{code:GetPlayerDir|foobar32}\components"; Components: foobar32; Flags: ignoreversion
-Source: "payload\Foobar64\foo_archive_stream.dll"; DestDir: "{code:GetPlayerDir|foobar64}\components"; Components: foobar64; Flags: ignoreversion
+Source: "..\foo_archive_stream\Release\foo_archive_stream.dll"; DestDir: "{code:GetPlayerDir|foobar32}\components"; Components: foobar32; Flags: ignoreversion
+Source: "..\foo_archive_stream\x64\Release\foo_archive_stream.dll"; DestDir: "{code:GetPlayerDir|foobar64}\components"; Components: foobar64; Flags: ignoreversion
 
-Source: "payload\Aimp32\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp32}\Plugins\aimp_archive_stream"; Components: aimp32; Flags: ignoreversion
-Source: "payload\Aimp64\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp64}\Plugins\aimp_archive_stream"; Components: aimp64; Flags: ignoreversion
+Source: "..\aimp_archive_stream\Release\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp32}\Plugins\aimp_archive_stream"; Components: aimp32; Flags: ignoreversion
+Source: "..\aimp_archive_stream\x64\Release\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp64}\Plugins\aimp_archive_stream"; Components: aimp64; Flags: ignoreversion
 
-Source: "payload\XMPlay\xmp-archive-stream.dll"; DestDir: "{code:GetPlayerDir|xmplay}"; Components: xmplay; Flags: ignoreversion
+Source: "..\xmp_archive_stream\Release\xmp-archive-stream.dll"; DestDir: "{code:GetPlayerDir|xmplay}"; Components: xmplay; Flags: ignoreversion
 
-Source: "payload\MusicBee\bass_archive_stream.dll"; DestDir: "{code:GetPlayerDir|musicbee}"; Components: musicbee; Flags: ignoreversion
-Source: "payload\MusicBee\MB_ArchiveStream.dll"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
-Source: "payload\MusicBee\archive_player_bridge.exe"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
-Source: "payload\Shared\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
+Source: "..\musicbee_archive_stream\Release\bass_archive_stream.dll"; DestDir: "{code:GetPlayerDir|musicbee}"; Components: musicbee; Flags: ignoreversion
+Source: "..\musicbee_archive_stream\Release\MB_ArchiveStream.dll"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
+Source: "..\archive_player_bridge\Release\archive_player_bridge.exe"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
 
 ; MediaMonkey requires its own Add-ons UI to install the packaged MMIPs.
-Source: "payload\MediaMonkey\ArchiveStreamPlayer-MediaMonkey5.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
-Source: "payload\MediaMonkey\ArchiveStreamPlayer-MediaMonkey5-Native.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5-Native.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
 
 ; VLC uses an external native plugin via the launcher, not a file copied into Program Files\VLC.
-Source: "payload\VLC\libarchive_stream_plugin.dll"; DestDir: "{app}\VLC\plugins\access"; Components: vlc; Flags: ignoreversion
-Source: "payload\VLC\vlc_native_playlist.exe"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
-Source: "payload\VLC\archive_player_bridge.exe"; DestDir: "{app}\VLC\x64\Release"; Components: vlc; Flags: ignoreversion
-Source: "payload\VLC\launch-archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
-Source: "payload\Shared\configure-adapters.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
-Source: "payload\VLC\Open-VLC-Archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
+Source: "..\vlc_archive_stream\x64\Release\libarchive_stream_plugin.dll"; DestDir: "{app}\VLC\plugins\access"; Components: vlc; Flags: ignoreversion
+Source: "..\vlc_archive_stream\x64\Release\vlc_native_playlist.exe"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
+Source: "..\archive_player_bridge\x64\Release\archive_player_bridge.exe"; DestDir: "{app}\VLC\x64\Release"; Components: vlc; Flags: ignoreversion
+Source: "..\archive_player_bridge\launch-archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
+Source: "Open-VLC-Archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\configure-adapters.ps1"""
