@@ -12,6 +12,10 @@
     // playback-duration metadata. No persistent library tracks or tags.
     const queuedNativePaths = new Set();
     const synchronizedNativeLengths = new Map();
+    const nativeDurationSessions = new Map();
+    const attemptedDroppedArchives = new Set();
+    let updatingArchiveDurations = false;
+    let expandingDroppedArchive = false;
     let activeNativeTrackPath = '';
     let lastNativePlaybackPosition = -1;
     let activeNativeProgressTicks = 0;
@@ -138,6 +142,119 @@
         if (!count || count !== expectedCount)
             throw new Error('Archive playlist entry count does not match the bridge.');
         return {list, count, nativePaths};
+    }
+
+    async function refreshNativeArchiveDurations() {
+        if (updatingArchiveDurations || !nativeDurationSessions.size)
+            return;
+        updatingArchiveDurations = true;
+        try {
+            const verified = new Map();
+            for (const [directory, session] of nativeDurationSessions) {
+                let content;
+                try {
+                    content = await app.filesystem.loadTextFromFileAsync(
+                        directory + '\\archive-stream-durations.tsv');
+                }
+                catch (error) {
+                    continue;
+                }
+                const lines = content.split(/\r?\n/);
+                if (lines[0] !== 'ARCHIVE_STREAM_DURATIONS_V1')
+                    continue;
+                let complete = false;
+                for (const line of lines.slice(1)) {
+                    if (line === 'DONE') {
+                        complete = true;
+                        break;
+                    }
+                    const match = /^([0-9]+)\t([0-9]+)$/.exec(line);
+                    if (!match)
+                        continue;
+                    const index = Number(match[1]);
+                    const duration = Number(match[2]);
+                    if (!Number.isSafeInteger(index) || index < 0 ||
+                        !Number.isSafeInteger(duration) || duration < 1000 ||
+                        duration > 86400000)
+                        continue;
+                    const path = (directory + '\\entry-' + index + '.ast').toLowerCase();
+                    if (queuedNativePaths.has(path) && session.get(path) !== duration) {
+                        verified.set(path, duration);
+                        session.set(path, duration);
+                    }
+                }
+                if (complete)
+                    nativeDurationSessions.delete(directory);
+            }
+            if (!verified.size)
+                return;
+            const list = app.player.getSongList().getTracklist();
+            await list.whenLoaded();
+            let changes = 0;
+            list.forEach(track => {
+                if (!track || typeof track.path !== 'string')
+                    return;
+                const path = track.path.replace(/\//g, '\\').toLowerCase();
+                const duration = verified.get(path);
+                if (!duration || (track.songLength > 0 &&
+                    !synchronizedNativeLengths.has(path)))
+                    return;
+                if (track.songLength !== duration) {
+                    track.songLength = duration;
+                    track.notifyChanged();
+                    ++changes;
+                }
+                synchronizedNativeLengths.set(path, duration);
+            });
+            if (changes)
+                list.notifyChanged();
+        }
+        finally {
+            updatingArchiveDurations = false;
+        }
+    }
+
+    async function expandDroppedArchives() {
+        if (expandingDroppedArchive)
+            return;
+        const list = app.player.getSongList().getTracklist();
+        await list.whenLoaded();
+        const found = new Set();
+        const candidates = [];
+        list.forEach(track => {
+            if (!track || typeof track.path !== 'string')
+                return;
+            const path = track.path;
+            if (!/^[a-z]:[\\/].+\.(zip|7z|rar|001)$/i.test(path))
+                return;
+            found.add(path.toLowerCase());
+            if (!attemptedDroppedArchives.has(path.toLowerCase()))
+                candidates.push({path, track});
+        });
+        for (const path of attemptedDroppedArchives) {
+            if (!found.has(path))
+                attemptedDroppedArchives.delete(path);
+        }
+        if (!candidates.length)
+            return;
+        const {path, track} = candidates[0];
+        attemptedDroppedArchives.add(path.toLowerCase());
+        expandingDroppedArchive = true;
+        try {
+            // The host's regular drop inserts an unplayable archive placeholder.
+            // Expand it with the existing native route, then remove only that
+            // specific placeholder after insertion succeeds.
+            await addArchive(path);
+            const placeholder = app.utils.createTracklist(true);
+            placeholder.add(track);
+            await app.player.removeSelectedTracksAsync(placeholder);
+        }
+        catch (error) {
+            notice(error && error.message ? error.message : 'Cannot expand dropped archive.');
+        }
+        finally {
+            expandingDroppedArchive = false;
+        }
     }
 
     function playlistTitles(text) {
@@ -309,6 +426,9 @@
             if (manifest.mode === 'native') {
                 for (const path of tracks.nativePaths)
                     queuedNativePaths.add(path);
+                if (typeof manifest.nativeRoot === 'string' && manifest.nativeRoot)
+                    nativeDurationSessions.set(
+                        manifest.nativeRoot.replace(/\//g, '\\').toLowerCase(), new Map());
                 while (queuedNativePaths.size > 10000) {
                     const oldPath = queuedNativePaths.values().next().value;
                     queuedNativePaths.delete(oldPath);
@@ -331,9 +451,9 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                const archive = await window.localPromise(app.utils.dialogOpenFile('',
+                const archive = await app.utils.dialogOpenFile('',
                     'zip;7z;rar;001', 'Archives (*.zip;*.7z;*.rar;*.001)|*.zip;*.7z;*.rar;*.001',
-                    'Choose audio archive', false));
+                    'Choose audio archive', false);
                 if (!archive)
                     return;
                 await addArchive(quote(archive).slice(1, -1));
@@ -349,9 +469,9 @@
         hotkeyAble: true,
         execute: async function () {
             try {
-                const archive = await window.localPromise(app.utils.dialogOpenFile('',
+                const archive = await app.utils.dialogOpenFile('',
                     'zip;7z;rar;001', 'Archives (*.zip;*.7z;*.rar;*.001)|*.zip;*.7z;*.rar;*.001',
-                    'Choose audio archive for HTTP compatibility', false));
+                    'Choose audio archive for HTTP compatibility', false);
                 if (!archive)
                     return;
                 await addArchive(quote(archive).slice(1, -1), true);
@@ -395,6 +515,8 @@
     // user tracks. The companion bridge rewrites its M3U8 on template change.
     setInterval(function () {
         try { synchronizeNativePlayingDuration(); } catch (error) {}
+        refreshNativeArchiveDurations().catch(function () {});
+        expandDroppedArchives().catch(function () {});
         refreshQueuedArchiveTitles().catch(function () {});
     }, 3000);
 

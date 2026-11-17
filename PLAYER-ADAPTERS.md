@@ -1,6 +1,6 @@
 # Player installation
 
-[Download the installer](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.1), run it and select your installed music players. Portable installations can be chosen manually.
+[Download the installer](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.2), run it and select your installed music players. Portable installations can be chosen manually.
 
 | Player | Installation |
 | --- | --- |

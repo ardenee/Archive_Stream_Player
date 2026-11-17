@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include "archive_backend.h"
+#include "archive_metadata.h"
 #include "archive_common.h"
 #include "archive_format.h"
 #include "archive_passwords.h"
@@ -819,6 +820,53 @@ bool WriteText(const std::filesystem::path &p, const std::string &text)
     output.write(text.data(), (std::streamsize)text.size());
     return output.good();
 }
+void ScanNativeManifestDurations()
+{
+    // MediaMonkey has already received its native playlist. Publish duration
+    // discoveries atomically so it can repaint rows as scanning progresses.
+    const std::string archive = Utf8(g_settings.archive);
+    if (archive.empty())
+        return;
+
+    ArchivePasswordSetPromptAllowedForCurrentThread(false);
+    const auto resultFile = std::filesystem::path(g_settings.nativeManifestDir) / L"archive-stream-durations.tsv";
+    const auto partialFile = std::filesystem::path(g_settings.nativeManifestDir) / L"archive-stream-durations.tsv.partial";
+    std::string progress = "ARCHIVE_STREAM_DURATIONS_V1\n";
+    const auto publish = [&]() {
+        if (!WriteText(partialFile, progress))
+            return false;
+        return MoveFileExW(partialFile.c_str(), resultFile.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    };
+    if (!publish())
+        return;
+
+    size_t discovered = 0;
+    for (const auto& entry : g_entries)
+    {
+        if (entry.isFolder || !entry.isSupportedAudio || !entry.size ||
+            entry.size > g_settings.memoryLimit)
+            continue;
+
+        int durationMs = -1000;
+        // Keep metadata reads within the configured RAM limit. Reuse a cached
+        // duration first; otherwise try the shared direct-stream metadata
+        // route, with managed extraction only as its last resort.
+        bool valid = GetAudioDurationMsFromArchiveEntryCacheOnly(archive.c_str(), entry.index, entry.size, entry.path.c_str(), &durationMs);
+        if (!valid)
+            valid = GetAudioDurationMsFromArchiveEntryBackground(archive.c_str(), entry.index, entry.size, entry.path.c_str(), &durationMs);
+        if (!valid || durationMs < 1000 || durationMs > 24 * 60 * 60 * 1000)
+            continue;
+
+        progress += std::to_string(entry.index) + "\t" + std::to_string(durationMs) + "\n";
+        ++discovered;
+        if (!publish())
+            return;
+    }
+    progress += "DONE\n";
+    publish();
+    DebugLogWrite("INFO", "BRIDGE", "NATIVE_DURATION_SCAN_COMPLETE", "tracks=%zu | durations=%zu", g_entries.size(), discovered);
+}
+
 bool WriteNativeManifestPlaylist()
 {
     // Native MediaMonkey uses real .ast filenames for Winamp input dispatch.
@@ -940,6 +988,7 @@ int wmain(int argc, wchar_t **argv)
             std::fputs("NATIVE_MANIFEST_WRITE_FAIL\r\n", stderr);
             return 9;
         }
+        ScanNativeManifestDurations();
         return 0;
     }
     // Encrypted entry credentials are resolved only when playback requests
