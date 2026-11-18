@@ -5,7 +5,8 @@
 // Keep every page below 284 horizontal dialog units and 190 vertical units.
 // Large settings are split into child pages, not clipped below the viewport.
 IDD_ARCHIVE_GENERAL DIALOGEX 0, 0, 284, 185
-STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
+EXSTYLE WS_EX_CONTROLPARENT
 FONT 9, "Segoe UI"
 BEGIN
     GROUPBOX      "Playback and cache", -1, 8, 5, 268, 125
@@ -21,11 +22,13 @@ BEGIN
     PUSHBUTTON    "Open cache", IDC_CACHE_VIEW, 12, 138, 79, 18
     PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 100, 138, 79, 18
     PUSHBUTTON    "Shared settings...", IDC_SHARED_SETTINGS, 188, 138, 87, 18
-    LTEXT         "Password and diagnostic settings have their own pages. foobar2000 controls playlist title display.", -1, 12, 165, 260, 18
+    LTEXT         "Passwords and diagnostics are on separate pages.", -1, 12, 162, 260, 11
+    LTEXT         "foobar2000 controls playlist title formatting.", -1, 12, 174, 260, 11
 END
 
 IDD_ARCHIVE_PASSWORDS DIALOGEX 0, 0, 284, 110
-STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
+EXSTYLE WS_EX_CONTROLPARENT
 FONT 9, "Segoe UI"
 BEGIN
     GROUPBOX      "Archive passwords", -1, 8, 5, 268, 92
@@ -36,7 +39,8 @@ BEGIN
 END
 
 IDD_ARCHIVE_DIAGNOSTICS DIALOGEX 0, 0, 284, 127
-STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
+EXSTYLE WS_EX_CONTROLPARENT
 FONT 9, "Segoe UI"
 BEGIN
     GROUPBOX      "Diagnostics", -1, 8, 5, 268, 111

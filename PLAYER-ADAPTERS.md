@@ -12,7 +12,9 @@
 | MediaMonkey 5 / 2024 | Installs native playback and archive Tools menu directly |
 | VLC 3 64-bit | Use the **Open an archive in VLC** Start Menu shortcut |
 
-The **Configure Archive Stream Player** shortcut manages shared passwords, cache, titles and logging.
+Plugin settings follow the player's own UI: **Winamp/WACUP** uses its input plugin's compact configuration dialog; **foobar2000** uses Preferences → Tools → Archive Stream; **AIMP** uses Preferences → Plugins → Archive Stream Player; and **XMPlay** uses Options → Decoders → Archive Stream → Config. All use consistent shared settings underneath, although some players control playlist titles themselves.
+
+The **Configure Archive Stream Player** shortcut also manages shared passwords, cache, titles and logging.
 
 WACUP 64-bit and Windows Media Player are not included as native installer options.
 

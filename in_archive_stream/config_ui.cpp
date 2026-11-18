@@ -1,6 +1,9 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <commdlg.h>
+#include <commctrl.h>
+#include <array>
+#include <vector>
 #include <cstdlib>
 #include <cstdio>
 #include <cstdarg>
@@ -19,6 +22,7 @@
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "comctl32.lib")
 
 #ifndef WM_WA_IPC
 #define WM_WA_IPC WM_USER
@@ -98,6 +102,69 @@
 #define IDC_ABOUT_TEXT          9101
 #define IDC_ABOUT_ARDEN_BUTTON  9102
 #define IDC_ABOUT_CLOSE_BUTTON  9103
+
+static HWND g_settingsTabs = NULL;
+static HFONT g_settingsFont = NULL;
+static UINT g_settingsDpi = 96;
+static std::array<std::vector<HWND>, 4> g_settingsPages;
+
+static int ScaleSettings(int value)
+{
+    return MulDiv(value, static_cast<int>(g_settingsDpi), 96);
+}
+
+static void ShowSettingsPage(int index)
+{
+    if (index < 0 || index >= static_cast<int>(g_settingsPages.size()))
+        return;
+    for (int page = 0; page < static_cast<int>(g_settingsPages.size()); ++page)
+    {
+        for (HWND control : g_settingsPages[page])
+            ShowWindow(control, page == index ? SW_SHOW : SW_HIDE);
+    }
+}
+
+static BOOL CALLBACK LayoutSettingsChild(HWND control, LPARAM parentParam)
+{
+    const HWND parent = reinterpret_cast<HWND>(parentParam);
+    if (GetParent(control) != parent)
+        return TRUE;
+    RECT rect{};
+    GetWindowRect(control, &rect);
+    MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&rect), 2);
+    const int id = GetDlgCtrlID(control);
+    int page = -1;
+    int y = rect.top;
+    if (id == IDC_SAVE_BUTTON || id == IDC_CANCEL_BUTTON || id == 4501)
+        y = 350;
+    else if (y < 32)
+    {
+        ShowWindow(control, SW_HIDE); // The dialog caption already has the title.
+        return TRUE;
+    }
+    else if (y < 292)
+        page = 0;
+    else if (y < 435)
+    {
+        page = 1;
+        y -= 240;
+    }
+    else if (y < 490)
+    {
+        page = 2;
+        y -= 390;
+    }
+    else
+    {
+        page = 3;
+        y -= 440;
+    }
+    if (page >= 0)
+        g_settingsPages[page].push_back(control);
+    MoveWindow(control, ScaleSettings(rect.left), ScaleSettings(y),
+        ScaleSettings(rect.right - rect.left), ScaleSettings(rect.bottom - rect.top), FALSE);
+    return TRUE;
+}
 
 static HWND g_cacheSizeCleanupCheck = NULL;
 static HWND g_cacheAgeCleanupCheck = NULL;
@@ -767,7 +834,13 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     {
         case WM_CREATE:
         {
-            HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            g_settingsDpi = GetDpiForWindow(hwnd);
+            if (!g_settingsDpi)
+                g_settingsDpi = 96;
+            g_settingsFont = CreateFontW(-MulDiv(9, static_cast<int>(g_settingsDpi), 72), 0, 0, 0,
+                FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+            HFONT hFont = g_settingsFont ? g_settingsFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
             HWND hTitle = CreateWindowExA(0, "STATIC", "Archive Stream Player Settings", WS_CHILD | WS_VISIBLE, 16, 14, 360, 20, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hTitle, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -910,8 +983,47 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HWND hCancel = CreateWindowExA(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE, 420, 600, 90, 28, hwnd, (HMENU)IDC_CANCEL_BUTTON, g_hInstance, NULL);
             SendMessage(hCancel, WM_SETFONT, (WPARAM)hFont, TRUE);
 
+            for (auto& page : g_settingsPages)
+                page.clear();
+            EnumChildWindows(hwnd, LayoutSettingsChild, reinterpret_cast<LPARAM>(hwnd));
+            INITCOMMONCONTROLSEX init{sizeof(init), ICC_TAB_CLASSES};
+            InitCommonControlsEx(&init);
+            g_settingsTabs = CreateWindowExA(0, WC_TABCONTROLA, "",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | TCS_TABS, ScaleSettings(12), ScaleSettings(10),
+                ScaleSettings(536), ScaleSettings(323), hwnd, reinterpret_cast<HMENU>(4502), g_hInstance, nullptr);
+            if (g_settingsTabs)
+            {
+                SendMessage(g_settingsTabs, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+                const char* labels[] = {"Playback and cache", "Track titles", "Passwords", "Diagnostics"};
+                for (int index = 0; index < 4; ++index)
+                {
+                    TCITEMA tab{};
+                    tab.mask = TCIF_TEXT;
+                    tab.pszText = const_cast<char*>(labels[index]);
+                    TabCtrl_InsertItem(g_settingsTabs, index, &tab);
+                }
+                SetWindowPos(g_settingsTabs, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                ShowSettingsPage(0);
+            }
             return 0;
         }
+
+        case WM_NOTIFY:
+        {
+            const auto* notification = reinterpret_cast<const NMHDR*>(lParam);
+            if (notification && notification->idFrom == 4502 && notification->code == TCN_SELCHANGE)
+            {
+                ShowSettingsPage(TabCtrl_GetCurSel(g_settingsTabs));
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+            SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+            return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
 
         case WM_COMMAND:
         {
@@ -1174,6 +1286,14 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             return 0;
 
         case WM_DESTROY:
+            g_settingsTabs = NULL;
+            for (auto& page : g_settingsPages)
+                page.clear();
+            if (g_settingsFont)
+            {
+                DeleteObject(g_settingsFont);
+                g_settingsFont = NULL;
+            }
             g_configWnd = NULL;
             g_bufferEdit = NULL;
             g_cacheEdit = NULL;
@@ -1219,7 +1339,11 @@ void Config(HWND hwndParent)
             DebugLogWrite("WARN", "UI", "CONFIG_WINDOW_CLASS_FAIL", "winerr=%lu", err);
     }
 
-    g_configWnd = CreateWindowExA(WS_EX_DLGMODALFRAME, className, "Archive Stream Player Settings", WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, 560, 700, hwndParent, NULL, g_hInstance, NULL);
+    const UINT parentDpi = hwndParent ? GetDpiForWindow(hwndParent) : GetDpiForSystem();
+    const UINT windowDpi = parentDpi ? parentDpi : 96;
+    g_configWnd = CreateWindowExA(WS_EX_DLGMODALFRAME, className, "Archive Stream Player Settings", WS_CAPTION | WS_SYSMENU | WS_POPUP,
+        CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(560, static_cast<int>(windowDpi), 96),
+        MulDiv(425, static_cast<int>(windowDpi), 96), hwndParent, NULL, g_hInstance, NULL);
 
     if (!g_configWnd)
     {

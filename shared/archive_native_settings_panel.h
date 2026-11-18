@@ -31,6 +31,12 @@ public:
         module_ = module;
         modifiedContext_ = context;
         modifiedCallback_ = onModified;
+        dpi_ = GetDpiForWindow(parent);
+        if (!dpi_)
+            dpi_ = 96;
+        font_ = CreateFontW(-MulDiv(9, static_cast<int>(dpi_), 72), 0, 0, 0, FW_NORMAL,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
         INITCOMMONCONTROLSEX init{sizeof(init), ICC_TAB_CLASSES};
         InitCommonControlsEx(&init);
         WNDCLASSEXW windowClass{};
@@ -47,6 +53,11 @@ public:
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
             0, 0, std::max(400L, bounds.right), std::max(350L, bounds.bottom),
             parent, nullptr, module_, this);
+        if (!frame_ && font_)
+        {
+            DeleteObject(font_);
+            font_ = nullptr;
+        }
         return frame_;
     }
 
@@ -74,6 +85,11 @@ public:
         titleTemplate_ = nullptr;
         passwordBrowse_ = nullptr;
         logOpen_ = nullptr;
+        if (font_)
+        {
+            DeleteObject(font_);
+            font_ = nullptr;
+        }
     }
 
     void Load()
@@ -188,6 +204,9 @@ private:
         L"[<archive>] <#> - <filename>"
     };
     HWND frame_ = nullptr;
+    UINT dpi_ = 96;
+    HFONT font_ = nullptr;
+    int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
     HWND tab_ = nullptr;
     HWND status_ = nullptr;
     HWND save_ = nullptr;
@@ -278,11 +297,12 @@ private:
         DWORD style, int x, int y, int width, int height, int id = 0)
     {
         HWND control = CreateWindowExW(0, kind, text,
-            WS_CHILD | style, x, y, width, height, frame_,
+            WS_CHILD | style, Scale(x), Scale(y), Scale(width), Scale(height), frame_,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), module_, nullptr);
         if (control)
         {
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(
+                font_ ? font_ : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
             if (page >= 0 && page < 4)
                 pageControls_[page].push_back(control);
         }
@@ -334,9 +354,14 @@ private:
         AddControl(3, L"STATIC", L"Tokens: <filename>  <archivetype>  <archive>  <filetype>  <#>", 0, 32, 169, 500, 30);
         AddControl(3, L"STATIC", L"Controls archive-entry titles for supported players; embedded audio tags are unchanged.", 0, 32, 221, 500, 38);
 
-        save_ = AddControl(-1, L"BUTTON", L"Save settings", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 22, 352, 134, 32, kSave);
-        reload_ = AddControl(-1, L"BUTTON", L"Reload", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 167, 352, 112, 32, kReload);
-        status_ = AddControl(-1, L"STATIC", L"", WS_VISIBLE, 22, 390, 560, 39);
+        // AIMP already owns Apply/OK/Reset. A second Save/Reload row is
+        // redundant and visually conflicts with its Options page.
+        if (_wcsicmp(hostName_, L"aimp") != 0)
+        {
+            save_ = AddControl(-1, L"BUTTON", L"Save settings", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 22, 352, 134, 32, kSave);
+            reload_ = AddControl(-1, L"BUTTON", L"Reload", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 167, 352, 112, 32, kReload);
+            status_ = AddControl(-1, L"STATIC", L"", WS_VISIBLE, 22, 390, 560, 39);
+        }
         TabCtrl_SetCurSel(tab_, 0);
         ShowPage(0);
         Load();
@@ -362,15 +387,35 @@ private:
         GetClientRect(frame_, &bounds);
         const int width = bounds.right - bounds.left;
         const int height = bounds.bottom - bounds.top;
-        MoveWindow(tab_, 12, 10, std::max(380, width - 24), std::max(318, height - 90), TRUE);
-        const int footer = std::max(336, height - 72);
-        MoveWindow(save_, 22, footer, 134, 30, TRUE);
-        MoveWindow(reload_, 167, footer, 112, 30, TRUE);
-        MoveWindow(status_, 22, footer + 35, std::max(350, width - 40), 33, TRUE);
-        const int pathWidth = std::max(250, std::min(450, width - 177));
-        MoveWindow(passwordPath_, 32, 99, pathWidth, 24, TRUE);
-        MoveWindow(passwordBrowse_, 43 + pathWidth, 97, 92, 28, TRUE);
-        MoveWindow(logDirectory_, 32, 148, std::max(250, std::min(500, width - 90)), 24, TRUE);
+        const int footerSpace = save_ ? Scale(90) : Scale(20);
+        MoveWindow(tab_, Scale(12), Scale(10), std::max(Scale(350), width - Scale(24)),
+            std::max(Scale(290), height - footerSpace - Scale(10)), TRUE);
+        if (save_ && reload_ && status_)
+        {
+            const int footer = std::max(Scale(336), height - Scale(72));
+            MoveWindow(save_, Scale(22), footer, Scale(134), Scale(30), TRUE);
+            MoveWindow(reload_, Scale(167), footer, Scale(112), Scale(30), TRUE);
+            MoveWindow(status_, Scale(22), footer + Scale(35), std::max(Scale(280), width - Scale(40)), Scale(33), TRUE);
+        }
+        const int pathWidth = std::max(Scale(140), std::min(Scale(450), width - Scale(177)));
+        MoveWindow(passwordPath_, Scale(32), Scale(99), pathWidth, Scale(24), TRUE);
+        MoveWindow(passwordBrowse_, Scale(43) + pathWidth, Scale(97), Scale(92), Scale(28), TRUE);
+        MoveWindow(logDirectory_, Scale(32), Scale(148), std::max(Scale(180), width - Scale(90)), Scale(24), TRUE);
+        // AIMP can embed us in a narrower host page than the design width,
+        // particularly at 150% DPI. Clip every control, including checkboxes
+        // and title preset combinations, before the host paints it.
+        for (const auto& page : pageControls_)
+        {
+            for (HWND control : page)
+            {
+                RECT child{};
+                GetWindowRect(control, &child);
+                MapWindowPoints(nullptr, frame_, reinterpret_cast<POINT*>(&child), 2);
+                const int maxRight = width - Scale(16);
+                if (child.right > maxRight && maxRight > child.left)
+                    MoveWindow(control, child.left, child.top, maxRight - child.left, child.bottom - child.top, TRUE);
+            }
+        }
     }
 
     void BrowsePasswords()
@@ -478,6 +523,10 @@ private:
             }
             break;
         }
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+            SetBkMode(reinterpret_cast<HDC>(w), TRANSPARENT);
+            return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
         case WM_COMMAND:
             self->OnCommand(LOWORD(w), HIWORD(w));
             return 0;
