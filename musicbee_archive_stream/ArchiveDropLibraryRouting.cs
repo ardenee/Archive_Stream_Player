@@ -2,6 +2,7 @@
 // Existing Playing Tracks drops remain queue-only. Music/Tracks imports the
 // same persistent native zero-copy references into MusicBee's library.
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -19,6 +20,108 @@ namespace MusicBeePlugin
 
         [DllImport("user32.dll", EntryPoint = "WindowFromPoint")]
         private static extern IntPtr ArchiveDropWindowFromPoint(Point screenPoint);
+
+        [DllImport("user32.dll", EntryPoint = "EnumChildWindows")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool EnumArchiveChildWindows(IntPtr parent, ArchiveWindowCallback callback, IntPtr state);
+
+        [DllImport("user32.dll", EntryPoint = "GetParent")]
+        private static extern IntPtr ArchiveGetParent(IntPtr window);
+
+        [DllImport("user32.dll", EntryPoint = "IsWindowVisible")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ArchiveIsWindowVisible(IntPtr window);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowRect")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ArchiveGetWindowRect(IntPtr window, out ArchiveWindowRect bounds);
+
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate bool ArchiveWindowCallback(IntPtr window, IntPtr state);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ArchiveWindowRect
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+            public Rectangle ToRectangle()
+            {
+                return Rectangle.FromLTRB(Left, Top, Right, Bottom);
+            }
+        }
+
+        // MusicBee uses custom WinForms track panels with empty window names
+        // and no accessibility labels. Identify the actual side-by-side content
+        // panes from their direct-child bounds, independently of SDK MainPanel.
+        private static ArchiveDropDestination? SplitPaneDestination(Rectangle host, Rectangle[] panels, Point point)
+        {
+            if (!host.Contains(point) || panels == null)
+                return null;
+
+            var candidates = new List<Rectangle>();
+            foreach (Rectangle pane in panels)
+            {
+                if (pane.Width < host.Width / 4 || pane.Height < host.Height / 2 ||
+                    !host.Contains(pane))
+                    continue;
+                candidates.Add(pane);
+            }
+            candidates.Sort((a, b) => a.Left.CompareTo(b.Left));
+
+            for (int i = 0; i < candidates.Count; ++i)
+            {
+                Rectangle tracks = candidates[i];
+                // The navigator sits to the left, outside the track pane.
+                if (tracks.Left < host.Left + host.Width / 10)
+                    continue;
+
+                for (int j = i + 1; j < candidates.Count; ++j)
+                {
+                    Rectangle playing = candidates[j];
+                    int gap = playing.Left - tracks.Right;
+                    int overlappingHeight = Math.Min(tracks.Bottom, playing.Bottom) -
+                        Math.Max(tracks.Top, playing.Top);
+                    if (gap < -8 || gap > host.Width / 20 ||
+                        overlappingHeight < Math.Min(tracks.Height, playing.Height) / 2)
+                        continue;
+
+                    if (tracks.Contains(point))
+                        return ArchiveDropDestination.MusicLibrary;
+                    if (playing.Contains(point))
+                        return ArchiveDropDestination.PlayingTracks;
+                }
+            }
+            return null;
+        }
+
+        private ArchiveDropDestination? DirectChildPaneDestination(Point screenPoint)
+        {
+            if (archiveDropRoot == null || archiveDropRoot.IsDisposed ||
+                !archiveDropRoot.IsHandleCreated)
+                return null;
+
+            var panels = new List<Rectangle>();
+            IntPtr hostHandle = archiveDropRoot.Handle;
+            Rectangle host = archiveDropRoot.RectangleToScreen(archiveDropRoot.ClientRectangle);
+            ArchiveWindowCallback visit = (window, unused) =>
+            {
+                if (ArchiveGetParent(window) != hostHandle || !ArchiveIsWindowVisible(window))
+                    return true;
+                ArchiveWindowRect bounds;
+                if (ArchiveGetWindowRect(window, out bounds))
+                    panels.Add(bounds.ToRectangle());
+                return true;
+            };
+            EnumArchiveChildWindows(hostHandle, visit, IntPtr.Zero);
+            ArchiveDropDestination? result = SplitPaneDestination(host, panels.ToArray(), screenPoint);
+            if (result.HasValue)
+                Trace("ARCHIVE_DROP_DESTINATION method=win32_panes value=" + result.Value);
+            else
+                Trace("ARCHIVE_DROP_PANE_UNRESOLVED direct_children=" + panels.Count);
+            return result;
+        }
 
         private static ArchiveDropDestination? NamedDropDestination(Control control, Control root)
         {
@@ -76,6 +179,21 @@ namespace MusicBeePlugin
             {
                 Trace("ARCHIVE_DROP_DESTINATION method=ancestor value=" + named.Value);
                 return named.Value;
+            }
+
+            // The observed MusicBee layout uses two adjacent custom WinForms
+            // content panes without names: Tracks is the central pane and
+            // Playing Tracks is to its right. Resolve their real bounds before
+            // attempting the optional SDK panel bounds mapping.
+            try
+            {
+                ArchiveDropDestination? pane = DirectChildPaneDestination(screenPoint);
+                if (pane.HasValue)
+                    return pane.Value;
+            }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_DROP_PANE_DETECT_FAILED type=" + error.GetType().Name);
             }
 
             // SDK MainPanel is the library's Tracks view in MusicBee's normal
