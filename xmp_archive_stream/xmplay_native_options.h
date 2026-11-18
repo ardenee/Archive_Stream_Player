@@ -1,8 +1,7 @@
 #pragma once
 
-// Compact XMPlay-hosted configuration UI, styled after XMPlay's own SDK
-// examples (Tahoma 8pt, 262x175 dialog units, standard OK/Cancel/Apply).
-// Only the settings backend is shared with other player adapters.
+// XMPlay-hosted settings use the SDK Options page and the separate Config
+// dialog. The host owns the Options navigation tree and layout.
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -29,16 +28,86 @@ public:
     static INT_PTR CALLBACK HostedPageProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
     {
         static XmplayNativeOptions hosted;
+        constexpr UINT kAlignToOptionsPane = WM_APP + 0x328;
         if (message == WM_INITDIALOG)
         {
             INITCOMMONCONTROLSEX init{sizeof(init), ICC_TAB_CLASSES};
             InitCommonControlsEx(&init);
-            return DialogProc(dialog, message, wparam, reinterpret_cast<LPARAM>(&hosted));
+            const INT_PTR result = DialogProc(dialog, message, wparam, reinterpret_cast<LPARAM>(&hosted));
+            PostMessageW(dialog, kAlignToOptionsPane, 0, 0);
+            return result;
+        }
+        if (message == WM_SHOWWINDOW && wparam)
+        {
+            PostMessageW(dialog, kAlignToOptionsPane, 0, 0);
+        }
+        if (message == kAlignToOptionsPane)
+        {
+            AlignHostedPageAfterTree(dialog);
+            return TRUE;
         }
         return DialogProc(dialog, message, wparam, lparam);
     }
 
 private:
+    // XMPlay supplies a child Options dialog but does not relocate its
+    // resource origin past the left navigation tree. Measure that tree at
+    // runtime instead of hardcoding a particular Windows DPI or skin width.
+    static void AlignHostedPageAfterTree(HWND dialog)
+    {
+        if (!IsWindow(dialog))
+            return;
+        const HWND root = GetAncestor(dialog, GA_ROOT);
+        const HWND parent = GetParent(dialog);
+        if (!root || !parent)
+            return;
+        struct TreeBounds
+        {
+            RECT screen{};
+            bool found = false;
+        } bounds{};
+        EnumChildWindows(root, [](HWND control, LPARAM opaque) -> BOOL
+        {
+            auto& target = *reinterpret_cast<TreeBounds*>(opaque);
+            if (!IsWindowVisible(control))
+                return TRUE;
+            wchar_t className[64]{};
+            GetClassNameW(control, className, static_cast<int>(std::size(className)));
+            if (wcscmp(className, L"SysTreeView32") == 0)
+            {
+                RECT candidate{};
+                if (GetWindowRect(control, &candidate) && (!target.found || candidate.right > target.screen.right))
+                {
+                    target.screen = candidate;
+                    target.found = true;
+                }
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&bounds));
+        if (!bounds.found)
+            return;
+        RECT page{};
+        if (!GetWindowRect(dialog, &page))
+            return;
+        const UINT dpi = GetDpiForWindow(dialog);
+        const int padding = MulDiv(8, static_cast<int>(dpi ? dpi : 96), 96);
+        const int requiredLeft = bounds.screen.right + padding;
+        if (page.left >= requiredLeft)
+            return;
+        RECT host{};
+        if (!GetWindowRect(root, &host))
+            return;
+        const int width = page.right - page.left;
+        // Do not shift a page out of the Options window if its dimensions
+        // cannot fit. This also protects unrelated XMPlay dialog layouts.
+        if (requiredLeft + width > host.right - padding)
+            return;
+        POINT position{requiredLeft, page.top};
+        MapWindowPoints(HWND_DESKTOP, parent, &position, 1);
+        SetWindowPos(dialog, nullptr, position.x, position.y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
     enum : int
     {
         Tab = 4001, Apply = 4002,

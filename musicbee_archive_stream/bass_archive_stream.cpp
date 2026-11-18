@@ -1099,9 +1099,39 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
         return 0;
     }
     Trace("DESCRIPTOR_NAME_OK", "");
-    if (!ArchiveNativeTrackRead(descriptorPath.c_str(), virtualTrack))
+    bool manifestValid = ArchiveNativeTrackRead(descriptorPath.c_str(), virtualTrack);
+    // MusicBee's playlist admits ordinary audio filenames, not .ast files.
+    // A .mp3 alias is a zero-copy hard link to the real .ast descriptor:
+    // validate the paired .ast file with the existing strict parser before
+    // allowing the BASS archive decoder to claim this file.
+    if (!manifestValid && descriptorPath.size() >= 4 &&
+        _stricmp(descriptorPath.c_str() + descriptorPath.size() - 4, ".mp3") == 0)
     {
-        Trace("MANIFEST_READ_FAIL", "invalid_or_unreadable_ast");
+        std::string manifestPath = descriptorPath.substr(0, descriptorPath.size() - 4) + ".ast";
+        manifestValid = ArchiveNativeTrackRead(manifestPath.c_str(), virtualTrack);
+        if (manifestValid)
+        {
+            HANDLE alias = CreateFileA(descriptorPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            HANDLE original = CreateFileA(manifestPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            BY_HANDLE_FILE_INFORMATION aliasInfo{}, originalInfo{};
+            manifestValid = alias != INVALID_HANDLE_VALUE && original != INVALID_HANDLE_VALUE &&
+                GetFileInformationByHandle(alias, &aliasInfo) && GetFileInformationByHandle(original, &originalInfo) &&
+                aliasInfo.dwVolumeSerialNumber == originalInfo.dwVolumeSerialNumber &&
+                aliasInfo.nFileIndexHigh == originalInfo.nFileIndexHigh &&
+                aliasInfo.nFileIndexLow == originalInfo.nFileIndexLow;
+            if (alias != INVALID_HANDLE_VALUE)
+                CloseHandle(alias);
+            if (original != INVALID_HANDLE_VALUE)
+                CloseHandle(original);
+            if (manifestValid)
+                Trace("MANIFEST_MP3_ALIAS_VALID", "link=verified");
+        }
+    }
+    if (!manifestValid)
+    {
+        Trace("MANIFEST_READ_FAIL", "invalid_or_unreadable_ast_or_alias");
         return 0;
     }
     Trace("MANIFEST_READ_OK", "");

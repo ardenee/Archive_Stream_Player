@@ -25,6 +25,13 @@ namespace MusicBeePlugin
         private bool nativeMp3Loaded;
         private const uint BassUnicode = 0x80000000u;
 
+        // MusicBee cannot queue our private .ast descriptor extension as an
+        // audio source. A Win32 hard link gives it a recognised .mp3 filename
+        // without copying or extracting compressed archive bytes.
+        [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateNativeDescriptorHardLink(string alias, string descriptor, IntPtr securityAttributes);
+
         [DllImport("bass.dll", EntryPoint = "BASS_PluginLoad", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         private static extern uint BassPluginLoad([MarshalAs(UnmanagedType.LPWStr)] string path, uint flags);
 
@@ -369,6 +376,30 @@ namespace MusicBeePlugin
             Trace("NATIVE_TITLE_READY renamed=" + renamed + " total=" + tracks.Count + " preset=SHARED");
         }
 
+        private static string[] CreateMusicBeePlayableAliases(List<string> descriptors)
+        {
+            var aliases = new List<string>(descriptors.Count);
+            foreach (string descriptor in descriptors)
+            {
+                if (!descriptor.EndsWith(".ast", StringComparison.OrdinalIgnoreCase) || !File.Exists(descriptor))
+                {
+                    Trace("NATIVE_ALIAS_FAIL reason=missing_descriptor");
+                    return null;
+                }
+
+                string alias = Path.ChangeExtension(descriptor, ".mp3");
+                if (File.Exists(alias) || !CreateNativeDescriptorHardLink(alias, descriptor, IntPtr.Zero))
+                {
+                    Trace("NATIVE_ALIAS_FAIL reason=hardlink_unavailable win32=" + Marshal.GetLastWin32Error());
+                    return null;
+                }
+                aliases.Add(alias);
+            }
+
+            Trace("NATIVE_ALIAS_READY count=" + aliases.Count + " transport=HARDLINK_TO_AST stream=1");
+            return aliases.ToArray();
+        }
+
         private string[] TryStartNativeAudioSession(string archive, string sessionFolder)
         {
             // Validated MP3/WAV/FLAC/OGG/AAC/M4A/WMA from streamable ZIP/7z/RAR.
@@ -480,8 +511,14 @@ namespace MusicBeePlugin
                 if (tracks.Count == 0)
                     return null;
                 ApplyNativeSharedTitles(folder, tracks, virtualPaths);
-                Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + tracks.Count + " helper=DLL http=0 cache=shared");
-                return tracks.ToArray();
+                string[] playable = CreateMusicBeePlayableAliases(tracks);
+                if (playable == null)
+                {
+                    Trace("NATIVE_ALIAS_FALLBACK reason=musicbee_requires_audio_extension");
+                    return null;
+                }
+                Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + playable.Length + " helper=DLL http=0 cache=shared");
+                return playable;
             }
             catch (Exception e)
             {
