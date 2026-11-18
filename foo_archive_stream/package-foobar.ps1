@@ -39,7 +39,7 @@ installation's components\ folder. For portable installations, use the
 portable application's components\ folder. Restart foobar2000.
 
 Preferences > Tools > Archive Stream has separate compact pages for
-Playback and cache, Passwords, Diagnostics, and Title Display.
+Playback and cache, Passwords and Diagnostics. foobar2000 controls\nplaylist title appearance directly.
 The "Shared settings..." button opens the included configure-adapters.ps1
 for the cache, password, track title and warmer options used by all players.
 Component details and project links are available under Preferences > Components.

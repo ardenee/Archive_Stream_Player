@@ -21,7 +21,7 @@ BEGIN
     PUSHBUTTON    "Open cache", IDC_CACHE_VIEW, 12, 138, 79, 18
     PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 100, 138, 79, 18
     PUSHBUTTON    "Shared settings...", IDC_SHARED_SETTINGS, 188, 138, 87, 18
-    LTEXT         "Passwords, logging and title formatting have separate pages under Archive Stream.", -1, 12, 165, 260, 18
+    LTEXT         "Password and diagnostic settings have their own pages. foobar2000 controls playlist title display.", -1, 12, 165, 260, 18
 END
 
 IDD_ARCHIVE_PASSWORDS DIALOGEX 0, 0, 284, 110
@@ -45,20 +45,4 @@ BEGIN
     EDITTEXT      IDC_LOG_PATH, 16, 68, 188, 16, ES_AUTOHSCROLL
     PUSHBUTTON    "Browse...", IDC_LOG_BROWSE, 209, 67, 58, 18
     PUSHBUTTON    "Open log folder", IDC_LOG_FOLDER, 16, 92, 118, 18
-END
-
-IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 284, 180
-STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
-FONT 9, "Segoe UI"
-BEGIN
-    GROUPBOX      "Playlist title formatting", -1, 8, 5, 268, 135
-    LTEXT         "Prefix (max 20 UTF-8 bytes):", -1, 16, 23, 115, 12
-    EDITTEXT      IDC_DISPLAY_PREFIX, 135, 20, 132, 16, ES_AUTOHSCROLL
-    LTEXT         "Postfix (max 20 UTF-8 bytes):", -1, 16, 50, 115, 12
-    EDITTEXT      IDC_DISPLAY_POSTFIX, 135, 47, 132, 16, ES_AUTOHSCROLL
-    LTEXT         "Template (max 159 UTF-8 bytes):", -1, 16, 75, 246, 12
-    EDITTEXT      IDC_DISPLAY_TEMPLATE, 16, 89, 250, 16, ES_AUTOHSCROLL
-    LTEXT         "Preset:", -1, 16, 116, 90, 12
-    COMBOBOX      IDC_DISPLAY_PRESET, 91, 113, 175, 94, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT         "For a foobar playlist column, use $if2(%archive_stream_title%,%title%). Changes refresh live; source tags stay unchanged.", -1, 12, 149, 263, 27
 END

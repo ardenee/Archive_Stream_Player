@@ -1,7 +1,6 @@
 #pragma once
 
 #define IDD_ARCHIVE_GENERAL        2101
-#define IDD_ARCHIVE_DISPLAY        2102
 #define IDD_ARCHIVE_PASSWORDS      2103
 #define IDD_ARCHIVE_DIAGNOSTICS    2104
 
@@ -19,8 +18,3 @@
 #define IDC_CACHE_VIEW            2211
 #define IDC_CACHE_CLEAR           2212
 #define IDC_SHARED_SETTINGS       2214
-
-#define IDC_DISPLAY_PREFIX         2301
-#define IDC_DISPLAY_POSTFIX        2302
-#define IDC_DISPLAY_TEMPLATE       2303
-#define IDC_DISPLAY_PRESET         2304

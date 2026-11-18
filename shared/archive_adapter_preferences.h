@@ -238,8 +238,27 @@ inline bool ArchiveAdapterOpenSettings(HMODULE module, HWND owner)
             L"Archive Stream Player", MB_OK | MB_ICONWARNING);
         return false;
     }
-    const std::wstring arguments = L"-NoProfile -ExecutionPolicy Bypass -File \"" + script + L"\"";
-    const auto result = reinterpret_cast<INT_PTR>(
-        ShellExecuteW(owner, L"open", L"powershell.exe", arguments.c_str(), directory.c_str(), SW_SHOWNORMAL));
-    return result > 32;
+    // Create the console process without a console window. -WindowStyle Hidden
+    // alone can briefly flash a black console before PowerShell initializes.
+    // CREATE_NO_WINDOW still permits the Windows Forms settings dialog.
+    wchar_t systemDirectory[MAX_PATH + 1]{};
+    const UINT systemLength = GetSystemDirectoryW(systemDirectory, static_cast<UINT>(std::size(systemDirectory)));
+    if (!systemLength || systemLength >= std::size(systemDirectory))
+        return false;
+    const std::wstring executable = std::wstring(systemDirectory) + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
+    const std::wstring arguments = L"\"" + executable + L"\" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File \"" + script + L"\"";
+    std::wstring commandLine = arguments;
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, directory.c_str(), &startup, &process))
+    {
+        MessageBoxW(owner, L"Unable to start the shared settings dialog. Check the PowerShell installation and the Archive Stream Player settings script.", L"Archive Stream Player", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
 }

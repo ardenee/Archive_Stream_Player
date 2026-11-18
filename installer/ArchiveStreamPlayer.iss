@@ -49,6 +49,7 @@ Name: "wacup_zip_override"; Description: "Use Archive Stream for ZIP files in WA
 
 [Files]
 Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\mediamonkey_archive_stream\native_addon\launch-hidden.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}\Notices"; Flags: ignoreversion
 Source: "..\LICENSING.md"; DestDir: "{app}\Notices"; Flags: ignoreversion
 Source: "..\third_party\README.md"; DestDir: "{app}\Notices\third_party"; Flags: ignoreversion
@@ -114,9 +115,9 @@ Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}\VLC";
 Source: "Open-VLC-Archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\configure-adapters.ps1"""
+Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\wscript.exe"; Parameters: "//B //Nologo ""{app}\launch-hidden.vbs"" ""{app}\configure-adapters.ps1"""
 Name: "{group}\Project homepage"; Filename: "{#HomeURL}"
-Name: "{group}\Open an archive in VLC"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\VLC\Open-VLC-Archive.ps1"" -VlcExe ""{code:GetPlayerExe|vlc}"""; Components: vlc
+Name: "{group}\Open an archive in VLC"; Filename: "{sys}\wscript.exe"; Parameters: "//B //Nologo ""{app}\launch-hidden.vbs"" ""{app}\VLC\Open-VLC-Archive.ps1"" -VlcExe ""{code:GetPlayerExe|vlc}"""; Components: vlc
 Name: "{group}\MediaMonkey add-on packages (portable installs)"; Filename: "{app}\MediaMonkey"; Components: mediamonkey
 
 [Run]

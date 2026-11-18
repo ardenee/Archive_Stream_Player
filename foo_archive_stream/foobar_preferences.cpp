@@ -1,7 +1,6 @@
 #include <foobar2000/SDK/foobar2000.h>
 #include "foobar_resource.h"
 #include "foobar_settings.h"
-#include "foobar_title_provider.h"
 #include "../shared/archive_adapter_preferences.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_adapter_logging.h"
@@ -18,27 +17,10 @@
 namespace
 {
     const GUID kGeneralPageGuid = { 0x8af10230, 0x345e, 0x42de, {0x91,0xc5,0xab,0x81,0xf8,0x65,0x21,0x3a} };
-    const GUID kDisplayPageGuid = { 0x8af10231, 0x345e, 0x42de, {0x91,0xc5,0xab,0x81,0xf8,0x65,0x21,0x3b} };
     const GUID kPasswordsPageGuid = { 0x8af10232, 0x345e, 0x42de, {0x91,0xc5,0xab,0x81,0xf8,0x65,0x21,0x3c} };
     const GUID kDiagnosticsPageGuid = { 0x8af10233, 0x345e, 0x42de, {0x91,0xc5,0xab,0x81,0xf8,0x65,0x21,0x3d} };
 
-    enum class ArchivePreferencesSection { General, Passwords, Diagnostics, Display };
-
-    struct TitlePreset
-    {
-        const char* utf8;
-        const wchar_t* wide;
-    };
-
-    // Keep the same six template presets as in_archive_stream/config_ui.cpp.
-    constexpr TitlePreset kTitlePresets[] = {
-        { "<filename>", L"<filename>" },
-        { "<archivetype>: <filename>", L"<archivetype>: <filename>" },
-        { "<#>. <filename>", L"<#>. <filename>" },
-        { "<filename> [<filetype>]", L"<filename> [<filetype>]" },
-        { "<archivetype>: <#> - <filename>", L"<archivetype>: <#> - <filename>" },
-        { "[<archive>] <#> - <filename>", L"[<archive>] <#> - <filename>" }
-    };
+    enum class ArchivePreferencesSection { General, Passwords, Diagnostics };
 
     std::string ReadUtf8(HWND hwnd, int id, std::string& error)
     {
@@ -171,8 +153,6 @@ namespace
                 return;
             }
 
-            if (section_ == ArchivePreferencesSection::Display)
-                FoobarArchiveTitlesRefresh(false);
             changed_ = false;
             callback_->on_state_changed();
         }
@@ -190,12 +170,6 @@ namespace
                 auto* self = reinterpret_cast<ArchivePreferencesInstance*>(lParam);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
                 self->hwnd_ = hwnd;
-                if (self->section_ == ArchivePreferencesSection::Display)
-                {
-                    for (const auto& preset : kTitlePresets)
-                        SendDlgItemMessageW(hwnd, IDC_DISPLAY_PRESET, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(preset.wide));
-                }
-
                 self->FillControls(FoobarArchiveSettingsLoad());
                 return TRUE;
             }
@@ -216,19 +190,9 @@ namespace
                 const int id = LOWORD(wParam);
                 const int event = HIWORD(wParam);
 
-                if (self->section_ == ArchivePreferencesSection::Display && id == IDC_DISPLAY_PRESET && event == CBN_SELCHANGE)
-                {
-                    const LRESULT index = SendDlgItemMessageW(hwnd, IDC_DISPLAY_PRESET, CB_GETCURSEL, 0, 0);
-                    if (index >= 0 && index < static_cast<LRESULT>(_countof(kTitlePresets)))
-                        SetUtf8(hwnd, IDC_DISPLAY_TEMPLATE, kTitlePresets[index].utf8);
-
-                    self->Changed();
-                    return TRUE;
-                }
-
                 if (event == EN_CHANGE || event == BN_CLICKED)
                 {
-                    if (event == BN_CLICKED && self->section_ != ArchivePreferencesSection::Display)
+                    if (event == BN_CLICKED)
                     {
                         if (id == IDC_PASSWORD_BROWSE)
                         {
@@ -326,24 +290,6 @@ namespace
 
             switch (section_)
             {
-            case ArchivePreferencesSection::Display:
-            {
-                SetUtf8(hwnd_, IDC_DISPLAY_PREFIX, settings.displayPrefix);
-                SetUtf8(hwnd_, IDC_DISPLAY_POSTFIX, settings.displayPostfix);
-                SetUtf8(hwnd_, IDC_DISPLAY_TEMPLATE, settings.displayTemplate);
-
-                LRESULT index = -1;
-                for (size_t i = 0; i < _countof(kTitlePresets); ++i)
-                {
-                    if (settings.displayTemplate == kTitlePresets[i].utf8)
-                    {
-                        index = static_cast<LRESULT>(i);
-                        break;
-                    }
-                }
-                SendDlgItemMessageW(hwnd_, IDC_DISPLAY_PRESET, CB_SETCURSEL, index, 0);
-                break;
-            }
             case ArchivePreferencesSection::General:
                 SetDlgItemInt(hwnd_, IDC_BUFFER_MB, static_cast<UINT>(settings.bufferSizeMb), FALSE);
                 SetDlgItemInt(hwnd_, IDC_CACHE_MB, static_cast<UINT>(settings.cacheSizeMb), FALSE);
@@ -369,15 +315,6 @@ namespace
 
             switch (section_)
             {
-            case ArchivePreferencesSection::Display:
-                settings.displayPrefix = ReadUtf8(hwnd_, IDC_DISPLAY_PREFIX, error);
-                if (!error.empty())
-                    return false;
-                settings.displayPostfix = ReadUtf8(hwnd_, IDC_DISPLAY_POSTFIX, error);
-                if (!error.empty())
-                    return false;
-                settings.displayTemplate = ReadUtf8(hwnd_, IDC_DISPLAY_TEMPLATE, error);
-                return error.empty();
             case ArchivePreferencesSection::General:
                 if (!ReadPositiveNumber(hwnd_, IDC_BUFFER_MB, "buffer size", settings.bufferSizeMb, error) ||
                     !ReadPositiveNumber(hwnd_, IDC_CACHE_MB, "cache size", settings.cacheSizeMb, error) ||
@@ -419,9 +356,6 @@ namespace
             break;
         case ArchivePreferencesSection::Diagnostics:
             resource = IDD_ARCHIVE_DIAGNOSTICS;
-            break;
-        case ArchivePreferencesSection::Display:
-            resource = IDD_ARCHIVE_DISPLAY;
             break;
         }
         if (!module || !CreateDialogParamW(module, MAKEINTRESOURCEW(resource), parent, ArchivePreferencesInstance::DialogProc, reinterpret_cast<LPARAM>(instance.get_ptr())))
@@ -468,20 +402,7 @@ namespace
         }
     };
 
-    class ArchiveDisplayPreferencesPage : public preferences_page_v3
-    {
-    public:
-        const char* get_name() override { return "Title Display"; }
-        GUID get_guid() override { return kDisplayPageGuid; }
-        GUID get_parent_guid() override { return kGeneralPageGuid; }
-        preferences_page_instance::ptr instantiate(HWND parent, preferences_page_callback::ptr callback) override
-        {
-            return InstantiatePage(parent, callback, ArchivePreferencesSection::Display);
-        }
-    };
-
     preferences_page_factory_t<ArchiveGeneralPreferencesPage> g_archiveGeneralPreferences;
     preferences_page_factory_t<ArchivePasswordsPreferencesPage> g_archivePasswordsPreferences;
     preferences_page_factory_t<ArchiveDiagnosticsPreferencesPage> g_archiveDiagnosticsPreferences;
-    preferences_page_factory_t<ArchiveDisplayPreferencesPage> g_archiveDisplayPreferences;
 }
