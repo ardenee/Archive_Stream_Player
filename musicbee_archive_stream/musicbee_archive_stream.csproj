@@ -26,6 +26,7 @@
   <ItemGroup>
     <Compile Include="Plugin.cs"/>
     <Compile Include="ArchiveDropIntegration.cs"/>
+    <Compile Include="ArchiveOleDropTarget.cs"/>
     <Compile Include="$(MusicBeeSdkRoot)\MusicBeeInterface.cs" Link="MusicBeeInterface.cs"/>
   </ItemGroup>
   <Target Name="RequireMusicBeeSdk" BeforeTargets="CoreCompile">

@@ -17,6 +17,7 @@ namespace MusicBeePlugin
         private readonly List<Control> archiveDropTargets = new List<Control>();
         private System.Windows.Forms.Timer archiveDropRetry;
         private Control archiveDropRoot;
+        private ArchiveOleDropRegistration archiveOleRoot;
         private bool archiveDropClosing;
         private int archiveDropAttempts;
         private string lastArchiveDropSignature = "";
@@ -124,6 +125,11 @@ namespace MusicBeePlugin
                 // Never override MusicBee's own OLE drop target. Changing
                 // AllowDrop on the main form can break normal MusicBee drops.
                 AttachArchiveDropControls(root, true);
+                // Register only where MusicBee has not already registered an
+                // OLE drop target. Its existing targets and normal audio drops
+                // are never revoked, replaced, or redirected.
+                archiveOleRoot = ArchiveOleDropRegistration.TryRegister(root.Handle,
+                    IsArchivePath, QueueArchiveDropFiles, Trace);
                 Trace("ARCHIVE_DROP_HOOK_READY main=" + root.GetType().Name +
                     " targets=" + archiveDropTargets.Count + " observed=" + archiveDropObserved.Count);
             }
@@ -195,7 +201,7 @@ namespace MusicBeePlugin
             }
         }
 
-        private async void ArchiveDropDragDrop(object sender, DragEventArgs args)
+        private void ArchiveDropDragDrop(object sender, DragEventArgs args)
         {
             string[] archives;
             try
@@ -217,6 +223,17 @@ namespace MusicBeePlugin
                 return;
             }
 
+            args.Effect = DragDropEffects.Copy;
+            QueueArchiveDropFiles(archives);
+        }
+
+        private async void QueueArchiveDropFiles(string[] archives)
+        {
+            if (archiveDropClosing || archives == null || archives.Length == 0)
+                return;
+
+            // Multiple WinForms handlers and the root OLE handler may both see
+            // the same user gesture; never enqueue an archive twice.
             string signature = String.Join("|", archives);
             DateTime now = DateTime.UtcNow;
             if (signature.Equals(lastArchiveDropSignature, StringComparison.OrdinalIgnoreCase) &&
@@ -228,7 +245,6 @@ namespace MusicBeePlugin
 
             lastArchiveDropSignature = signature;
             lastArchiveDropTime = now;
-            args.Effect = DragDropEffects.Copy;
             Trace("ARCHIVE_DROP_ACCEPTED archives=" + archives.Length);
             foreach (string archive in archives)
             {
@@ -263,6 +279,11 @@ namespace MusicBeePlugin
 
         private void DetachArchiveDropControls()
         {
+            if (archiveOleRoot != null)
+            {
+                archiveOleRoot.Dispose();
+                archiveOleRoot = null;
+            }
             if (archiveDropRetry != null)
             {
                 archiveDropRetry.Stop();
