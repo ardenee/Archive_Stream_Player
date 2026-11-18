@@ -92,6 +92,13 @@ namespace MusicBeePlugin
                         configuredFolder = key.GetValue("LogDirectory", "") as string ?? "";
                     }
                 }
+                // Enable focused MusicBee diagnostics without turning on
+                // verbose logging for every other player adapter.
+                using (RegistryKey diagnostic = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\MusicBee", false))
+                {
+                    if (diagnostic != null && Convert.ToInt32(diagnostic.GetValue("DiagnosticLogging", 0)) == 1)
+                        enabled = true;
+                }
                 if (!enabled)
                     return;
 

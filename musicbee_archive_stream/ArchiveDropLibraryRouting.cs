@@ -278,7 +278,9 @@ namespace MusicBeePlugin
                     if (accepted)
                         ++imported;
                     Trace("ARCHIVE_LIBRARY_IMPORT_RESULT accepted=" + (accepted ? "1" : "0") +
-                        " extension=" + Path.GetExtension(path));
+                        " extension=" + Path.GetExtension(path) +
+                        " returned_same_path=" + (String.Equals(path, result, StringComparison.OrdinalIgnoreCase) ? "1" : "0") +
+                        " returned_length=" + (result == null ? "null" : result.Length.ToString()));
                 }
                 catch (Exception error)
                 {
@@ -287,9 +289,87 @@ namespace MusicBeePlugin
             }
 
             if (imported > 0 && api.MB_RefreshPanels != null)
+            {
                 api.MB_RefreshPanels();
 
+                // MusicBee may still be indexing the new library entries when
+                // the immediate refresh runs. Ask the host to refresh once
+                // more after its UI message queue has processed the import.
+                if (!archiveDropClosing && archiveDropRoot != null && !archiveDropRoot.IsDisposed)
+                {
+                    var delayedRefresh = new System.Windows.Forms.Timer();
+                    delayedRefresh.Interval = 750;
+                    delayedRefresh.Tick += (sender, args) =>
+                    {
+                        delayedRefresh.Stop();
+                        delayedRefresh.Dispose();
+                        if (archiveDropClosing)
+                            return;
+
+                        try
+                        {
+                            if (api.MB_RefreshPanels != null)
+                                api.MB_RefreshPanels();
+                            Trace("ARCHIVE_LIBRARY_REFRESH_DELAYED");
+                        }
+                        catch (Exception refreshError)
+                        {
+                            Trace("ARCHIVE_LIBRARY_REFRESH_FAIL type=" + refreshError.GetType().Name);
+                        }
+                    };
+                    delayedRefresh.Start();
+                }
+            }
+
             Trace("ARCHIVE_LIBRARY_IMPORT_SUMMARY imported=" + imported + " total=" + tracks.Length);
+
+            // Diagnostics only: MusicBee may acknowledge a path without
+            // displaying it in the current Tracks view. Query its actual
+            // library and displayed lists once per import, never per track.
+            // This potentially large query is disabled in normal operation.
+            try
+            {
+                bool diagnose = false;
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\MusicBee", false))
+                {
+                    diagnose = key != null && Convert.ToInt32(key.GetValue("DiagnosticLogging", 0)) == 1;
+                }
+                if (diagnose && api.Library_QueryFilesEx != null)
+                {
+                    var expected = new HashSet<string>(tracks, StringComparer.OrdinalIgnoreCase);
+                    string[] allFiles;
+                    bool libraryQuery = api.Library_QueryFilesEx("domain=Library", out allFiles);
+                    int libraryMatches = 0;
+                    if (libraryQuery && allFiles != null)
+                    {
+                        foreach (string file in allFiles)
+                        {
+                            if (expected.Contains(file))
+                                ++libraryMatches;
+                        }
+                    }
+                    Trace("ARCHIVE_LIBRARY_VERIFY scope=Library query_ok=" + (libraryQuery ? "1" : "0") +
+                        " matches=" + libraryMatches + " expected=" + tracks.Length);
+
+                    string[] displayed;
+                    bool viewQuery = api.Library_QueryFilesEx("domain=DisplayedFiles", out displayed);
+                    int displayedMatches = 0;
+                    if (viewQuery && displayed != null)
+                    {
+                        foreach (string file in displayed)
+                        {
+                            if (expected.Contains(file))
+                                ++displayedMatches;
+                        }
+                    }
+                    Trace("ARCHIVE_LIBRARY_VERIFY scope=DisplayedFiles query_ok=" + (viewQuery ? "1" : "0") +
+                        " matches=" + displayedMatches + " expected=" + tracks.Length);
+                }
+            }
+            catch (Exception verifyError)
+            {
+                Trace("ARCHIVE_LIBRARY_VERIFY_FAIL type=" + verifyError.GetType().Name);
+            }
             return imported;
         }
     }
