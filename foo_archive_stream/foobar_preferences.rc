@@ -1,50 +1,64 @@
 #include <windows.h>
 #include "foobar_resource.h"
 
-IDD_ARCHIVE_GENERAL DIALOGEX 0, 0, 450, 305
+// foobar's preferences panel can be narrow on high-DPI displays.
+// Keep every page below 284 horizontal dialog units and 190 vertical units.
+// Large settings are split into child pages, not clipped below the viewport.
+IDD_ARCHIVE_GENERAL DIALOGEX 0, 0, 284, 185
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
 FONT 9, "Segoe UI"
 BEGIN
-    GROUPBOX      "Playback and cache", -1, 8, 5, 434, 101
-    LTEXT         "Playback buffer (MB, 1-512):", -1, 18, 21, 180, 12
-    EDITTEXT      IDC_BUFFER_MB, 208, 19, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
-    LTEXT         "Maximum cache size (MB, 0-20480):", -1, 18, 42, 190, 12
-    EDITTEXT      IDC_CACHE_MB, 208, 40, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
-    AUTOCHECKBOX  "Clean legacy cache by size", IDC_CACHE_SIZE_CLEANUP, 18, 63, 170, 12
-    AUTOCHECKBOX  "Clean legacy cache by age", IDC_CACHE_AGE_CLEANUP, 208, 63, 160, 12
-    LTEXT         "Maximum age (days, 1-365):", -1, 208, 83, 155, 12
-    EDITTEXT      IDC_CACHE_AGE_DAYS, 363, 81, 55, 14, ES_NUMBER | ES_AUTOHSCROLL
+    GROUPBOX      "Playback and cache", -1, 8, 5, 268, 125
+    LTEXT         "Playback buffer (MB, 1-512):", -1, 16, 22, 188, 12
+    EDITTEXT      IDC_BUFFER_MB, 210, 19, 54, 15, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT         "Maximum cache size (MB, 0-20480):", -1, 16, 45, 188, 12
+    EDITTEXT      IDC_CACHE_MB, 210, 42, 54, 15, ES_NUMBER | ES_AUTOHSCROLL
+    AUTOCHECKBOX  "Clean legacy cache by size", IDC_CACHE_SIZE_CLEANUP, 16, 67, 248, 13
+    AUTOCHECKBOX  "Clean legacy cache by age", IDC_CACHE_AGE_CLEANUP, 16, 86, 248, 13
+    LTEXT         "Maximum age (days, 1-365):", -1, 16, 109, 188, 12
+    EDITTEXT      IDC_CACHE_AGE_DAYS, 210, 106, 54, 15, ES_NUMBER | ES_AUTOHSCROLL
 
-    GROUPBOX      "Archive passwords", -1, 8, 112, 434, 53
-    LTEXT         "Password list (blank = FoobarArchiveStream\\keeps.txt):", -1, 18, 128, 348, 12
-    EDITTEXT      IDC_PASSWORD_PATH, 18, 144, 350, 14, ES_AUTOHSCROLL
-    PUSHBUTTON    "Browse...", IDC_PASSWORD_BROWSE, 374, 143, 58, 16
-
-    GROUPBOX      "Diagnostics", -1, 8, 170, 434, 70
-    AUTOCHECKBOX  "Enable debug logging", IDC_LOGGING_ENABLED, 18, 184, 165, 12
-    LTEXT         "Legacy log path (shared log folder takes precedence):", -1, 18, 201, 385, 11
-    EDITTEXT      IDC_LOG_PATH, 18, 216, 350, 14, ES_AUTOHSCROLL
-    PUSHBUTTON    "Browse...", IDC_LOG_BROWSE, 374, 215, 58, 16
-
-    PUSHBUTTON    "Open cache folder", IDC_CACHE_VIEW, 12, 250, 122, 18
-    PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 144, 250, 104, 18
-    PUSHBUTTON    "Open log folder", IDC_LOG_FOLDER, 258, 250, 125, 18
-    PUSHBUTTON    "Shared settings (all players)...", IDC_SHARED_SETTINGS, 12, 275, 175, 19
-    LTEXT         "Shared playback options also control password prompts, cache warming and title formats.", -1, 195, 280, 239, 20
+    PUSHBUTTON    "Open cache", IDC_CACHE_VIEW, 12, 138, 79, 18
+    PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 100, 138, 79, 18
+    PUSHBUTTON    "Shared settings...", IDC_SHARED_SETTINGS, 188, 138, 87, 18
+    LTEXT         "Passwords, logging and title formatting have separate pages under Archive Stream.", -1, 12, 165, 260, 18
 END
 
-IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 450, 200
+IDD_ARCHIVE_PASSWORDS DIALOGEX 0, 0, 284, 110
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
 FONT 9, "Segoe UI"
 BEGIN
-    GROUPBOX      "Playlist title formatting", -1, 8, 6, 434, 141
-    LTEXT         "Prefix (maximum 20 UTF-8 bytes):", -1, 19, 28, 200, 12
-    EDITTEXT      IDC_DISPLAY_PREFIX, 224, 26, 204, 14, ES_AUTOHSCROLL
-    LTEXT         "Postfix (maximum 20 UTF-8 bytes):", -1, 19, 54, 200, 12
-    EDITTEXT      IDC_DISPLAY_POSTFIX, 224, 52, 204, 14, ES_AUTOHSCROLL
-    LTEXT         "Template (maximum 159 UTF-8 bytes):", -1, 19, 80, 200, 12
-    EDITTEXT      IDC_DISPLAY_TEMPLATE, 224, 78, 204, 14, ES_AUTOHSCROLL
-    LTEXT         "Preset:", -1, 19, 105, 92, 12
-    COMBOBOX      IDC_DISPLAY_PRESET, 224, 104, 204, 90, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT         "Use $if2(%archive_stream_title%,%title%) in a foobar playlist column. Changes refresh live; source tags remain unchanged.", -1, 12, 153, 423, 32
+    GROUPBOX      "Archive passwords", -1, 8, 5, 268, 92
+    LTEXT         "Password list (blank = FoobarArchiveStream\\keeps.txt):", -1, 16, 23, 249, 14
+    EDITTEXT      IDC_PASSWORD_PATH, 16, 44, 188, 16, ES_AUTOHSCROLL
+    PUSHBUTTON    "Browse...", IDC_PASSWORD_BROWSE, 209, 43, 58, 18
+    LTEXT         "Passwords and prompts are shared with other Archive Stream player integrations.", -1, 16, 71, 248, 20
+END
+
+IDD_ARCHIVE_DIAGNOSTICS DIALOGEX 0, 0, 284, 127
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+FONT 9, "Segoe UI"
+BEGIN
+    GROUPBOX      "Diagnostics", -1, 8, 5, 268, 111
+    AUTOCHECKBOX  "Enable debug logging", IDC_LOGGING_ENABLED, 16, 24, 248, 14
+    LTEXT         "Legacy log path (shared log folder takes precedence):", -1, 16, 48, 248, 13
+    EDITTEXT      IDC_LOG_PATH, 16, 68, 188, 16, ES_AUTOHSCROLL
+    PUSHBUTTON    "Browse...", IDC_LOG_BROWSE, 209, 67, 58, 18
+    PUSHBUTTON    "Open log folder", IDC_LOG_FOLDER, 16, 92, 118, 18
+END
+
+IDD_ARCHIVE_DISPLAY DIALOGEX 0, 0, 284, 180
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
+FONT 9, "Segoe UI"
+BEGIN
+    GROUPBOX      "Playlist title formatting", -1, 8, 5, 268, 135
+    LTEXT         "Prefix (max 20 UTF-8 bytes):", -1, 16, 23, 115, 12
+    EDITTEXT      IDC_DISPLAY_PREFIX, 135, 20, 132, 16, ES_AUTOHSCROLL
+    LTEXT         "Postfix (max 20 UTF-8 bytes):", -1, 16, 50, 115, 12
+    EDITTEXT      IDC_DISPLAY_POSTFIX, 135, 47, 132, 16, ES_AUTOHSCROLL
+    LTEXT         "Template (max 159 UTF-8 bytes):", -1, 16, 75, 246, 12
+    EDITTEXT      IDC_DISPLAY_TEMPLATE, 16, 89, 250, 16, ES_AUTOHSCROLL
+    LTEXT         "Preset:", -1, 16, 116, 90, 12
+    COMBOBOX      IDC_DISPLAY_PRESET, 91, 113, 175, 94, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT         "For a foobar playlist column, use $if2(%archive_stream_title%,%title%). Changes refresh live; source tags stay unchanged.", -1, 12, 149, 263, 27
 END

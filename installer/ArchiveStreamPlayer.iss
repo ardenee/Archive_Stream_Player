@@ -65,11 +65,15 @@ Source: "..\third_party\winamp\README.md"; DestDir: "{app}\Notices\third_party\w
 
 Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
 Source: "..\gen_archive_stream\Release\gen_archive_stream.dll"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|winamp}\Plugins"; Components: winamp; Flags: ignoreversion
 Source: "..\in_archive_stream\Release\in_archive_stream.dll"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
 Source: "..\gen_archive_stream\Release\gen_archive_stream.dll"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|wacup}\Plugins"; Components: wacup; Flags: ignoreversion
 
 Source: "..\foo_archive_stream\Release\foo_archive_stream.dll"; DestDir: "{code:GetPlayerDir|foobar32}\components"; Components: foobar32; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|foobar32}\components"; Components: foobar32; Flags: ignoreversion
 Source: "..\foo_archive_stream\x64\Release\foo_archive_stream.dll"; DestDir: "{code:GetPlayerDir|foobar64}\components"; Components: foobar64; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|foobar64}\components"; Components: foobar64; Flags: ignoreversion
 
 Source: "..\aimp_archive_stream\Release\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp32}\Plugins\aimp_archive_stream"; Components: aimp32; Flags: ignoreversion
 Source: "..\aimp_archive_stream\x64\Release\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp64}\Plugins\aimp_archive_stream"; Components: aimp64; Flags: ignoreversion

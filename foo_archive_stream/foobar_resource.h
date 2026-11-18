@@ -2,6 +2,8 @@
 
 #define IDD_ARCHIVE_GENERAL        2101
 #define IDD_ARCHIVE_DISPLAY        2102
+#define IDD_ARCHIVE_PASSWORDS      2103
+#define IDD_ARCHIVE_DIAGNOSTICS    2104
 
 #define IDC_BUFFER_MB              2201
 #define IDC_CACHE_MB               2202

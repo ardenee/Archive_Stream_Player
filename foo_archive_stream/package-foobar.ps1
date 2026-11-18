@@ -38,9 +38,11 @@ Close foobar2000. Copy BOTH files inside components\ to your foobar2000
 installation's components\ folder. For portable installations, use the
 portable application's components\ folder. Restart foobar2000.
 
-The native preference page is under Preferences > Tools > Archive Stream.
-It also offers "Shared settings (all players)...", which opens the included
-configure-adapters.ps1 for cache, password, track title and warmer options.
+Preferences > Tools > Archive Stream has separate compact pages for
+Playback and cache, Passwords, Diagnostics, and Title Display.
+The "Shared settings..." button opens the included configure-adapters.ps1
+for the cache, password, track title and warmer options used by all players.
+Component details and project links are available under Preferences > Components.
 
 Archive Stream reads the shared registry settings under
 HKCU\Software\ArchiveStreamPlayer\Adapters.

@@ -12,7 +12,7 @@ Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows 
 - Stream directly when possible, use memory next, and disk cache only when necessary.
 - Shared password, cache, title and logging settings.
 
-**Development update (November 2026):** WACUP 32-bit track titles now stay consistent through play and stop in tested ZIP, RAR and solid 7z playlists. This fix is in the development source; the download link above still points to the published v0.1.7 release.
+**Development update (November 2026):** WACUP 32-bit track titles now stay consistent through play and stop in tested ZIP, RAR and solid 7z playlists. The foobar2000 component (0.2.1 development build) has compact separate preferences pages for playback/cache, passwords, diagnostics and title display, plus expanded component information and project links. Shared settings launchers are packaged beside the native Winamp, WACUP and foobar2000 plugins. These changes are in development source; the download link above still points to the published v0.1.7 release.
 
 ## Supported players
 

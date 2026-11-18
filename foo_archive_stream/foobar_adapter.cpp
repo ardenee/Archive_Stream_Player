@@ -21,7 +21,22 @@
 #include <vector>
 #include <utility>
 
-DECLARE_COMPONENT_VERSION("Archive Stream Player - foobar2000", "0.2.0", "Native ZIP, 7z and RAR virtual entry streams for foobar2000 audio decoders.");
+DECLARE_COMPONENT_VERSION("Archive Stream Player", "0.2.1",
+    "Play audio tracks directly from ZIP, 7z, RAR and RAR5 archives in foobar2000.\n"
+    "\n"
+    "Archive Stream exposes individual songs as native foobar2000 virtual files, "
+    "so foobar2000 handles MP3, FLAC, WAV, OGG, AAC and other installed audio decoders.\n"
+    "\n"
+    "Archive access prioritizes streaming, then the configured memory buffer, "
+    "with managed disk cache as a fallback. Solid, multipart and password-protected "
+    "archives are supported where the underlying archive format permits.\n"
+    "\n"
+    "File menu: inspect archives, add archived tracks and verify decoding.\n"
+    "Preferences > Tools > Archive Stream: cache, passwords, logging and titles.\n"
+    "\n"
+    "GitHub: https://github.com/ardenee/Archive_Stream_Player\n"
+    "Website: https://www.arden.ie/projects/archive-stream-player/\n"
+    "Original project code: MIT licence; third-party libraries retain their own licences.");
 VALIDATE_COMPONENT_FILENAME("foo_archive_stream.dll");
 
 namespace
