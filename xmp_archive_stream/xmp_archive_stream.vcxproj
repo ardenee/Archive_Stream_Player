@@ -44,7 +44,7 @@
     <ClCompile Include="xmp_archive_stream.cpp"/>
     <ClCompile Include="..\shared\debug_log.cpp"/>
     <ResourceCompile Include="xmplay_settings.rc"/>
-    <ClInclude Include="..\shared\archive_native_settings_panel.h"/>
+    <ClInclude Include="xmplay_native_options.h"/>
     <None Include="xmp_archive_stream.def"/>
   </ItemGroup>
   <ItemGroup>

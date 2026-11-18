@@ -8,7 +8,7 @@
 #include <xmparc.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
-#include "../shared/archive_native_settings_panel.h"
+#include "xmplay_native_options.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
@@ -368,73 +368,17 @@ namespace
         }
     }
 
-    constexpr int kXmplaySettingsDialogId = 2000;
-
-    static INT_PTR CALLBACK XmplaySettingsDialogProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
-    {
-        auto* panel = reinterpret_cast<ArchiveNativeSettingsPanel*>(GetWindowLongPtrW(dialog, GWLP_USERDATA));
-        switch (message)
-        {
-        case WM_INITDIALOG:
-        {
-            panel = reinterpret_cast<ArchiveNativeSettingsPanel*>(lparam);
-            if (!panel)
-            {
-                EndDialog(dialog, IDCANCEL);
-                return TRUE;
-            }
-            SetWindowLongPtrW(dialog, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(panel));
-            const HWND child = panel->Create(dialog, g_module, nullptr, nullptr);
-            if (!child)
-            {
-                MessageBoxW(dialog, L"Could not create XMPlay's native Archive Stream settings page.",
-                    L"Archive Stream Player", MB_OK | MB_ICONERROR);
-                EndDialog(dialog, IDCANCEL);
-                return TRUE;
-            }
-            RECT bounds{};
-            GetClientRect(dialog, &bounds);
-            MoveWindow(child, 0, 0, bounds.right, (std::max)(350L, bounds.bottom - 45), TRUE);
-            return TRUE;
-        }
-        case WM_COMMAND:
-            if (LOWORD(wparam) == IDOK)
-            {
-                if (panel && panel->Save())
-                    EndDialog(dialog, IDOK);
-                return TRUE;
-            }
-            if (LOWORD(wparam) == IDCANCEL)
-            {
-                EndDialog(dialog, IDCANCEL);
-                return TRUE;
-            }
-            break;
-        case WM_CLOSE:
-            EndDialog(dialog, IDCANCEL);
-            return TRUE;
-        case WM_DESTROY:
-            if (panel)
-                panel->Destroy();
-            SetWindowLongPtrW(dialog, GWLP_USERDATA, 0);
-            return TRUE;
-        }
-        return FALSE;
-    }
-
     void WINAPI Configure(HWND window)
     {
-        ArchiveNativeSettingsPanel panel(L"xmplay");
-        const INT_PTR result = DialogBoxParamW(g_module, MAKEINTRESOURCEW(kXmplaySettingsDialogId),
-            window, XmplaySettingsDialogProc, reinterpret_cast<LPARAM>(&panel));
+        XmplayNativeOptions settings;
+        const INT_PTR result = settings.Show(g_module, window);
         if (result == -1)
-            MessageBoxW(window, L"Could not open XMPlay's native Archive Stream settings dialog.",
+            MessageBoxW(window, L"Could not open the native XMPlay Archive Stream settings.",
                 L"Archive Stream Player", MB_OK | MB_ICONERROR);
     }
-
     void WINAPI About(HWND window)
     {
-        MessageBoxW(window, L"Archive Stream Player for XMPlay - v0.2.3\n"
+        MessageBoxW(window, L"Archive Stream Player for XMPlay - v0.2.4\n"
             L"ZIP, 7z and RAR/RAR5 archives, with solid, multipart and encrypted-file support.\n"
             L"Archive tracks are exposed through XMPlay's own audio decoders.\n"
             L"The backend reads directly from archives where possible; memory and managed cache are fallbacks.\n"

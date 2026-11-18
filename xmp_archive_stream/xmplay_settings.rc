@@ -1,20 +1,52 @@
 #include <windows.h>
 #include <winver.h>
+#include <commctrl.h>
 
-// Native XMPlay Config dialog. The tabs and fields are supplied by
-// ArchiveNativeSettingsPanel, sharing only the settings backend with AIMP.
-2000 DIALOGEX 0, 0, 505, 400
-STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN
-CAPTION "Archive Stream Player - XMPlay"
-FONT 9, "Segoe UI"
+// XMPlay-style compact configuration dialog (XMPlay SDK samples use
+// 8-point Tahoma and approximately 262 x 175 dialog units).
+2000 DIALOGEX 0, 0, 262, 175
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Archive Stream Player"
+FONT 8, "Tahoma"
 BEGIN
-    DEFPUSHBUTTON "Save and close", IDOK, 312, 370, 98, 20
-    PUSHBUTTON "Close", IDCANCEL, 417, 370, 74, 20
+    CONTROL        "", 4001, "SysTabControl32", WS_TABSTOP | TCS_TABS, 5, 5, 252, 142
+
+    LTEXT          "Playback buffer (MB, 1-512):", 4111, 16, 32, 146, 11
+    EDITTEXT       4101, 175, 29, 52, 14, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT          "Maximum cache size (MB, 0-20480):", 4112, 16, 52, 154, 11
+    EDITTEXT       4102, 175, 49, 52, 14, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT          "Cache age (days, 1-365):", 4113, 16, 72, 146, 11
+    EDITTEXT       4103, 175, 69, 52, 14, ES_NUMBER | ES_AUTOHSCROLL
+    AUTOCHECKBOX   "Automatically clean old cache files", 4104, 16, 91, 222, 11
+    AUTOCHECKBOX   "Warm solid archives in the background", 4105, 16, 107, 222, 11
+    PUSHBUTTON     "Open cache", 4106, 16, 126, 71, 15
+    PUSHBUTTON     "Clear cache...", 4107, 94, 126, 74, 15
+
+    LTEXT          "Password list (one password per line):", 4211, 16, 33, 225, 11
+    EDITTEXT       4201, 16, 49, 178, 14, ES_AUTOHSCROLL
+    PUSHBUTTON     "Browse...", 4202, 201, 48, 47, 15
+    AUTOCHECKBOX   "Prompt for passwords when needed", 4203, 16, 78, 224, 11
+    AUTOCHECKBOX   "Ask before saving successful passwords", 4204, 16, 96, 224, 11
+    LTEXT          "Keep the plaintext password list in a private folder.", 4212, 16, 125, 229, 16
+
+    AUTOCHECKBOX   "Enable archive diagnostics logging", 4301, 16, 35, 225, 11
+    LTEXT          "Log directory (blank = shared default):", 4311, 16, 64, 225, 11
+    EDITTEXT       4302, 16, 81, 225, 14, ES_AUTOHSCROLL
+    PUSHBUTTON     "Open log folder", 4303, 16, 109, 88, 15
+
+    LTEXT          "Archive track-title preset:", 4411, 16, 35, 220, 11
+    COMBOBOX       4401, 16, 53, 222, 103, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT          "Applies to newly added archive tracks.", 4412, 16, 92, 230, 12
+    LTEXT          "The original audio tags are not modified.", 4413, 16, 112, 230, 12
+
+    PUSHBUTTON     "Apply", 4002, 94, 153, 49, 15
+    DEFPUSHBUTTON  "OK", IDOK, 149, 153, 49, 15
+    PUSHBUTTON     "Cancel", IDCANCEL, 204, 153, 51, 15
 END
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,2,3,0
- PRODUCTVERSION 0,2,3,0
+ FILEVERSION 0,2,4,0
+ PRODUCTVERSION 0,2,4,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -27,11 +59,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Archive Stream Player"
             VALUE "FileDescription", "Archive Stream Player - XMPlay ZIP/7z/RAR archive plugin"
-            VALUE "FileVersion", "0.2.3.0"
+            VALUE "FileVersion", "0.2.4.0"
             VALUE "InternalName", "xmp-archive-stream.dll"
             VALUE "OriginalFilename", "xmp-archive-stream.dll"
             VALUE "ProductName", "Archive Stream Player"
-            VALUE "ProductVersion", "0.2.3.0"
+            VALUE "ProductVersion", "0.2.4.0"
             VALUE "LegalCopyright", "Archive Stream Player contributors (MIT); third-party licences retained"
             VALUE "Comments", "https://github.com/ardenee/Archive_Stream_Player"
         END
