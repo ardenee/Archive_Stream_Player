@@ -9,6 +9,7 @@
 #include <apiOptions.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
+#include "aimp_settings_panel.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
@@ -690,8 +691,8 @@ namespace
         ComCounter refs_;
     };
 
-    // The AIMP Options panel links to the shared settings UI. Preferences
-    // are per-user and intentionally independent from foobar/Winamp settings.
+    // AIMP owns the preferences lifecycle. Controls are hosted directly in
+    // its options frame and save to the same settings backend as other players.
     class OptionsFrame final : public IAIMPOptionsDialogFrame
     {
     public:
@@ -720,47 +721,44 @@ namespace
         }
         HWND WINAPI CreateFrame(HWND parent) override
         {
-            WNDCLASSEXW wc{};
-            wc.cbSize = sizeof(wc);
-            wc.lpfnWndProc = WindowProc;
-            wc.hInstance = g_module;
-            wc.lpszClassName = L"ArchiveStreamAimpOptionsFrame";
-            wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-            RegisterClassExW(&wc);
-            frame_ = CreateWindowExW(0, wc.lpszClassName, L"", WS_CHILD | WS_VISIBLE,
-                0, 0, 550, 260, parent, nullptr, g_module, nullptr);
-            if (!frame_)
-                return nullptr;
-            CreateWindowExW(0, L"STATIC",
-                L"Archive audio: ZIP / 7z / RAR, streaming and cache fallback.",
-                WS_CHILD | WS_VISIBLE, 18, 22, 515, 24, frame_, nullptr, g_module, nullptr);
-            CreateWindowExW(0, L"STATIC",
-                L"Shared settings apply to AIMP, XMPlay, MusicBee and bridge players.",
-                WS_CHILD | WS_VISIBLE, 18, 54, 515, 24, frame_, nullptr, g_module, nullptr);
-            CreateWindowExW(0, L"BUTTON", L"Configure archive settings...",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 18, 92, 235, 32,
-                frame_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5001)), g_module, nullptr);
-            return frame_;
+            return panel_.Create(parent, g_module, this, &OptionsFrame::SettingsModified);
         }
         void WINAPI DestroyFrame() override
         {
-            if (frame_)
-                DestroyWindow(frame_);
-            frame_ = nullptr;
+            panel_.Destroy();
         }
-        void WINAPI Notification(int) override {}
-    private:
-        static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
+        void WINAPI Notification(int id) override
         {
-            if (msg == WM_COMMAND && LOWORD(w) == 5001 && HIWORD(w) == BN_CLICKED)
+            switch (id)
             {
-                ArchiveAdapterOpenSettings(g_module, hwnd);
-                return 0;
+            case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_LOAD:
+                panel_.Load();
+                break;
+            case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_SAVE:
+                panel_.Save();
+                break;
+            case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_RESET:
+                panel_.Reset();
+                break;
+            default:
+                break;
             }
-            return DefWindowProcW(hwnd, msg, w, l);
+        }
+    private:
+        static void SettingsModified(void* context)
+        {
+            auto* self = static_cast<OptionsFrame*>(context);
+            if (!self || !g_core)
+                return;
+            IAIMPServiceOptionsDialog* service = nullptr;
+            if (SUCCEEDED(g_core->QueryInterface(IID_IAIMPServiceOptionsDialog, reinterpret_cast<void**>(&service))) && service)
+            {
+                service->FrameModified(self);
+                service->Release();
+            }
         }
         ComCounter refs_;
-        HWND frame_ = nullptr;
+        AimpNativeSettingsPanel panel_;
     };
 
     class Plugin final : public IAIMPPlugin
@@ -795,7 +793,7 @@ namespace
             case AIMP_PLUGIN_INFO_SHORT_DESCRIPTION:
                 return const_cast<wchar_t*>(L"ZIP/7z/RAR archive expansion using a static backend.");
             case AIMP_PLUGIN_INFO_FULL_DESCRIPTION:
-                return const_cast<wchar_t*>(L"Expands archive audio to virtual tracks with streaming, memory and cache fallbacks.");
+                return const_cast<wchar_t*>(L"Streams archive audio to virtual tracks with memory and managed-cache fallbacks.\nNative settings tabs in AIMP Preferences: Playback & cache, Passwords, Diagnostics and Track titles.\nSettings are shared with the other Archive Stream Player integrations.\nhttps://github.com/ardenee/Archive_Stream_Player");
             default:
                 return const_cast<wchar_t*>(L"");
             }

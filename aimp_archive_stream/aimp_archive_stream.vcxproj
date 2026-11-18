@@ -42,7 +42,7 @@
     <Link>
       <SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>$(ProjectDir)aimp_archive_stream.def</ModuleDefinitionFile>
-      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;credui.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;credui.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\Release;$(ProjectDir)..\libarchive_static\Release;$(ProjectDir)..\unrar_static\Release;$(ProjectDir)..\zlib_static\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -56,12 +56,13 @@
     <Link>
       <SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>$(ProjectDir)aimp_archive_stream.def</ModuleDefinitionFile>
-      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;credui.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>archive_backend.lib;libarchive_static.lib;unrar_static.lib;zlib_static.lib;credui.lib;bcrypt.lib;advapi32.lib;shell32.lib;comdlg32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(ProjectDir)..\archive_backend\x64\Release;$(ProjectDir)..\libarchive_static\x64\Release;$(ProjectDir)..\unrar_static\x64\Release;$(ProjectDir)..\zlib_static\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="aimp_archive_stream.cpp"/>
+    <ClInclude Include="aimp_settings_panel.h"/>
     <ClCompile Include="..\shared\debug_log.cpp"/>
     <None Include="aimp_archive_stream.def"/>
   </ItemGroup>

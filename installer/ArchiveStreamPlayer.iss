@@ -77,9 +77,12 @@ Source: "..\foo_archive_stream\x64\Release\foo_archive_stream.dll"; DestDir: "{c
 Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|foobar64}\components"; Components: foobar64; Flags: ignoreversion
 
 Source: "..\aimp_archive_stream\Release\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp32}\Plugins\aimp_archive_stream"; Components: aimp32; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|aimp32}\Plugins\aimp_archive_stream"; Components: aimp32; Flags: ignoreversion
 Source: "..\aimp_archive_stream\x64\Release\aimp_archive_stream.dll"; DestDir: "{code:GetPlayerDir|aimp64}\Plugins\aimp_archive_stream"; Components: aimp64; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|aimp64}\Plugins\aimp_archive_stream"; Components: aimp64; Flags: ignoreversion
 
 Source: "..\xmp_archive_stream\Release\xmp-archive-stream.dll"; DestDir: "{code:GetPlayerDir|xmplay}"; Components: xmplay; Flags: ignoreversion
+Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{code:GetPlayerDir|xmplay}"; Components: xmplay; Flags: ignoreversion
 
 Source: "..\musicbee_archive_stream\Release\bass_archive_stream.dll"; DestDir: "{code:GetPlayerDir|musicbee}"; Components: musicbee; Flags: ignoreversion
 Source: "..\musicbee_archive_stream\Release\MB_ArchiveStream.dll"; DestDir: "{code:GetPlayerDir|musicbee}\Plugins"; Components: musicbee; Flags: ignoreversion
