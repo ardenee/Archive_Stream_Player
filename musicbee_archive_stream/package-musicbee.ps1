@@ -44,8 +44,9 @@ Install this package into the MusicBee application folder:
   Plugins\archive_player_bridge.exe
   Plugins\configure-adapters.ps1
 
-Restart MusicBee. Choose Tools > Archive Stream: Add Archive Audio
-to open a ZIP, 7z or RAR album, or use the Archive Stream Settings command.
+Restart MusicBee. Drag ZIP, 7z or RAR albums into the player
+or use Tools > Archive Stream: Add Archive Audio.
+Use Tools > Archive Stream: Settings for cache and password options.
 
 Play MP3, WAV, FLAC, OGG Vorbis, AAC, M4A and WMA. Supported solid
 or encrypted archives may use memory or the managed cache when direct

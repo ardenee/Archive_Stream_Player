@@ -47,8 +47,9 @@ Install BOTH MediaMonkey companion packages in:
   ArchiveStreamPlayer-MediaMonkey5.mmip
   ArchiveStreamPlayer-MediaMonkey5-Native.mmip
 
-Restart MediaMonkey. Use Tools > Archive Stream: Add Archive Audio
-to add tracks from ZIP, 7z and RAR archives to Now Playing.
+Restart MediaMonkey. Drag ZIP, 7z or RAR archives onto Now
+Playing to add their audio tracks. Archive Stream no longer adds
+redundant commands to the Tools menu.
 
 Supported audio: MP3, WAV, FLAC, OGG Vorbis, AAC, M4A and WMA.
 The native plugin provides archive playback; the optional compatibility

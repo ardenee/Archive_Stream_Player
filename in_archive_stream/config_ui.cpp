@@ -950,7 +950,7 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HWND hPasswordBrowse = CreateWindowExA(0, "BUTTON", "Browse...", WS_CHILD | WS_VISIBLE, 425, 436, 90, 26, hwnd, (HMENU)IDC_PASSWORD_LIST_BROWSE, g_hInstance, NULL);
             SendMessage(hPasswordBrowse, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-            HWND hPasswordHelp = CreateWindowExA(0, "STATIC", "Text file format: one password per line. Blank lines and # comments ignored.", WS_CHILD | WS_VISIBLE, 135, 466, 390, 20, hwnd, NULL, g_hInstance, NULL);
+            HWND hPasswordHelp = CreateWindowExA(0, "STATIC", "One password per line. Blank lines and # comments ignored.", WS_CHILD | WS_VISIBLE, 135, 466, 415, 36, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hPasswordHelp, WM_SETFONT, (WPARAM)hFont, TRUE);
 
             g_debugLoggingCheck = CreateWindowExA(0, "BUTTON", "Enable debug logging", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 16, 492, 180, 22, hwnd, (HMENU)IDC_DEBUG_LOGGING_CHECK, g_hInstance, NULL);
@@ -990,7 +990,7 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             InitCommonControlsEx(&init);
             g_settingsTabs = CreateWindowExA(0, WC_TABCONTROLA, "",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | TCS_TABS, ScaleSettings(12), ScaleSettings(10),
-                ScaleSettings(536), ScaleSettings(323), hwnd, reinterpret_cast<HMENU>(4502), g_hInstance, nullptr);
+                ScaleSettings(568), ScaleSettings(323), hwnd, reinterpret_cast<HMENU>(4502), g_hInstance, nullptr);
             if (g_settingsTabs)
             {
                 SendMessage(g_settingsTabs, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
@@ -1342,7 +1342,7 @@ void Config(HWND hwndParent)
     const UINT parentDpi = hwndParent ? GetDpiForWindow(hwndParent) : GetDpiForSystem();
     const UINT windowDpi = parentDpi ? parentDpi : 96;
     g_configWnd = CreateWindowExA(WS_EX_DLGMODALFRAME, className, "Archive Stream Player Settings", WS_CAPTION | WS_SYSMENU | WS_POPUP,
-        CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(560, static_cast<int>(windowDpi), 96),
+        CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(600, static_cast<int>(windowDpi), 96),
         MulDiv(425, static_cast<int>(windowDpi), 96), hwndParent, NULL, g_hInstance, NULL);
 
     if (!g_configWnd)

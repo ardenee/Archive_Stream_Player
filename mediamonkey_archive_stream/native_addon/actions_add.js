@@ -751,24 +751,7 @@
         refreshQueuedArchiveTitles().catch(function () {});
     }, 3000);
 
-    window._menuItems.tools.action.submenu.push({
-        action: actions.archiveStreamNativeAdd,
-        order: 10,
-        grouporder: 91
-    });
-    window._menuItems.tools.action.submenu.push({
-        action: actions.archiveStreamNativeAddHttp,
-        order: 15,
-        grouporder: 91
-    });
-    window._menuItems.tools.action.submenu.push({
-        action: actions.archiveStreamNativeSettings,
-        order: 20,
-        grouporder: 91
-    });
-    window._menuItems.tools.action.submenu.push({
-        action: actions.archiveStreamNativeRefreshTitles,
-        order: 30,
-        grouporder: 91
-    });
+    // Do not add redundant Tools-menu commands. Now Playing handles archive
+    // drops, title refresh runs above, and shared settings remain available
+    // through the installed native input plugin's preferences.
 }());

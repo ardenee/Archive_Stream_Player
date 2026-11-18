@@ -585,19 +585,36 @@ namespace MusicBeePlugin
                     "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
-            var info = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+            var info = new ProcessStartInfo("powershell.exe", "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + script + "\"");
             info.UseShellExecute = false;
-            info.CreateNoWindow = false;
+            info.CreateNoWindow = true;
+            info.WindowStyle = ProcessWindowStyle.Hidden;
             Process.Start(info);
             return true;
         }
 
         public void SaveSettings() {}
         public void Uninstall() {}
-        public void ReceiveNotification(string sourceFileUrl, NotificationType type) {}
+        public void ReceiveNotification(string sourceFileUrl, NotificationType type)
+        {
+            if (type == NotificationType.PluginStartup || type == NotificationType.MusicBeeStarted)
+                StartArchiveDropIntegration();
+        }
 
         public void Close(PluginCloseReason reason)
         {
+            archiveDropClosing = true;
+            try
+            {
+                if (archiveDropRoot != null && archiveDropRoot.InvokeRequired)
+                    archiveDropRoot.Invoke((Action)DetachArchiveDropControls);
+                else
+                    DetachArchiveDropControls();
+            }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_DROP_HOOK_REMOVE_FAILED type=" + error.GetType().Name);
+            }
             if (playbackTraceTimer != null)
             {
                 playbackTraceTimer.Stop();

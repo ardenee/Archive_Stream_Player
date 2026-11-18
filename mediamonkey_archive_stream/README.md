@@ -2,7 +2,7 @@
 
 **Add songs directly from ZIP, 7z and RAR archives to MediaMonkey's playlist.**
 
-MediaMonkey uses a Tools-menu add-on together with a companion audio input plugin. Native playback is preferred; compatibility mode remains available for unsupported configurations.
+MediaMonkey uses a companion native audio input plugin and an add-on that handles archive drops in Now Playing. Native playback is preferred; compatibility mode remains available for unsupported configurations.
 
 ## Features
 
@@ -27,7 +27,7 @@ In **MediaMonkey → Tools → Addons → Add**, install both:
 1. `ArchiveStreamPlayer-MediaMonkey5.mmip` — audio input plugin.
 2. `ArchiveStreamPlayer-MediaMonkey5-Native.mmip` — archive actions and companion tools.
 
-Restart MediaMonkey, then use the Archive Stream command in its Tools menu to select an archive. An explicit compatibility option is available.
+Restart MediaMonkey, then drag a ZIP, 7z or RAR archive onto **Now Playing** to add its audio entries. Configure passwords, cache and metadata using the installed plugin settings. The four redundant Archive Stream commands are no longer added to the Tools menu.
 
 ## Status
 

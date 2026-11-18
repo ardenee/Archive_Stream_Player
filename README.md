@@ -4,6 +4,8 @@ Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows 
 
 **[Download v0.1.7](https://github.com/ardenee/Archive_Stream_Player/releases/tag/v0.1.7)** · [Project website](https://www.arden.ie/projects/archive-stream-player/) · [Feature matrix](FEATURE-MATRIX.md)
 
+**Adapter UI update (November 18, 2026):** Winamp/WACUP's settings dialog has more room for the right-hand tab border and password-help text. MusicBee launches shared settings without a visible PowerShell console and registers archive-file drag/drop handlers on the host's existing drop-enabled controls; its parser and registration tests pass, with real mouse-drop testing still outstanding. MediaMonkey no longer adds four redundant Tools-menu entries: use the player plugin settings and drop archives onto Now Playing. XMPlay continues to expose its settings through the supported **Options → Decoders → Archive Stream → Config** callback, not a new decoder-tree node. VLC uses an external archive launcher and has no integrated settings panel; Windows Media Player integration remains experimental.
+
 ## Features
 
 - ZIP, 7z and RAR/RAR5, including password-protected, solid and multipart archives.
