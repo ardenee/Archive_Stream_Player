@@ -8,7 +8,7 @@
 | foobar2000 32/64-bit | Installs the matching native component |
 | AIMP 32/64-bit | Installs the matching native plugin |
 | XMPlay 32-bit | Installs `xmp-archive-stream.dll`. In **Options → Decoders**, select the **Archive Stream Player** tree page, or use **Archive Stream ZIP/7z/RAR → Config** for the standalone dialog. XMPlay handles ordinary ZIP files itself |
-| MusicBee 32-bit | Installs native BASS add-on and Tools menu plugin. MusicBee-compatible `.mp3` descriptor aliases avoid copying compressed audio; archive-only Win32/OLE drop registration extends MusicBee's drop handling without intercepting ordinary audio files; native descriptors now persist under LocalAppData so MusicBee's queued tracks survive restart; drop targets queue to Playing Tracks rather than importing into Music/Tracks. Compatibility bridge tracks remain session-scoped; host playback still requires verification |
+| MusicBee 32-bit | Installs native BASS add-on and Tools menu plugin. MusicBee-compatible `.mp3` descriptor aliases avoid copying compressed audio; archive-only Win32/OLE drop registration extends MusicBee's drop handling without intercepting ordinary audio files; native descriptors now persist under LocalAppData so MusicBee's queued tracks survive restart; drops on Playing Tracks queue; drops on the Music/Tracks main panel now request library import using MusicBee's API (live UI verification pending). Compatibility bridge tracks remain session-scoped; host playback still requires verification |
 | MediaMonkey 5 / 2024 | Installs native playback and Now Playing archive-drop handling; plugin settings replace four redundant Tools menu commands |
 | VLC 3 64-bit | Use the **Open an archive in VLC** Start Menu shortcut |
 

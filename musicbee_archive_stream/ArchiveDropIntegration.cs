@@ -4,6 +4,7 @@
 // queueing pipeline as the Tools > Add Archive Audio command.
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -224,13 +225,21 @@ namespace MusicBeePlugin
             }
 
             args.Effect = DragDropEffects.Copy;
-            QueueArchiveDropFiles(archives);
+            QueueArchiveDropFiles(archives, new Point(args.X, args.Y), sender as Control);
         }
 
-        private async void QueueArchiveDropFiles(string[] archives)
+        // The OLE root target has no WinForms sender; resolve its screen point
+        // against MusicBee's current child control and SDK panel bounds.
+        private void QueueArchiveDropFiles(string[] archives, Point dropPoint)
+        {
+            QueueArchiveDropFiles(archives, dropPoint, null);
+        }
+
+        private async void QueueArchiveDropFiles(string[] archives, Point dropPoint, Control origin)
         {
             if (archiveDropClosing || archives == null || archives.Length == 0)
                 return;
+            ArchiveDropDestination destination = ResolveArchiveDropDestination(origin, dropPoint);
 
             // Multiple WinForms handlers and the root OLE handler may both see
             // the same user gesture; never enqueue an archive twice.
@@ -245,7 +254,7 @@ namespace MusicBeePlugin
 
             lastArchiveDropSignature = signature;
             lastArchiveDropTime = now;
-            Trace("ARCHIVE_DROP_ACCEPTED archives=" + archives.Length);
+            Trace("ARCHIVE_DROP_ACCEPTED archives=" + archives.Length + " destination=" + destination);
             foreach (string archive in archives)
             {
                 if (archiveDropClosing)
@@ -257,15 +266,30 @@ namespace MusicBeePlugin
                     if (archiveDropClosing || tracks.Length == 0)
                         continue;
 
-                    bool queued = api.NowPlayingList_QueueFilesLast != null &&
-                        api.NowPlayingList_QueueFilesLast(tracks);
-                    Trace("ARCHIVE_DROP_QUEUE_RESULT queued=" + (queued ? "1" : "0") +
-                        " tracks=" + tracks.Length + " extension=" + Path.GetExtension(archive));
-                    if (queued)
-                        StartPlaybackDiagnostics();
+                    if (destination == ArchiveDropDestination.MusicLibrary)
+                    {
+                        int imported = ImportNativeArchiveTracksIntoLibrary(tracks);
+                        if (imported != tracks.Length)
+                        {
+                            MessageBox.Show("Only " + imported + " of " + tracks.Length +
+                                " archive tracks were accepted into the MusicBee library. The archive must remain in its original location.",
+                                "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                        if (imported > 0)
+                            StartPlaybackDiagnostics();
+                    }
                     else
-                        MessageBox.Show("MusicBee did not accept the archive tracks.",
-                            "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    {
+                        bool queued = api.NowPlayingList_QueueFilesLast != null &&
+                            api.NowPlayingList_QueueFilesLast(tracks);
+                        Trace("ARCHIVE_DROP_QUEUE_RESULT queued=" + (queued ? "1" : "0") +
+                            " tracks=" + tracks.Length + " extension=" + Path.GetExtension(archive));
+                        if (queued)
+                            StartPlaybackDiagnostics();
+                        else
+                            MessageBox.Show("MusicBee did not accept the archive tracks.",
+                                "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
                 }
                 catch (Exception error)
                 {

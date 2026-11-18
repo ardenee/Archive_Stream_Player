@@ -139,7 +139,9 @@ namespace MusicBeePlugin
                     bool http = Uri.TryCreate(source, UriKind.Absolute, out uri) &&
                         uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback &&
                         uri.AbsolutePath.IndexOf("/entry/", StringComparison.Ordinal) >= 0;
-                    bool local = source.IndexOf("ArchiveStreamMusicBee-", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool persistentNative = IsPersistentNativeLibraryTrack(source);
+                    bool local = source.IndexOf("ArchiveStreamMusicBee-", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        persistentNative;
                     if (!http && !local)
                         return;
                     string codec = Path.GetExtension(http ? uri.AbsolutePath : source).ToLowerInvariant();
@@ -147,7 +149,8 @@ namespace MusicBeePlugin
                     int position = api.Player_GetPosition == null ? -1 : api.Player_GetPosition();
                     string state = api.Player_GetPlayState == null ? "unknown" : api.Player_GetPlayState().ToString();
                     Trace("HOST_PLAYBACK index=" + queueIndex + " codec=" + codec + " route=" +
-                        (http ? "HTTP" : (source.EndsWith(".ast", StringComparison.OrdinalIgnoreCase) ? "NATIVE" : "LOCAL")) +
+                        (http ? "HTTP" : (persistentNative ? "NATIVE_PERSISTENT" :
+                            (source.EndsWith(".ast", StringComparison.OrdinalIgnoreCase) ? "NATIVE" : "LOCAL"))) +
                         " state=" + state + " position_ms=" + position);
                 }
                 catch (Exception e)
@@ -189,7 +192,10 @@ namespace MusicBeePlugin
             info.Revision = 0;
             info.MinInterfaceVersion = MinInterfaceVersion;
             info.MinApiRevision = MinApiRevision;
-            info.ReceiveNotifications = ReceiveNotificationFlags.StartupOnly;
+            // Library double-clicks and Play commands need to reach the same
+            // BASS archive decoder as Playing Tracks. Observe host playback
+            // events so we can distinguish a library open from a decoder fail.
+            info.ReceiveNotifications = ReceiveNotificationFlags.PlayerEvents;
             info.ConfigurationPanelHeight = 0;
             if (api.MB_AddMenuItem != null)
             {
@@ -730,7 +736,29 @@ namespace MusicBeePlugin
         public void ReceiveNotification(string sourceFileUrl, NotificationType type)
         {
             if (type == NotificationType.PluginStartup || type == NotificationType.MusicBeeStarted)
+            {
                 StartArchiveDropIntegration();
+                return;
+            }
+
+            // MusicBee's normal Tracks double-click sends a player event.
+            // The persisted .mp3 hard link is opened by our native BASS addon;
+            // do not hijack normal MP3 playback or enqueue a second copy.
+            if (type == NotificationType.TrackChanging ||
+                type == NotificationType.TrackChanged ||
+                type == NotificationType.PlayStateChanged)
+            {
+                string source = sourceFileUrl ?? String.Empty;
+                if (source.Length == 0 && api.NowPlaying_GetFileUrl != null)
+                    source = api.NowPlaying_GetFileUrl() ?? String.Empty;
+                if (!IsPersistentNativeLibraryTrack(source))
+                    return;
+
+                string state = api.Player_GetPlayState == null ? "unknown" : api.Player_GetPlayState().ToString();
+                Trace("NATIVE_LIBRARY_PLAYBACK_EVENT event=" + type + " state=" + state +
+                    " source=LOCALAPPDATA_ALIAS decoder=BASS_ARCHIVE");
+                StartPlaybackDiagnostics();
+            }
         }
 
         public void Close(PluginCloseReason reason)

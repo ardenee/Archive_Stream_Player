@@ -2126,7 +2126,10 @@ extern "C" int __stdcall ArchiveStreamFormatNativeTitleW(const wchar_t* virtualT
 extern "C" const void* WINAPI BASSplugin(DWORD face)
 {
     static const BASS_PLUGINFORM formats[] = {
-        {kArchiveCtype, "Archive Stream native track", "*.ast"}
+        // MusicBee stores persistent archive descriptors behind .mp3 hard-link
+        // aliases. The decoder strictly verifies the linked .ast descriptor;
+        // ordinary MP3 files are rejected here and remain with MusicBee/BASS.
+        {kArchiveCtype, "Archive Stream native track", "*.ast;*.mp3"}
     };
     static const BASS_PLUGININFO info = {kFormatVersion, 1, formats};
     switch (face)

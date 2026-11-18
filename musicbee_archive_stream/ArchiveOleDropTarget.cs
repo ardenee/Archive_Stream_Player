@@ -2,6 +2,7 @@
 // window. Do not replace or revoke any drop target owned by MusicBee.
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Text;
@@ -120,11 +121,11 @@ namespace MusicBeePlugin
         private sealed class NativeDropTarget : IOleDropTarget
         {
             private readonly Func<string, bool> isArchive;
-            private readonly Action<string[]> accept;
+            private readonly Action<string[], Point> accept;
             private readonly Action<string> trace;
             private bool validDrag;
 
-            public NativeDropTarget(Func<string, bool> isArchive, Action<string[]> accept, Action<string> trace)
+            public NativeDropTarget(Func<string, bool> isArchive, Action<string[], Point> accept, Action<string> trace)
             {
                 this.isArchive = isArchive;
                 this.accept = accept;
@@ -181,7 +182,7 @@ namespace MusicBeePlugin
 
                     effect = DropEffectCopy;
                     trace("ARCHIVE_OLE_DROP accepted=1 archives=" + archives.Length);
-                    accept(archives);
+                    accept(archives, new Point(point.X, point.Y));
                 }
                 catch (Exception error)
                 {
@@ -199,7 +200,7 @@ namespace MusicBeePlugin
             trace = onTrace;
         }
 
-        public static ArchiveOleDropRegistration TryRegister(IntPtr window, Func<string, bool> isArchive, Action<string[]> onArchive, Action<string> trace)
+        public static ArchiveOleDropRegistration TryRegister(IntPtr window, Func<string, bool> isArchive, Action<string[], Point> onArchive, Action<string> trace)
         {
             if (window == IntPtr.Zero)
                 return null;
