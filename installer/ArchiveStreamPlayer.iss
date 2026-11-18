@@ -1,6 +1,6 @@
 ; Open in Inno Setup 7 and choose Build > Compile.
 #define AppName "Archive Stream Player"
-#define AppVersion "0.1.7"
+#define AppVersion "0.1.10-dev"
 #define HomeURL "https://www.arden.ie/projects/archive-stream-player/"
 
 [Setup]
@@ -15,7 +15,7 @@ AppUpdatesURL={#HomeURL}
 DefaultDirName={autopf}\Archive Stream Player
 DefaultGroupName=Archive Stream Player
 OutputDir=output
-OutputBaseFilename=ArchiveStreamPlayer-Setup
+OutputBaseFilename=ArchiveStreamPlayer-Setup-DEV
 Compression=lzma2/max
 SolidCompression=yes
 PrivilegesRequired=admin
@@ -43,6 +43,9 @@ Name: "xmplay"; Description: "XMPlay 32-bit - native 7z/RAR plugin"; Types: cust
 Name: "musicbee"; Description: "MusicBee 32-bit - native plugin and Tools menu"; Types: custom
 Name: "mediamonkey"; Description: "MediaMonkey 5/2024 - native playback and archive Tools menu"; Types: custom
 Name: "vlc"; Description: "VLC 3 64-bit - native archive launcher"; Types: custom
+
+[Tasks]
+Name: "wacup_zip_override"; Description: "Use Archive Stream for ZIP files in WACUP (disable WACUP built-in ZIP plugin; restore on uninstall)"; Components: wacup; Flags: checkedonce
 
 [Files]
 Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -357,4 +360,61 @@ end;
 function GetPlayerExe(Param: String): String;
 begin
   Result := AddBackslash(GetPlayerDir(Param)) + 'vlc.exe';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  OriginalZip, DisabledZip, Marker: String;
+begin
+  if (CurStep <> ssInstall) or not WizardIsComponentSelected('wacup') or
+     not WizardIsTaskSelected('wacup_zip_override') then Exit;
+
+  OriginalZip := AddBackslash(GetPlayerDir('wacup')) + 'Plugins\in_zip.dll';
+  DisabledZip := OriginalZip + '.archive_stream_disabled';
+  Marker := ExpandConstant('{app}\wacup-zip-restore-path.txt');
+
+  // Do not overwrite a previous backup or a manually disabled WACUP plugin.
+  if not FileExists(OriginalZip) then Exit;
+  if FileExists(DisabledZip) then
+    RaiseException('WACUP ZIP handler backup already exists: ' + DisabledZip);
+
+  if not CreateDir(ExpandConstant('{app}')) then
+    RaiseException('Cannot create Archive Stream installation directory.');
+  if not RenameFile(OriginalZip, DisabledZip) then
+    RaiseException('Cannot disable WACUP built-in ZIP plugin. Close WACUP and retry.');
+  if not SaveStringToFile(Marker, OriginalZip, False) then
+  begin
+    RenameFile(DisabledZip, OriginalZip);
+    RaiseException('Cannot register the WACUP ZIP handler for uninstall restoration.');
+  end;
+  Log('WACUP ZIP: original handler backed up to ' + DisabledZip);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Marker, OriginalZip, DisabledZip: String;
+  StoredPath: AnsiString;
+begin
+  if CurUninstallStep <> usPostUninstall then Exit;
+
+  Marker := ExpandConstant('{app}\wacup-zip-restore-path.txt');
+  if not LoadStringFromFile(Marker, StoredPath) then Exit;
+  OriginalZip := Trim(StoredPath);
+  if CompareText(ExtractFileName(OriginalZip), 'in_zip.dll') <> 0 then Exit;
+
+  DisabledZip := OriginalZip + '.archive_stream_disabled';
+  if FileExists(OriginalZip) then
+  begin
+    Log('WACUP ZIP: an active ZIP plugin already exists; leaving backup untouched.');
+    Exit;
+  end;
+  if not FileExists(DisabledZip) then Exit;
+
+  if RenameFile(DisabledZip, OriginalZip) then
+  begin
+    DeleteFile(Marker);
+    Log('WACUP ZIP: original handler restored.');
+  end
+  else
+    Log('WACUP ZIP: restore failed; original handler remains at ' + DisabledZip);
 end;

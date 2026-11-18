@@ -918,7 +918,11 @@ bool GetAudioDurationMsFromArchiveEntry(const char* archivePath, uint32_t index,
 
     if (metadataEntryIsSolid)
     {
-        DebugLogWrite("INFO", "METADATA", "DURATION_ROUTE_SKIP", "archive=%s | index=%u | entry=%s | route=STREAM | reason=solid_entry_stream_not_attempted", archivePath, (unsigned int)index, filename);
+        // For solid archives the earlier EXISTING_CACHE route is the only
+        // permitted metadata source. Never extract the solid block a second
+        // time merely to calculate a playlist duration.
+        DebugLogWrite("INFO", "METADATA", "DURATION_DEFER", "archive=%s | index=%u | entry=%s | reason=solid_cache_unavailable_or_unreadable", archivePath, (unsigned int)index, filename);
+        return false;
     }
     else if (GetAudioDurationMsFromStream(format, archivePath, index, filename, actualSize, outLengthMs))
     {
@@ -1237,5 +1241,75 @@ bool ArchiveFormatVirtualTitle(const char* virtualPath, const char* baseTitle, c
 
     strcpy_s(outTitle, outTitleSize, "Archive Stream");
 
+    return true;
+}
+
+// The shared solid warmer has already extracted this entry into its managed
+// cache. Read the prepared file once on its low-priority thread and persist the
+// duration under header-provided size/CRC. Never reopen or decompress the archive.
+bool GetAudioDurationMsFromPreparedCacheFile(const wchar_t* cachedPath, const ArchiveEntry& entry, int* outLengthMs)
+{
+    if (outLengthMs)
+        *outLengthMs = -1000;
+    if (!cachedPath || !cachedPath[0] || !outLengthMs || !entry.size || entry.path.empty())
+        return false;
+
+    const MetadataAudioFormat format = GetMetadataAudioFormatFromPath(entry.path.c_str());
+    if (format != METADATA_AUDIO_FORMAT_MP3 && format != METADATA_AUDIO_FORMAT_WAV &&
+        format != METADATA_AUDIO_FORMAT_FLAC && format != METADATA_AUDIO_FORMAT_OGG)
+        return false;
+
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, cachedPath, L"rb") != 0 || !file)
+        return false;
+
+    if (_fseeki64(file, 0, SEEK_END) != 0)
+    {
+        fclose(file);
+        return false;
+    }
+    const __int64 size = _ftelli64(file);
+    constexpr uint64_t mb = 1024ull * 1024ull;
+    if (size <= 0 || static_cast<uint64_t>(size) != entry.size ||
+        static_cast<uint64_t>(size) > static_cast<uint64_t>(MAX_METADATA_SCAN_MB) * mb ||
+        _fseeki64(file, 0, SEEK_SET) != 0)
+    {
+        fclose(file);
+        return false;
+    }
+
+    std::vector<unsigned char> bytes(static_cast<size_t>(size));
+    const size_t got = fread(bytes.data(), 1, bytes.size(), file);
+    fclose(file);
+    if (got != bytes.size() || !GetAudioDurationMsFromMemory(format, bytes.data(), bytes.size(), outLengthMs))
+        return false;
+
+    MetadataFingerprintKey key;
+    if (MetadataBuildFingerprintKey(entry.size, entry.crc32, entry.hasCrc32, entry.path.c_str(), &key))
+        MetadataFingerprintCacheStore(key, *outLengthMs);
+    DebugLogWrite("INFO", "METADATA", "DURATION_FROM_PREPARED_CACHE", "index=%u | entry=%s | length_ms=%d | bytes=%zu | crc_from_archive_header=%d", (unsigned)entry.index, entry.path.c_str(), *outLengthMs, bytes.size(), entry.hasCrc32 ? 1 : 0);
+    return true;
+}
+
+// Calculate duration from an entry that the metadata preflight has already
+// decoded for its tag prefix. No extra archive access or CRC calculation.
+bool GetAudioDurationMsFromPreparedMemory(const unsigned char* bytes, size_t size, const ArchiveEntry& entry, int* outLengthMs)
+{
+    if (outLengthMs)
+        *outLengthMs = -1000;
+    if (!outLengthMs || !bytes || !size || !entry.size || entry.path.empty() ||
+        size != entry.size || size > static_cast<size_t>(MAX_METADATA_SCAN_MB) * 1024u * 1024u)
+        return false;
+
+    const MetadataAudioFormat format = GetMetadataAudioFormatFromPath(entry.path.c_str());
+    if (format == METADATA_AUDIO_FORMAT_UNKNOWN || MetadataFormatUsesMediaFoundation(format))
+        return false;
+    if (!GetAudioDurationMsFromMemory(format, bytes, size, outLengthMs) || *outLengthMs <= 0)
+        return false;
+
+    MetadataFingerprintKey key;
+    if (MetadataBuildFingerprintKey(entry.size, entry.crc32, entry.hasCrc32, entry.path.c_str(), &key))
+        MetadataFingerprintCacheStore(key, *outLengthMs);
+    DebugLogWrite("INFO", "METADATA", "DURATION_FROM_PREPARED_MEMORY", "index=%u | entry=%s | length_ms=%d | bytes=%zu", (unsigned)entry.index, entry.path.c_str(), *outLengthMs, size);
     return true;
 }

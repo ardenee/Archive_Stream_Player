@@ -2,6 +2,10 @@
 #include <cstring>
 #include <cstdio>
 #include <string>
+#include <vector>
+#include <memory>
+#include <new>
+#include "archive_passwords.h"
 
 #include "gen.h"
 #include "wa_ipc.h"
@@ -9,6 +13,7 @@
 #include "debug_log.h"
 #include "../shared/archive_adapter_logging.h"
 #include "archive_common.h"
+#include "archive_reader.h"
 #include "winamp_bridge_protocol.h"
 
 #pragma comment(lib, "Advapi32.lib")
@@ -23,6 +28,10 @@ static HINSTANCE g_hInstance = NULL;
 static HWND g_hiddenWnd = NULL;
 #define WM_ARCHIVE_STREAM_DO_EXPAND (WM_APP + 101)
 #define WM_ARCHIVE_STREAM_PLAY_EXPANDED_INDEX (WM_APP + 4202)
+#define WM_ARCHIVE_STREAM_METADATA_READY (WM_APP + 4203)
+static volatile LONG g_preflightGeneration = 0;
+static bool IsWacupHost();
+static bool QueueWacupMetadataPreflight(HWND hwnd, const std::string& archivePath, int preferredIndex, bool startPlayback);
 
 #ifndef WINAMP_BUTTON2
 #define WINAMP_BUTTON2 40045
@@ -165,7 +174,21 @@ static bool IsArchiveStreamVirtualPathForArchive(const char* playlistPath, const
 
 static void Config()
 {
-    bool ok = ExpandSelectedOrCurrentZip(g_plugin.hwndParent);
+    bool ok = false;
+    if (IsWacupHost() && g_hiddenWnd)
+    {
+        int index = static_cast<int>(SendMessage(g_plugin.hwndParent, WM_WA_IPC, -1, IPC_PLAYLIST_GET_NEXT_SELECTED));
+        if (index < 0)
+            index = static_cast<int>(SendMessage(g_plugin.hwndParent, WM_WA_IPC, 0, IPC_GETLISTPOS));
+        char archivePath[MAX_PATH * 4]{};
+        if (index >= 0 && GetPlaylistFileAtIndex(g_plugin.hwndParent, index, archivePath, sizeof(archivePath)) &&
+            IsSupportedArchivePath(archivePath))
+            ok = QueueWacupMetadataPreflight(g_hiddenWnd, archivePath, index, false);
+    }
+    else
+    {
+        ok = ExpandSelectedOrCurrentZip(g_plugin.hwndParent);
+    }
 
     if (!ok)
     {
@@ -176,6 +199,7 @@ static void Config()
 
 static void Quit()
 {
+    InterlockedIncrement(&g_preflightGeneration);
     if (g_hiddenWnd)
     {
         DestroyWindow(g_hiddenWnd);
@@ -184,6 +208,125 @@ static void Quit()
 
     UnregisterClassA(ARCHIVE_STREAM_HIDDEN_CLASS, g_hInstance);
     DebugLogShutdown();
+}
+
+struct WacupPreflightWork
+{
+    std::string archivePath;
+    int preferredIndex = -1;
+    LONG generation = 0;
+    HWND notifyWindow = nullptr;
+    std::vector<ArchivePreparedPlaylistItem> items;
+    bool succeeded = false;
+    bool startPlayback = true;
+    HMODULE module = nullptr;
+};
+
+static bool IsWacupHost()
+{
+    char executable[MAX_PATH]{};
+    GetModuleFileNameA(nullptr, executable, sizeof(executable));
+    const char* filename = strrchr(executable, '\\');
+    return _stricmp(filename ? filename + 1 : executable, "wacup.exe") == 0;
+}
+
+static DWORD WINAPI WacupMetadataPreflightWorker(LPVOID parameter)
+{
+    std::unique_ptr<WacupPreflightWork> work(static_cast<WacupPreflightWork*>(parameter));
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    ArchivePasswordSetPromptAllowedForCurrentThread(false);
+    work->succeeded = PrepareArchivePlaylistForWacup(work->archivePath.c_str(), work->items, &g_preflightGeneration, work->generation);
+    ArchivePasswordSetPromptAllowedForCurrentThread(true);
+    DebugLogWrite("INFO", "GEN", "PREFLIGHT_WORKER_DONE", "archive=%s | prepared=%d | entries=%zu", work->archivePath.c_str(), work->succeeded ? 1 : 0, work->items.size());
+
+    const HMODULE module = work->module;
+    if (PostMessage(work->notifyWindow, WM_ARCHIVE_STREAM_METADATA_READY, 0, reinterpret_cast<LPARAM>(work.get())))
+        work.release();
+    else
+        work.reset();
+    FreeLibraryAndExitThread(module, 0);
+    return 0;
+}
+
+static bool QueueWacupMetadataPreflight(HWND hwnd, const std::string& archivePath, int preferredIndex, bool startPlayback)
+{
+    std::unique_ptr<WacupPreflightWork> work(new (std::nothrow) WacupPreflightWork());
+    if (!work)
+        return false;
+    work->archivePath = archivePath;
+    work->preferredIndex = preferredIndex;
+    work->startPlayback = startPlayback;
+    work->generation = InterlockedIncrement(&g_preflightGeneration);
+    work->notifyWindow = hwnd;
+
+    // Keep this module loaded for the lifetime of the detached worker.
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&WacupMetadataPreflightWorker), &module))
+        return false;
+    work->module = module;
+    HANDLE thread = CreateThread(nullptr, 0, WacupMetadataPreflightWorker, work.get(), 0, nullptr);
+    if (!thread)
+    {
+        FreeLibrary(module);
+        DebugLogWrite("ERROR", "GEN", "PREFLIGHT_START_FAIL", "archive=%s | winerr=%lu", archivePath.c_str(), GetLastError());
+        return false;
+    }
+    work.release();
+    CloseHandle(thread);
+    DebugLogWrite("INFO", "GEN", "PREFLIGHT_QUEUED", "archive=%s | index=%d", archivePath.c_str(), preferredIndex);
+    return true;
+}
+
+static bool CompleteExpandedPlaylist(HWND hwnd, const std::string& archivePath, int preferredIndex, const std::vector<ArchivePreparedPlaylistItem>* prepared, bool startPlayback)
+{
+    const bool ok = prepared
+        ? ExpandPreparedArchiveAtIndex(g_plugin.hwndParent, archivePath.c_str(), preferredIndex, *prepared, startPlayback)
+        : ExpandZipPathInPlaylistAtIndex(g_plugin.hwndParent, archivePath.c_str(), preferredIndex, startPlayback);
+    if (!ok)
+    {
+        DebugLogWrite("ERROR", "GEN", "EXPAND_DEFERRED_FAIL", "archive=%s | index=%d | prepared=%d", archivePath.c_str(), preferredIndex, prepared ? 1 : 0);
+        return false;
+    }
+
+    if (!startPlayback)
+        return true;
+
+    // Find the actual inserted position, not a stale index from before the
+    // background scan. The user can rearrange the playlist while it runs.
+    int playIndex = -1;
+    const std::string firstPath = prepared && !prepared->empty() ? prepared->front().path : std::string();
+    const int count = static_cast<int>(SendMessage(g_plugin.hwndParent, WM_WA_IPC, 0, IPC_GETLISTLENGTH));
+    for (int i = 0; i < count; ++i)
+    {
+        char path[MAX_PATH * 4]{};
+        if (!GetPlaylistFileAtIndex(g_plugin.hwndParent, i, path, sizeof(path)))
+            continue;
+        if ((!firstPath.empty() && _stricmp(path, firstPath.c_str()) == 0) ||
+            (firstPath.empty() && strstr(path, ".archive_stream|") && _strnicmp(path, archivePath.c_str(), archivePath.size()) == 0))
+        {
+            playIndex = i;
+            break;
+        }
+    }
+    if (playIndex < 0)
+    {
+        DebugLogWrite("ERROR", "GEN", "EXPAND_PLAY_CAPTURE_FAIL", "archive=%s | reason=could_not_find_inserted_virtual_entry", archivePath.c_str());
+        return false;
+    }
+
+    g_pendingExpandedPlayIndex = playIndex;
+    g_pendingExpandedPlayPath.clear();
+    char actualPath[MAX_PATH * 4]{};
+    if (GetPlaylistFileAtIndex(g_plugin.hwndParent, playIndex, actualPath, sizeof(actualPath)))
+        g_pendingExpandedPlayPath = actualPath;
+    if (!PostMessage(hwnd, WM_ARCHIVE_STREAM_PLAY_EXPANDED_INDEX, 0, 0))
+    {
+        DebugLogWrite("ERROR", "GEN", "EXPAND_PLAY_POST_FAIL", "archive=%s | index=%d | winerr=%lu", archivePath.c_str(), playIndex, GetLastError());
+        g_pendingExpandedPlayIndex = -1;
+        g_pendingExpandedPlayPath.clear();
+        return false;
+    }
+    return true;
 }
 
 static LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -258,52 +401,45 @@ static LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     {
         if (!g_pendingExpand.archivePath.empty())
         {
-            std::string archivePath = g_pendingExpand.archivePath;
-            int playlistIndex = g_pendingExpand.playlistIndex;
+            const std::string archivePath = g_pendingExpand.archivePath;
+            const int playlistIndex = g_pendingExpand.playlistIndex;
             g_pendingExpand.archivePath.clear();
             g_pendingExpand.playlistIndex = -1;
-            bool ok = ExpandZipPathInPlaylistAtIndex(g_plugin.hwndParent, archivePath.c_str(), playlistIndex, true);
 
-            if (!ok)
+            if (IsWacupHost())
             {
-                DebugLogWrite("ERROR", "GEN", "EXPAND_DEFERRED_FAIL", "archive=%s | index=%d", archivePath.c_str(), playlistIndex);
+                // No synchronous archive reads on WACUP's UI thread. The
+                // original archive remains in the playlist until every
+                // final tag and duration has been prepared in the background.
+                if (!QueueWacupMetadataPreflight(hwnd, archivePath, playlistIndex, true))
+                    DebugLogWrite("ERROR", "GEN", "PREFLIGHT_QUEUE_FAIL", "archive=%s | index=%d", archivePath.c_str(), playlistIndex);
             }
             else
             {
-                /*
-                    Expansion has completed and playlist position has been set inside
-                    RebuildPlaylistWithExpandedZip().
-
-                    Now hand off playback as a separate posted message. This avoids:
-                        - playing while the playlist rebuild function is still on the stack
-                        - passing a temporary virtual path pointer to Winamp
-                        - arbitrary sleep/timer delays
-                */
-                g_pendingExpandedPlayIndex = playlistIndex;
-                g_pendingExpandedPlayPath.clear();
-                char insertedPath[MAX_PATH * 4];
-
-                if (GetPlaylistFileAtIndex(g_plugin.hwndParent, playlistIndex, insertedPath, sizeof(insertedPath))) 
-                {
-                    g_pendingExpandedPlayPath = insertedPath;
-                }
-                else 
-                {
-                    DebugLogWrite("WARN", "GEN", "EXPAND_PLAY_CAPTURE_FAIL", "archive=%s | index=%d | reason=could_not_read_inserted_playlist_item", archivePath.c_str(), playlistIndex);
-                }
-
-                if (!PostMessage(hwnd, WM_ARCHIVE_STREAM_PLAY_EXPANDED_INDEX, 0, 0)) 
-                {
-                    DebugLogWrite("ERROR", "GEN", "EXPAND_PLAY_POST_FAIL", "archive=%s | index=%d | winerr=%lu", archivePath.c_str(), playlistIndex, GetLastError());
-                    g_pendingExpandedPlayIndex = -1;
-                    g_pendingExpandedPlayPath.clear();
-                }
+                CompleteExpandedPlaylist(hwnd, archivePath, playlistIndex, nullptr, true);
             }
         }
-
         return 0;
     }
 
+    if (msg == WM_ARCHIVE_STREAM_METADATA_READY)
+    {
+        std::unique_ptr<WacupPreflightWork> result(reinterpret_cast<WacupPreflightWork*>(lParam));
+        if (!result)
+            return 0;
+        if (result->generation != InterlockedCompareExchange(&g_preflightGeneration, 0, 0))
+        {
+            DebugLogWrite("INFO", "GEN", "PREFLIGHT_STALE", "archive=%s | reason=newer_expansion_requested", result->archivePath.c_str());
+            return 0;
+        }
+        if (!result->succeeded || result->items.empty())
+        {
+            DebugLogWrite("ERROR", "GEN", "PREFLIGHT_FAILED", "archive=%s | reason=metadata_preparation_failed", result->archivePath.c_str());
+            return 0;
+        }
+        CompleteExpandedPlaylist(hwnd, result->archivePath, result->preferredIndex, &result->items, result->startPlayback);
+        return 0;
+    }
     if (msg == WM_ARCHIVE_STREAM_PLAY_EXPANDED_INDEX) 
     {
         int playIndex = g_pendingExpandedPlayIndex;

@@ -5,6 +5,9 @@
 #include <vector>
 #include <algorithm>
 #include <cstdarg>
+#include <unordered_map>
+#include <fstream>
+#include <filesystem>
 #include <shellapi.h>
 #include "archive_common.h"
 #include "archive_backend.h"
@@ -20,6 +23,9 @@
 #include "winamp_bridge_protocol.h"
 #include "playback.h"
 #include "archive_reader.h"
+#include "archive_stream_owner.h"
+#include "../shared/archive_track_tags.h"
+#include "../shared/archive_winamp_text.h"
 #include "native_track_manifest.h"
 #include "mf_support.h"
 #include "mf_audio_decoder.h"
@@ -133,6 +139,20 @@ static HANDLE g_metadataWorkerWakeEvent = NULL;
 static CRITICAL_SECTION g_metadataQueueLock;
 static bool g_metadataQueueLockInitialized = false;
 static std::vector<std::string> g_metadataQueue;
+static std::string g_metadataActivePath;
+// Empty values mean the entry was scanned but has no usable host-ANSI tag.
+// Shared with GetFileInfo under g_metadataQueueLock; no archive I/O on the UI thread.
+static std::unordered_map<std::string, std::string> g_archiveTagTitleCache;
+struct ArchiveHostExtendedTags
+{
+    std::string title, artist, album, albumArtist, genre, year;
+    unsigned trackNumber = 0;
+};
+static std::unordered_map<std::string, ArchiveHostExtendedTags> g_archiveHostExtendedTags;
+static std::string g_currentVirtualMetadataPath;
+// Entries primed by WACUP's pre-play metadata pass are final: neither
+// playback nor background workers may replace their title or duration.
+static std::unordered_map<std::string, int> g_preparedPlaylistLengthMs;
 static volatile LONG g_metadataWorkerStop = 0;
 static HANDLE g_solid7zCacheWarmerThread = NULL;
 
@@ -154,6 +174,8 @@ static void StopBackgroundMetadataWorker();
 static void QueueBackgroundMetadataLookup(const char* virtualPath);
 static void QueueBackgroundMetadataForArchive(const char* archivePath);
 static void OnArchivePasswordAccepted(const char* archivePath);
+static bool ShouldSkipBackgroundMetadataForSolid7z(const char* archivePath, mz_uint index, const char* virtualPath);
+static bool PublishCachedArchiveTagTitle(const char* virtualPath, const wchar_t* preparedCachePath = nullptr);
 static DWORD WINAPI Solid7zCacheWarmerProc(LPVOID param);
 static void StopSolid7zCacheWarmer();
 
@@ -606,6 +628,9 @@ static void FormatStableVirtualTitle(const char* virtualPath, const char* intern
     }
 
     std::string filename = StripKnownAudioExtension(GetBaseNameOnly(internalPath));
+    std::string ansiFilename;
+    if (ArchiveWinampUtf8ToAnsi(filename, ansiFilename))
+        filename = std::move(ansiFilename);
     std::string archive = GetArchiveNameFromVirtualPath(virtualPath);
 
     if (filename.empty())
@@ -842,12 +867,208 @@ static void EnsureMetadataQueueLock()
     }
 }
 
+static bool GetCachedArchiveTagTitle(const char* virtualPath, std::string& outTitle)
+{
+    outTitle.clear();
+    if (!virtualPath || !virtualPath[0] || !g_metadataQueueLockInitialized)
+        return false;
+
+    EnterCriticalSection(&g_metadataQueueLock);
+    const auto found = g_archiveTagTitleCache.find(virtualPath);
+    const bool scanned = found != g_archiveTagTitleCache.end();
+    if (scanned)
+        outTitle = found->second;
+    LeaveCriticalSection(&g_metadataQueueLock);
+    return scanned;
+}
+
+static bool GetFinalizedPlaylistLength(const char* virtualPath, int& outLengthMs)
+{
+    if (!virtualPath || !g_metadataQueueLockInitialized)
+        return false;
+    EnterCriticalSection(&g_metadataQueueLock);
+    const auto found = g_preparedPlaylistLengthMs.find(virtualPath);
+    const bool prepared = found != g_preparedPlaylistLengthMs.end();
+    if (prepared)
+        outLengthMs = found->second;
+    LeaveCriticalSection(&g_metadataQueueLock);
+    return prepared;
+}
+
+// WACUP's general plugin primes every final title before it inserts any
+// virtual playlist entries. The cache is then read-only for those paths.
+extern "C" __declspec(dllexport) int __cdecl ArchiveStreamPrimePlaylistMetadata(const char* virtualPath, const char* title, int durationMs)
+{
+    if (!virtualPath || !IsVirtualArchivePath(virtualPath) || !title || !title[0])
+        return 0;
+    if (strlen(title) >= 1024)
+        return 0;
+
+    EnsureMetadataQueueLock();
+    EnterCriticalSection(&g_metadataQueueLock);
+    g_archiveTagTitleCache[virtualPath] = title;
+    g_preparedPlaylistLengthMs[virtualPath] = durationMs > 0 ? durationMs : -1000;
+    LeaveCriticalSection(&g_metadataQueueLock);
+    DebugLogWrite("INFO", "METADATA", "PLAYLIST_PRIMED", "path=%s | title=%s | duration_ms=%d", virtualPath, title, durationMs);
+    return 1;
+}
+
+extern "C" __declspec(dllexport) int __cdecl ArchiveStreamPrimePlaylistMetadataEx(const char* virtualPath, const char* displayTitle, const char* tagTitle, const char* artist, const char* album, const char* albumArtist, const char* genre, const char* year, unsigned trackNumber, int durationMs)
+{
+    if (!virtualPath || !IsVirtualArchivePath(virtualPath) || !displayTitle || !displayTitle[0] || strlen(displayTitle) >= 1024)
+        return 0;
+    EnsureMetadataQueueLock();
+    ArchiveHostExtendedTags fields;
+    fields.title = tagTitle ? tagTitle : "";
+    fields.artist = artist ? artist : "";
+    fields.album = album ? album : "";
+    fields.albumArtist = albumArtist ? albumArtist : "";
+    fields.genre = genre ? genre : "";
+    fields.year = year ? year : "";
+    fields.trackNumber = trackNumber;
+    EnterCriticalSection(&g_metadataQueueLock);
+    g_archiveTagTitleCache[virtualPath] = displayTitle;
+    g_archiveHostExtendedTags[virtualPath] = std::move(fields);
+    g_preparedPlaylistLengthMs[virtualPath] = durationMs > 0 ? durationMs : -1000;
+    LeaveCriticalSection(&g_metadataQueueLock);
+    DebugLogWrite("INFO", "METADATA", "PLAYLIST_TAGS_PRIMED", "path=%s | display=%s | tag_title=%s | artist=%s | duration_ms=%d", virtualPath, displayTitle, tagTitle ? tagTitle : "", artist ? artist : "", durationMs);
+    return 1;
+}
+
+static bool ProbeArchiveTagTitle(const char* virtualPath, std::string& outHostTitle, const wchar_t* preparedCachePath = nullptr)
+{
+    outHostTitle.clear();
+    if (!virtualPath || !virtualPath[0])
+        return false;
+
+    char archivePath[MAX_PATH * 4]{};
+    char internalPath[MAX_PATH * 4]{};
+    mz_uint index = 0;
+    if (!ParseVirtualDisplayPath(virtualPath, archivePath, sizeof(archivePath), &index, internalPath, sizeof(internalPath)))
+        return false;
+
+    const char* dot = strrchr(internalPath, '.');
+    if (!dot)
+        return false;
+
+    std::string extension = dot + 1;
+    for (char& c : extension)
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    if (extension != "mp3" && extension != "flac" && extension != "ogg" && extension != "opus")
+        return false;
+
+    // The worker reads at most 256 KiB. Prefer an already-extracted managed
+    // cache file; solid archives must NEVER be decompressed for tag discovery.
+    constexpr size_t maximumTagPrefix = 256 * 1024;
+    std::vector<unsigned char> data;
+    size_t read = 0;
+    char cachePath[MAX_PATH * 4]{};
+    const bool existingLegacyCache = (!preparedCachePath || !preparedCachePath[0]) &&
+        ArchiveFindExistingCacheFile(archivePath, static_cast<uint32_t>(index), nullptr, cachePath, sizeof(cachePath));
+
+    // The unified cache is used by every player. A solid entry previously
+    // extracted for another track/session must still provide tags on restart,
+    // without an archive decompression pass or a new cache file.
+    std::wstring unifiedCachePath;
+    if ((!preparedCachePath || !preparedCachePath[0]) && !existingLegacyCache &&
+        !ArchiveEntryCanStream(archivePath, static_cast<unsigned int>(index)))
+    {
+        const std::wstring wideArchive = ArchiveAdapterUtf8ToWide(archivePath);
+        ArchiveEntry entry;
+        std::string lookupError;
+        if (!wideArchive.empty() &&
+            ArchiveUnifiedCache::LookupEntry(wideArchive, static_cast<uint32_t>(index), entry, lookupError))
+            ArchiveUnifiedCache::Find(wideArchive, entry, ArchiveAdapterPreferencesLoad(), unifiedCachePath);
+    }
+
+    if ((preparedCachePath && preparedCachePath[0]) || existingLegacyCache || !unifiedCachePath.empty())
+    {
+        const std::filesystem::path file = (preparedCachePath && preparedCachePath[0]) ?
+            std::filesystem::path(preparedCachePath) : !unifiedCachePath.empty() ?
+            std::filesystem::path(unifiedCachePath) : std::filesystem::path(cachePath);
+        std::ifstream cached(file, std::ios::binary);
+        if (!cached)
+            return false;
+        data.resize(maximumTagPrefix);
+        cached.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        read = static_cast<size_t>(cached.gcount());
+        DebugLogWrite("INFO", "METADATA_BG", "TAG_PREFIX_CACHE", "archive=%s | index=%u | bytes=%zu", archivePath, (unsigned int)index, read);
+    }
+    else
+    {
+        if (!ArchiveEntryCanStream(archivePath, static_cast<unsigned int>(index)))
+            return false;
+
+        wchar_t wideArchivePath[MAX_PATH * 4]{};
+        if (!CharPathToWidePath(archivePath, wideArchivePath, sizeof(wideArchivePath) / sizeof(wideArchivePath[0])))
+            return false;
+
+        ArchiveStreamOwner stream;
+        std::string error;
+        if (!stream.Open(wideArchivePath, static_cast<uint32_t>(index), error))
+            return false;
+
+        const size_t maximum = static_cast<size_t>((std::min)(stream.Size(), static_cast<uint64_t>(maximumTagPrefix)));
+        if (!maximum)
+            return false;
+        data.resize(maximum);
+        while (read < data.size())
+        {
+            const ArchiveStreamReadResult result = stream.ReadDetailed(data.data() + read, data.size() - read);
+            read += result.bytesRead;
+            if (result.errorKind != ArchiveStreamErrorKind::None || result.bytesRead == 0)
+                break;
+        }
+        stream.Close();
+        DebugLogWrite("INFO", "METADATA_BG", "TAG_PREFIX_STREAM", "archive=%s | index=%u | bytes=%zu", archivePath, (unsigned int)index, read);
+    }
+
+    ArchiveTrackTags tags;
+    if (!ArchiveTrackTagParser::Parse(extension, data.data(), read, tags) || tags.title.empty())
+        return false;
+
+    const std::string formatted = tags.artist.empty() ? tags.title : tags.artist + " - " + tags.title;
+    // Old Winamp title IPC is ANSI. A tag that cannot round-trip to the active
+    // ANSI codepage should fall back to its filename, not display mojibake or
+    // a lossy substitute for its artist.
+    if (!ArchiveWinampUtf8ToAnsi(formatted, outHostTitle, true))
+        return false;
+
+    ArchiveHostExtendedTags hostTags;
+    ArchiveWinampUtf8ToAnsi(tags.title, hostTags.title, true);
+    ArchiveWinampUtf8ToAnsi(tags.artist, hostTags.artist, true);
+    ArchiveWinampUtf8ToAnsi(tags.album, hostTags.album, true);
+    ArchiveWinampUtf8ToAnsi(tags.albumArtist, hostTags.albumArtist, true);
+    ArchiveWinampUtf8ToAnsi(tags.genre, hostTags.genre, true);
+    ArchiveWinampUtf8ToAnsi(tags.year, hostTags.year, true);
+    hostTags.trackNumber = tags.trackNumber;
+    EnsureMetadataQueueLock();
+    EnterCriticalSection(&g_metadataQueueLock);
+    if (g_preparedPlaylistLengthMs.find(virtualPath) == g_preparedPlaylistLengthMs.end())
+        g_archiveHostExtendedTags[virtualPath] = std::move(hostTags);
+    LeaveCriticalSection(&g_metadataQueueLock);
+    return !outHostTitle.empty();
+}
+
+// Called only after the general plugin has finished adding the playlist.
+// Queue work without opening or decompressing the archive on WACUP's UI thread.
+extern "C" __declspec(dllexport) int __cdecl ArchiveStreamSchedulePlaylistMetadata(const char* virtualPath)
+{
+    if (!virtualPath || !IsVirtualArchivePath(virtualPath))
+        return 0;
+    QueueBackgroundMetadataLookup(virtualPath);
+    return 1;
+}
+
 static bool MetadataQueueContainsLocked(const char* virtualPath)
 {
     if (!virtualPath || !virtualPath[0])
     {
         return true;
     }
+
+    if (_stricmp(g_metadataActivePath.c_str(), virtualPath) == 0)
+        return true;
 
     for (const std::string& queuedPath : g_metadataQueue)
     {
@@ -887,6 +1108,10 @@ static void QueueBackgroundMetadataLookup(const char* virtualPath)
     {
         return;
     }
+
+    int preparedLength = -1000;
+    if (GetFinalizedPlaylistLength(virtualPath, preparedLength))
+        return;
 
     StartBackgroundMetadataWorkerIfNeeded();
 
@@ -982,6 +1207,7 @@ static bool PopBackgroundMetadataItem(std::string& outPath)
     {
         outPath = g_metadataQueue.front();
         g_metadataQueue.erase(g_metadataQueue.begin());
+        g_metadataActivePath = outPath;
     }
 
     bool hasMore = !g_metadataQueue.empty();
@@ -997,6 +1223,10 @@ static bool PopBackgroundMetadataItem(std::string& outPath)
 
 static void RefreshPlaylistCacheForVirtualPath(const char* virtualPath)
 {
+    int preparedLength = -1000;
+    if (GetFinalizedPlaylistLength(virtualPath, preparedLength))
+        return;
+
     if (!g_mod.hMainWindow || !virtualPath || !virtualPath[0])
     {
         return;
@@ -1015,6 +1245,85 @@ static void RefreshPlaylistCacheForVirtualPath(const char* virtualPath)
 
     SendMessage(g_mod.hMainWindow, WM_WA_IPC, (WPARAM)widePath, IPC_REFRESHPLCACHE);
     DebugLogWrite("INFO", "METADATA_BG", "REFRESH_PATH", "path=%s", virtualPath);
+}
+
+// Called after playback/cache warming has extracted a solid archive entry.
+// Only inspect an existing managed cache file; never decompress solid data
+// again merely to discover title tags.
+static bool PublishCachedArchiveTagTitle(const char* virtualPath, const wchar_t* preparedCachePath)
+{
+    if (!virtualPath || !virtualPath[0])
+        return false;
+
+    std::string current;
+    if (GetCachedArchiveTagTitle(virtualPath, current) && !current.empty())
+        return false;
+
+    char archivePath[MAX_PATH * 4]{};
+    char internalPath[MAX_PATH * 4]{};
+    mz_uint index = 0;
+    if (!ParseVirtualDisplayPath(virtualPath, archivePath, sizeof(archivePath), &index, internalPath, sizeof(internalPath)))
+        return false;
+
+    char cachePath[MAX_PATH * 4]{};
+    if ((!preparedCachePath || !preparedCachePath[0]) &&
+        !ArchiveFindExistingCacheFile(archivePath, static_cast<uint32_t>(index), nullptr, cachePath, sizeof(cachePath)))
+        return false;
+
+    std::string title;
+    if (!ProbeArchiveTagTitle(virtualPath, title, preparedCachePath) || title.empty())
+        return false;
+
+    EnsureMetadataQueueLock();
+    EnterCriticalSection(&g_metadataQueueLock);
+    const auto existing = g_archiveTagTitleCache.find(virtualPath);
+    const bool changed = existing == g_archiveTagTitleCache.end() || existing->second != title;
+    if (changed)
+        g_archiveTagTitleCache[virtualPath] = title;
+    LeaveCriticalSection(&g_metadataQueueLock);
+
+    if (changed)
+        DebugLogWrite("INFO", "METADATA_BG", "TAG_FROM_EXISTING_CACHE", "path=%s | title=%s", virtualPath, title.c_str());
+    return changed;
+}
+
+// Solid entries that fit the memory buffer have already been decompressed for
+// playback. Reuse those bytes instead of extracting the archive once more.
+static bool PublishMemoryArchiveTagTitle(const char* virtualPath, const char* entryName, const unsigned char* bytes, size_t size)
+{
+    if (!virtualPath || !IsVirtualArchivePath(virtualPath) || !entryName || !bytes || !size)
+        return false;
+
+    std::string existingTitle;
+    if (GetCachedArchiveTagTitle(virtualPath, existingTitle) && !existingTitle.empty())
+        return false;
+
+    const char* dot = strrchr(entryName, '.');
+    if (!dot)
+        return false;
+    std::string extension = dot + 1;
+    for (char& c : extension)
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+    ArchiveTrackTags tags;
+    if (!ArchiveTrackTagParser::Parse(extension, bytes, (std::min)(size, size_t(256 * 1024)), tags) || tags.title.empty())
+        return false;
+
+    const std::string formatted = tags.artist.empty() ? tags.title : tags.artist + " - " + tags.title;
+    std::string hostTitle;
+    if (!ArchiveWinampUtf8ToAnsi(formatted, hostTitle, true))
+        return false;
+
+    EnsureMetadataQueueLock();
+    EnterCriticalSection(&g_metadataQueueLock);
+    const auto previous = g_archiveTagTitleCache.find(virtualPath);
+    const bool changed = previous == g_archiveTagTitleCache.end() || previous->second.empty();
+    if (changed)
+        g_archiveTagTitleCache[virtualPath] = hostTitle;
+    LeaveCriticalSection(&g_metadataQueueLock);
+    if (changed)
+        DebugLogWrite("INFO", "METADATA_BG", "TAG_FROM_PLAYBACK_BUFFER", "path=%s | title=%s", virtualPath, hostTitle.c_str());
+    return changed;
 }
 
 static DWORD WINAPI BackgroundMetadataWorkerProc(LPVOID param)
@@ -1055,20 +1364,57 @@ static DWORD WINAPI BackgroundMetadataWorkerProc(LPVOID param)
             bool previousPromptAllowed = ArchivePasswordGetPromptAllowedForCurrentThread();
             ArchivePasswordSetPromptAllowedForCurrentThread(false);
 
-            bool metadataOk = GetVirtualArchiveEntryInfoBackground(virtualPath.c_str(), title, sizeof(title), &lengthMs) && lengthMs > 0;
+            // A single low-priority pass discovers both tags and duration.
+            // A solid entry may use EXISTING cache, never fresh decompression
+            // solely for metadata. The solid warmer will publish after cache
+            // extraction, reusing its one-pass archive work.
+            char archivePath[MAX_PATH * 4]{};
+            char internalPath[MAX_PATH * 4]{};
+            mz_uint index = 0;
+            const bool parsed = ParseVirtualDisplayPath(virtualPath.c_str(), archivePath, sizeof(archivePath), &index, internalPath, sizeof(internalPath));
+            const bool solid = parsed && ShouldSkipBackgroundMetadataForSolid7z(archivePath, index, virtualPath.c_str());
+
+            bool tagChanged = false;
+            std::string taggedTitle;
+            if (!GetCachedArchiveTagTitle(virtualPath.c_str(), taggedTitle) || taggedTitle.empty())
+            {
+                // Retry an earlier cache miss only when explicitly queued,
+                // e.g. after playback has created a reusable cache file.
+                const bool found = ProbeArchiveTagTitle(virtualPath.c_str(), taggedTitle);
+                EnterCriticalSection(&g_metadataQueueLock);
+                const auto current = g_archiveTagTitleCache.find(virtualPath);
+                const bool alreadyPublished = current != g_archiveTagTitleCache.end() && !current->second.empty();
+                if (!alreadyPublished)
+                {
+                    if (g_archiveTagTitleCache.size() > 16384 && g_preparedPlaylistLengthMs.empty())
+                        g_archiveTagTitleCache.clear();
+                    g_archiveTagTitleCache[virtualPath] = found ? taggedTitle : std::string();
+                }
+                LeaveCriticalSection(&g_metadataQueueLock);
+                tagChanged = found && !alreadyPublished;
+                if (found)
+                    DebugLogWrite("INFO", "METADATA_BG", "TAG_READY", "path=%s | title=%s", virtualPath.c_str(), taggedTitle.c_str());
+            }
+
+            bool metadataOk = GetVirtualArchiveEntryInfoCacheOnly(virtualPath.c_str(), title, sizeof(title), &lengthMs) && lengthMs > 0;
+            if (!metadataOk && !solid)
+                metadataOk = GetVirtualArchiveEntryInfoBackground(virtualPath.c_str(), title, sizeof(title), &lengthMs) && lengthMs > 0;
 
             ArchivePasswordSetPromptAllowedForCurrentThread(previousPromptAllowed);
 
             if (metadataOk)
-            {
-                DebugLogWrite("INFO", "METADATA_BG", "LOOKUP_DONE", "path=%s | length_ms=%d", virtualPath.c_str(), lengthMs);
-                RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
-            }
+                DebugLogWrite("INFO", "METADATA_BG", "LOOKUP_DONE", "path=%s | length_ms=%d | solid=%d", virtualPath.c_str(), lengthMs, solid ? 1 : 0);
             else
-            {
-                DebugLogWrite("INFO", "METADATA_BG", "LOOKUP_DEFERRED_OR_FAIL", "path=%s", virtualPath.c_str());
-            }
+                DebugLogWrite("INFO", "METADATA_BG", "LOOKUP_DEFERRED_OR_FAIL", "path=%s | solid=%d", virtualPath.c_str(), solid ? 1 : 0);
 
+            // Refresh once after the entire pass. The host never sees a
+            // separate tag-then-duration sequence from this worker.
+            if (tagChanged || metadataOk)
+                RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
+
+            EnterCriticalSection(&g_metadataQueueLock);
+            g_metadataActivePath.clear();
+            LeaveCriticalSection(&g_metadataQueueLock);
             Sleep(200);
         }
     }
@@ -1103,6 +1449,11 @@ static void StopBackgroundMetadataWorker()
     {
         EnterCriticalSection(&g_metadataQueueLock);
         g_metadataQueue.clear();
+        g_metadataActivePath.clear();
+        g_archiveTagTitleCache.clear();
+        g_archiveHostExtendedTags.clear();
+        g_currentVirtualMetadataPath.clear();
+        g_preparedPlaylistLengthMs.clear();
         LeaveCriticalSection(&g_metadataQueueLock);
     }
 }
@@ -1162,6 +1513,27 @@ static bool BuildVirtualPathForCacheWarmRefresh(const char* archivePath, mz_uint
     outVirtualPath += internalName;
 
     return true;
+}
+
+// The shared cache warmer has published a reusable solid entry. Decode tags
+// and duration from its output file, never from another solid archive pass.
+static void __cdecl OnUnifiedSolidCacheReady(const wchar_t* archive, const ArchiveEntry& entry, const wchar_t* cachedPath)
+{
+    if (!archive || !cachedPath || !cachedPath[0] || entry.path.empty())
+        return;
+
+    const std::string archiveAnsi = ArchiveAdapterLogging::AnsiPath(archive);
+    std::string virtualPath;
+    if (archiveAnsi.empty() ||
+        !BuildVirtualPathForCacheWarmRefresh(archiveAnsi.c_str(), entry.index, entry.path.c_str(), virtualPath))
+        return;
+
+    const bool tagged = PublishCachedArchiveTagTitle(virtualPath.c_str(), cachedPath);
+    int lengthMs = -1000;
+    const bool duration = GetAudioDurationMsFromPreparedCacheFile(cachedPath, entry, &lengthMs);
+    if (tagged || duration)
+        RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
+    DebugLogWrite("INFO", "SOLID_CACHE_WARM", "PREPARED_METADATA_READY", "index=%u | tagged=%d | duration=%d | length_ms=%d", (unsigned)entry.index, tagged ? 1 : 0, duration ? 1 : 0, lengthMs);
 }
 
 // -----------------------------------------------------------------------------
@@ -1456,23 +1828,20 @@ static bool Solid7zCacheWarmOneEntry(const char* archivePath, const ArchiveAudio
         DebugLogWrite("INFO", "SOLID_CACHE_WARM", "CACHE_BUILD_DONE", "archive=%s | index=%u | entry=%s | cache=%s | size=%llu", archivePath, (unsigned int)entry.index, entry.name.c_str(), cachePath, (unsigned long long)entry.uncompSize);
     }
 
+    // A solid entry is already in the managed cache; read its tag prefix
+    // and duration from that result, then refresh the playlist only once.
+    std::string virtualPath;
+    const bool hasPath = BuildVirtualPathForCacheWarmRefresh(archivePath, entry.index, entry.name.c_str(), virtualPath);
+    const bool titleChanged = hasPath && PublishCachedArchiveTagTitle(virtualPath.c_str());
     int lengthMs = -1000;
-
-    if (GetAudioDurationMsFromArchiveEntryBackground(archivePath, entry.index, entry.uncompSize, entry.name.c_str(), &lengthMs) && lengthMs > 0)
-    {
-        std::string virtualPath;
-
+    const bool metadataOk = GetAudioDurationMsFromArchiveEntryBackground(archivePath, entry.index, entry.uncompSize, entry.name.c_str(), &lengthMs) && lengthMs > 0;
+    if (metadataOk)
         DebugLogWrite("INFO", "SOLID_CACHE_WARM", "METADATA_DONE", "archive=%s | index=%u | entry=%s | length_ms=%d", archivePath, (unsigned int)entry.index, entry.name.c_str(), lengthMs);
-
-        if (BuildVirtualPathForCacheWarmRefresh(archivePath, entry.index, entry.name.c_str(), virtualPath))
-        {
-            RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
-        }
-    }
     else
-    {
         DebugLogWrite("WARN", "SOLID_CACHE_WARM", "METADATA_FAIL", "archive=%s | index=%u | entry=%s | reason=duration_lookup_failed_after_cache", archivePath, (unsigned int)entry.index, entry.name.c_str());
-    }
+
+    if (hasPath && (titleChanged || metadataOk))
+        RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
 
     return true;
 }
@@ -1553,25 +1922,25 @@ static bool Solid7zCacheWarmBatchEntries(const char* archivePath, const std::vec
 
         ++cachedCount;
 
+        // Reuse the solid batch's extracted cache file for both tag and
+        // duration metadata. Never trigger another solid decompression pass.
+        std::string virtualPath;
+        const bool hasPath = BuildVirtualPathForCacheWarmRefresh(archivePath, entry.index, entry.name.c_str(), virtualPath);
+        const bool titleChanged = hasPath && PublishCachedArchiveTagTitle(virtualPath.c_str());
         int lengthMs = -1000;
-
-        if (GetAudioDurationMsFromArchiveEntryBackground(archivePath, entry.index, entry.uncompSize, entry.name.c_str(), &lengthMs) && lengthMs > 0)
+        const bool metadataOk = GetAudioDurationMsFromArchiveEntryBackground(archivePath, entry.index, entry.uncompSize, entry.name.c_str(), &lengthMs) && lengthMs > 0;
+        if (metadataOk)
         {
-            std::string virtualPath;
-
             ++metadataOkCount;
-
             DebugLogWrite("INFO", "SOLID_CACHE_WARM", "BATCH_METADATA_DONE", "archive=%s | index=%u | entry=%s | length_ms=%d | cache=%s", archivePath, (unsigned int)entry.index, entry.name.c_str(), lengthMs, result.cachePath);
-
-            if (BuildVirtualPathForCacheWarmRefresh(archivePath, entry.index, entry.name.c_str(), virtualPath))
-            {
-                RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
-            }
         }
         else
         {
             DebugLogWrite("WARN", "SOLID_CACHE_WARM", "BATCH_METADATA_FAIL", "archive=%s | index=%u | entry=%s | cache=%s | reason=duration_lookup_failed_after_batch_cache", archivePath, (unsigned int)entry.index, entry.name.c_str(), result.cachePath);
         }
+
+        if (hasPath && (titleChanged || metadataOk))
+            RefreshPlaylistCacheForVirtualPath(virtualPath.c_str());
     }
 
     DebugLogWrite("INFO", "SOLID_CACHE_WARM", "BATCH_DONE", "archive=%s | entries=%zu | cached=%zu | metadata_ok=%zu", archivePath, entries.size(), cachedCount, metadataOkCount);
@@ -1887,17 +2256,33 @@ static void GetFileInfo(const char* file, char* title, int* length_in_ms)
 
         bool parsed = ParseVirtualDisplayPath(file, archivePath, sizeof(archivePath), &index, internalPath, sizeof(internalPath));
 
+        std::string tagTitle;
+        const bool tagScanned = parsed && GetCachedArchiveTagTitle(file, tagTitle);
         if (title)
         {
-            if (parsed)
-            {
+            if (!tagTitle.empty())
+                lstrcpynA(title, tagTitle.c_str(), 1024);
+            else if (parsed)
                 FormatStableVirtualTitle(file, internalPath, index, title, 1024);
-            }
             else
-            {
                 CopyBaseName(title, 1024, file);
-            }
         }
+
+        // A WACUP preflight result is final, including an unknown duration:
+        // do not enqueue new work or change this row during play/stop.
+        int finalizedLengthMs = -1000;
+        if (GetFinalizedPlaylistLength(file, finalizedLengthMs))
+        {
+            if (length_in_ms)
+                *length_in_ms = finalizedLengthMs;
+            return;
+        }
+
+        // Winamp requests playlist titles without playing any audio. Schedule
+        // the bounded direct-stream tag scan even when the duration is already
+        // cached. The UI never performs the archive read.
+        if (parsed && !tagScanned)
+            QueueBackgroundMetadataLookup(file);
 
         if (length_in_ms)
         {
@@ -2277,6 +2662,10 @@ static int Play(const char* fn)
 
     Stop();
     ClearPrevalidatedStream();
+    EnsureMetadataQueueLock();
+    EnterCriticalSection(&g_metadataQueueLock);
+    g_currentVirtualMetadataPath = fn && IsVirtualArchivePath(fn) ? fn : "";
+    LeaveCriticalSection(&g_metadataQueueLock);
 
     // Do not publish the previous track\'s duration while a new asynchronous
     // Media Foundation decoder is opening. MediaMonkey otherwise snapshots
@@ -2597,6 +2986,7 @@ static int Play(const char* fn)
         }
     }
     size_t extractedSize = 0;
+    bool memoryTagChanged = false;
 
     if (playbackMode == ARCHIVE_PLAYBACK_MEMORY)
     {
@@ -2732,6 +3122,12 @@ static int Play(const char* fn)
             g_currentBitrateKbps = durationSeconds > 0.0 ? (int)(((double)extractedSize * 8.0) / durationSeconds / 1000.0) : 0;
             g_currentAudioSize = extractedSize;
         }
+
+        // Reuse the bytes just extracted for playback. For solid entries,
+        // opening the archive again to fetch ID3/FLAC/Ogg tags would repeat
+        // expensive decompression. This prefix parse performs no I/O.
+        if (usingVirtualPath)
+            memoryTagChanged = PublishMemoryArchiveTagTitle(fn, firstAudio, extractedAudio.data(), extractedAudio.size());
     }
     else
     {
@@ -2764,6 +3160,9 @@ static int Play(const char* fn)
             directly to ArchiveFormatVirtualTitle().
         */
         FormatStableVirtualTitle(fn, firstAudio, mp3Index, g_currentTitle, sizeof(g_currentTitle));
+        std::string cachedTagTitle;
+        if (GetCachedArchiveTagTitle(fn, cachedTagTitle) && !cachedTagTitle.empty())
+            lstrcpynA(g_currentTitle, cachedTagTitle.c_str(), sizeof(g_currentTitle));
     }
     else
     {
@@ -2797,6 +3196,14 @@ static int Play(const char* fn)
 
     DebugLogWrite("INFO", "PLAY", "THREAD_CREATED", "archive=%s | archive_type=%s | index=%u | thread=0x%p | mode=%s | cache=%s", g_currentArchivePath, ArchiveTypeToLogName(g_currentArchivePath), (unsigned int)g_currentArchiveIndex, g_playThread, PlaybackModeToLogName(playbackMode), g_currentCachePath);
 
+    // Playback is already started. Publish tags found in the memory route
+    // without another archive read. Disk-cache routes can now queue a cheap
+    // cache-only metadata probe, even if a prior solid probe was deferred.
+    if (memoryTagChanged)
+        RefreshPlaylistCacheForVirtualPath(fn);
+    if (usingVirtualPath && playbackMode == ARCHIVE_PLAYBACK_CACHE_FILE)
+        QueueBackgroundMetadataLookup(fn);
+
     if (queueSolidCacheWarmAfterPlaybackStart)
     {
         DebugLogWrite("INFO", "SOLID_CACHE_WARM", "QUEUE_AFTER_PLAYBACK_START", "archive=%s | index=%u", actualZipPath, (unsigned int)mp3Index);
@@ -2805,10 +3212,89 @@ static int Play(const char* fn)
         ArchiveEntry selected;
         std::string error;
         if (!nativeArchive.empty() && ArchiveUnifiedCache::LookupEntry(nativeArchive, mp3Index, selected, error))
-            ArchiveUnifiedWarmer::Queue(nativeArchive, selected, common);
+            ArchiveUnifiedWarmer::Queue(nativeArchive, selected, common, OnUnifiedSolidCacheReady);
     }
 
     return 0;
+}
+
+// WACUP ATF uses extended fields (artist/title), not only GetFileInfo's
+// combined playlist display title. Resolve from the prepared tag cache only.
+// Never open or decompress an archive in these host metadata callbacks.
+static bool ArchiveStreamReadExtendedInfo(const char* file, const char* metadata, std::string& output)
+{
+    output.clear();
+    if (!metadata || !metadata[0] || !g_metadataQueueLockInitialized)
+        return false;
+
+    EnterCriticalSection(&g_metadataQueueLock);
+    const std::string path = file && file[0] ? file : g_currentVirtualMetadataPath;
+    const auto found = g_archiveHostExtendedTags.find(path);
+    if (found != g_archiveHostExtendedTags.end())
+    {
+        const ArchiveHostExtendedTags& tags = found->second;
+        if (_stricmp(metadata, "title") == 0)
+            output = tags.title;
+        else if (_stricmp(metadata, "artist") == 0)
+            output = tags.artist;
+        else if (_stricmp(metadata, "album") == 0)
+            output = tags.album;
+        else if (_stricmp(metadata, "albumartist") == 0)
+            output = tags.albumArtist;
+        else if (_stricmp(metadata, "genre") == 0)
+            output = tags.genre;
+        else if (_stricmp(metadata, "year") == 0)
+            output = tags.year;
+        else if ((_stricmp(metadata, "track") == 0 || _stricmp(metadata, "tracknumber") == 0) && tags.trackNumber)
+            output = std::to_string(tags.trackNumber);
+        else if (_stricmp(metadata, "type") == 0)
+            output = "0";
+        else if (_stricmp(metadata, "length") == 0)
+        {
+            const auto length = g_preparedPlaylistLengthMs.find(path);
+            if (length != g_preparedPlaylistLengthMs.end() && length->second > 0)
+                output = std::to_string(length->second);
+        }
+    }
+    LeaveCriticalSection(&g_metadataQueueLock);
+    return !output.empty();
+}
+
+extern "C" __declspec(dllexport) int __cdecl winampGetExtendedFileInfo(const char* file, const char* metadata, char* result, int resultLength)
+{
+    if (!result || resultLength <= 0)
+        return 0;
+    result[0] = '\0';
+    std::string value;
+    if (!ArchiveStreamReadExtendedInfo(file, metadata, value) || value.size() >= static_cast<size_t>(resultLength))
+        return 0;
+    memcpy(result, value.c_str(), value.size() + 1);
+    return 1;
+}
+
+extern "C" __declspec(dllexport) int __cdecl winampGetExtendedFileInfoW(const wchar_t* file, const char* metadata, wchar_t* result, int resultLength)
+{
+    if (!result || resultLength <= 0)
+        return 0;
+    result[0] = L'\0';
+    std::string path;
+    if (file && file[0])
+    {
+        const int bytes = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, file, -1, nullptr, 0, nullptr, nullptr);
+        if (bytes <= 1)
+            return 0;
+        path.resize(static_cast<size_t>(bytes), '\0');
+        if (WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, file, -1, path.data(), bytes, nullptr, nullptr) != bytes)
+            return 0;
+        path.pop_back();
+    }
+    std::string value;
+    if (!ArchiveStreamReadExtendedInfo(path.c_str(), metadata, value))
+        return 0;
+    const int wideLength = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, value.c_str(), -1, nullptr, 0);
+    if (wideLength <= 1 || wideLength > resultLength)
+        return 0;
+    return MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, value.c_str(), -1, result, resultLength) == wideLength ? 1 : 0;
 }
 
 extern "C" __declspec(dllexport) In_Module* winampGetInModule2()

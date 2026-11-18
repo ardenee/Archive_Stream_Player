@@ -7,7 +7,7 @@
 | Player | Archive/audio decoding | Encryption and solid archives | Playlist titles | Install |
 | --- | --- | --- | --- | --- |
 | **Winamp 32-bit** | Archive Stream handles the archive **and all seven listed audio formats** | Passwords; RAM/cache for entries that cannot stream | Shared title presets, with refresh support | Native plugin |
-| **WACUP 32-bit** | Same Winamp-compatible archive and audio modules | Same shared password/cache options | Title presets | Native plugin |
+| **WACUP 32-bit** | Same Winamp-compatible archive and audio modules | Same shared password/cache options | Embedded artist/title metadata remains stable through play/stop (ZIP, RAR and solid 7z validated in DEV) | Native plugin |
 | **foobar2000 32/64-bit** | Archive Stream opens archive; **foobar2000 decodes audio** | Archive Stream passwords, RAM and cache | Live title updates | Native component |
 | **AIMP 32/64-bit** | Archive Stream opens archive; **AIMP decodes audio** | Archive Stream passwords, RAM and cache | Title presets; already-queued rows may not redraw | Native plugin |
 | **XMPlay 32-bit** | Archive Stream handles **7z/RAR**; XMPlay can handle ordinary ZIP itself; **XMPlay decodes audio** | Archive Stream passwords/RAM/cache for plugin-handled 7z/RAR; built-in ZIP bypasses them | Reimport to update existing titles | Native archive plugin |

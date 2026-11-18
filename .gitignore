@@ -17,6 +17,7 @@
 !/third_party/
 !/unrar_static/
 !/zlib_static/
+!/UT3/
 
 # Keep repo files
 !/.gitignore

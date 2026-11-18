@@ -17,6 +17,10 @@
 
 namespace ArchiveUnifiedWarmer
 {
+    // Optional host notification after the reusable cache file exists. Runs
+    // on this worker's low-priority thread; must never display UI.
+    using EntryReady = void (__cdecl *)(const wchar_t*, const ArchiveEntry&, const wchar_t*);
+
     struct Work
     {
         std::wstring archive;
@@ -24,6 +28,7 @@ namespace ArchiveUnifiedWarmer
         ArchiveAdapterPreferences settings;
         HMODULE module = nullptr;
         uint64_t generation = 0;
+        EntryReady onReady = nullptr;
     };
 
     inline std::atomic<uint64_t>& LatestGeneration()
@@ -64,11 +69,19 @@ namespace ArchiveUnifiedWarmer
 
                 std::wstring cached;
                 if (ArchiveUnifiedCache::Find(work->archive, entry, work->settings, cached))
+                {
+                    if (work->onReady)
+                        work->onReady(work->archive.c_str(), entry, cached.c_str());
                     continue;
+                }
 
                 std::string extractError;
                 if (ArchiveUnifiedCache::Prepare(work->archive, entry, work->settings, cached, extractError))
+                {
                     DebugLogWrite("INFO", "WARM", "ENTRY_CACHED", "index=%u | size=%llu", (unsigned)entry.index, (unsigned long long)entry.size);
+                    if (work->onReady)
+                        work->onReady(work->archive.c_str(), entry, cached.c_str());
+                }
                 else
                     DebugLogWrite("WARN", "WARM", "ENTRY_FAIL", "index=%u | error=%s", (unsigned)entry.index, extractError.c_str());
             }
@@ -86,7 +99,7 @@ namespace ArchiveUnifiedWarmer
     }
 
     inline bool Queue(const std::wstring& archive, const ArchiveEntry& selected,
-        const ArchiveAdapterPreferences& settings)
+        const ArchiveAdapterPreferences& settings, EntryReady onReady = nullptr)
     {
         if (!settings.warmSolidArchives || settings.cacheLimitMb == 0 ||
             !selected.isSolid || archive.empty())
@@ -111,6 +124,7 @@ namespace ArchiveUnifiedWarmer
         work->settings = settings;
         work->module = module;
         work->generation = LatestGeneration().fetch_add(1, std::memory_order_acq_rel) + 1;
+        work->onReady = onReady;
 
         HANDLE thread = CreateThread(nullptr, 0, Run, work.get(), 0, nullptr);
         if (!thread)

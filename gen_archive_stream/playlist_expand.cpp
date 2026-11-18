@@ -5,6 +5,15 @@
 #include <string>
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
+#include <filesystem>
+
+#include "archive_backend.h"
+#include "archive_stream_owner.h"
+#include "archive_passwords.h"
+#include "../shared/archive_track_tags.h"
+#include "../shared/archive_unified_cache.h"
+#include "playlist_expand.h"
 
 #include "wa_ipc.h"
 #include "archive_common.h"
@@ -12,6 +21,7 @@
 #include "archive_metadata.h"
 #include "debug_log.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_winamp_text.h"
 
 //#include "playlist_expand.h"
 
@@ -92,12 +102,7 @@ static bool MovePlaylistItem(HWND hwndWinamp, int fromIndex, int toIndex)
     return true;
 }
 
-struct PlaylistItem {
-    std::string path;
-    std::string title;
-    int lengthMs = -1000;
-    bool useMeta = false;
-};
+using PlaylistItem = ArchivePreparedPlaylistItem;
 
 /*
 struct RebuildPreview
@@ -356,6 +361,9 @@ static std::string BuildExpandedArchiveTitle(const char* virtualPath, const char
     }
 
     std::string filename = StripExtensionFromFileName(entryName);
+    std::string ansiFilename;
+    if (ArchiveWinampUtf8ToAnsi(filename, ansiFilename))
+        filename = std::move(ansiFilename);
     std::string archive = GetCleanArchiveNameFromVirtualPath(virtualPath);
 
     if (filename.empty() && virtualPath && virtualPath[0]) 
@@ -433,12 +441,12 @@ static std::string BuildVirtualArchivePath(const char* archivePath, uint32_t ind
     return result;
 }
 
-static bool BuildReplacementItemsForArchive(HWND hwndWinamp, const char* archivePath, std::vector<PlaylistItem>& outItems, std::string& outFirstVirtualPath)
+static bool BuildReplacementItemsForArchive(const char* archivePath, std::vector<PlaylistItem>& outItems, std::string& outFirstVirtualPath)
 {
     outItems.clear();
     outFirstVirtualPath.clear();
 
-    if (!hwndWinamp || !archivePath || !archivePath[0])
+    if (!archivePath || !archivePath[0])
     {
         DebugLogWrite("ERROR", "GEN", "BUILD_REPLACEMENTS_FAIL", "archive=%s | reason=invalid_input", archivePath ? archivePath : "");
         return false;
@@ -459,6 +467,9 @@ static bool BuildReplacementItemsForArchive(HWND hwndWinamp, const char* archive
     }
 
     outItems.reserve(entries.size());
+
+    // Playlist expansion is intentionally metadata-free: the selected track
+    // can start immediately, then a low-priority worker updates all entries.
 
     for (size_t i = 0; i < entries.size(); ++i)
     {
@@ -493,6 +504,158 @@ static bool BuildReplacementItemsForArchive(HWND hwndWinamp, const char* archive
     }
 
     return !outItems.empty();
+}
+
+// WACUP's playlist title is an immutable pre-play snapshot. Do all archive
+// work on the worker thread, in shared routing order: stream, RAM, cache.
+// Each source is read at most once for its tag prefix. A missing/unreadable
+// tag retains the archive entry filename as the final playlist title.
+bool PrepareArchivePlaylistForWacup(const char* archivePath, std::vector<ArchivePreparedPlaylistItem>& outItems, volatile LONG* generation, LONG expectedGeneration)
+{
+    std::string firstVirtualPath;
+    if (!BuildReplacementItemsForArchive(archivePath, outItems, firstVirtualPath))
+        return false;
+
+    const std::wstring wideArchive = ArchiveAdapterUtf8ToWide(archivePath);
+    std::vector<ArchiveEntry> entries;
+    std::string listError;
+    if (wideArchive.empty() || !ArchiveListEntries(wideArchive.c_str(), entries, listError))
+    {
+        DebugLogWrite("WARN", "GEN", "PREFLIGHT_LIST_FAIL", "archive=%s | error=%s", archivePath, listError.c_str());
+        return true;
+    }
+    const ArchiveAdapterPreferences settings = ArchiveAdapterPreferencesLoad();
+    constexpr size_t kTagPrefix = 256 * 1024;
+    constexpr uint64_t kMb = 1024ull * 1024ull;
+    unsigned taggedCount = 0;
+    unsigned durationCount = 0;
+
+    for (PlaylistItem& item : outItems)
+    {
+        if (generation && InterlockedCompareExchange(generation, 0, 0) != expectedGeneration)
+            return false;
+
+        char parsedArchive[MAX_PATH * 4]{};
+        char internalName[4096]{};
+        mz_uint index = 0;
+        if (!ParseVirtualArchivePath(item.path.c_str(), parsedArchive, sizeof(parsedArchive), &index, internalName, sizeof(internalName)))
+            continue;
+
+        const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& candidate)
+        {
+            return candidate.index == index && candidate.isSupportedAudio && !candidate.isFolder;
+        });
+        if (found == entries.end() || found->size == 0)
+            continue;
+        const ArchiveEntry& entry = *found;
+
+        const auto dot = entry.path.find_last_of('.');
+        if (dot == std::string::npos)
+            continue;
+        std::string extension = entry.path.substr(dot + 1);
+        for (char& ch : extension)
+            ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+
+        std::vector<unsigned char> prefix;
+        std::vector<unsigned char> decoded;
+        std::wstring preparedCache;
+        bool usedStream = false;
+        bool usedMemory = false;
+
+        if (!wideArchive.empty() && ArchiveEntryCanStream(archivePath, entry.index))
+        {
+            ArchiveStreamOwner stream;
+            std::string openError;
+            if (stream.Open(wideArchive.c_str(), entry.index, openError))
+            {
+                const size_t limit = static_cast<size_t>((std::min)(entry.size, static_cast<uint64_t>(kTagPrefix)));
+                prefix.resize(limit);
+                size_t count = 0;
+                while (count < prefix.size())
+                {
+                    const ArchiveStreamReadResult read = stream.ReadDetailed(prefix.data() + count, prefix.size() - count);
+                    count += read.bytesRead;
+                    if (read.errorKind != ArchiveStreamErrorKind::None || read.bytesRead == 0)
+                        break;
+                }
+                stream.Close();
+                if (count == limit && count != 0)
+                    usedStream = true;
+                else
+                    prefix.clear();
+            }
+        }
+
+        if (!usedStream && entry.size <= static_cast<uint64_t>(settings.memoryMb) * kMb)
+        {
+            std::string extractError;
+            if (ArchiveExtractEntryToMemory(archivePath, entry.index, decoded, extractError) && decoded.size() == entry.size)
+            {
+                const size_t prefixSize = (std::min)(decoded.size(), kTagPrefix);
+                prefix.assign(decoded.begin(), decoded.begin() + prefixSize);
+                usedMemory = true;
+            }
+            else
+                decoded.clear();
+        }
+
+        if (!usedStream && !usedMemory && !wideArchive.empty() && settings.cacheLimitMb)
+        {
+            std::string cacheError;
+            if (ArchiveUnifiedCache::Prepare(wideArchive, entry, settings, preparedCache, cacheError))
+            {
+                std::ifstream cached(std::filesystem::path(preparedCache), std::ios::binary);
+                if (cached)
+                {
+                    prefix.resize(static_cast<size_t>((std::min)(entry.size, static_cast<uint64_t>(kTagPrefix))));
+                    cached.read(reinterpret_cast<char*>(prefix.data()), static_cast<std::streamsize>(prefix.size()));
+                    prefix.resize(static_cast<size_t>(cached.gcount()));
+                }
+            }
+            else
+                DebugLogWrite("WARN", "GEN", "PREFLIGHT_CACHE_UNAVAILABLE", "archive=%s | index=%u | error=%s", archivePath, (unsigned)entry.index, cacheError.c_str());
+        }
+
+        ArchiveTrackTags tags;
+        if (!prefix.empty() && ArchiveTrackTagParser::Parse(extension, prefix.data(), prefix.size(), tags) && !tags.title.empty())
+        {
+            const std::string formatted = tags.artist.empty() ? tags.title : tags.artist + " - " + tags.title;
+            std::string convertedTitle;
+            if (ArchiveWinampUtf8ToAnsi(formatted, convertedTitle, true) && !convertedTitle.empty())
+            {
+                item.title = convertedTitle;
+                ArchiveWinampUtf8ToAnsi(tags.title, item.tagTitle, true);
+                ArchiveWinampUtf8ToAnsi(tags.artist, item.tagArtist, true);
+                ArchiveWinampUtf8ToAnsi(tags.album, item.tagAlbum, true);
+                ArchiveWinampUtf8ToAnsi(tags.albumArtist, item.tagAlbumArtist, true);
+                ArchiveWinampUtf8ToAnsi(tags.genre, item.tagGenre, true);
+                ArchiveWinampUtf8ToAnsi(tags.year, item.tagYear, true);
+                item.tagTrackNumber = tags.trackNumber;
+                ++taggedCount;
+            }
+        }
+
+        int durationMs = -1000;
+        bool durationKnown = GetAudioDurationMsFromArchiveEntryCacheOnly(archivePath, entry.index, entry.size, entry.path.c_str(), &durationMs);
+        if (!durationKnown && usedMemory)
+            durationKnown = GetAudioDurationMsFromPreparedMemory(decoded.data(), decoded.size(), entry, &durationMs);
+        if (!durationKnown && !preparedCache.empty())
+            durationKnown = GetAudioDurationMsFromPreparedCacheFile(preparedCache.c_str(), entry, &durationMs);
+        if (!durationKnown && usedStream)
+            durationKnown = GetAudioDurationMsFromArchiveEntryBackground(archivePath, entry.index, entry.size, entry.path.c_str(), &durationMs);
+        if (durationKnown && durationMs > 0)
+        {
+            item.lengthMs = durationMs;
+            ++durationCount;
+        }
+
+        item.useMeta = true;
+        DebugLogWrite("INFO", "GEN", "PREFLIGHT_ENTRY_READY", "archive=%s | index=%u | title=%s | duration_ms=%d | route=%s", archivePath, (unsigned)entry.index, item.title.c_str(), item.lengthMs, usedStream ? "STREAM" : usedMemory ? "MEMORY" : !preparedCache.empty() ? "CACHE" : "FILENAME");
+        SwitchToThread();
+    }
+
+    DebugLogWrite("INFO", "GEN", "PREFLIGHT_COMPLETE", "archive=%s | entries=%zu | tagged=%u | durations=%u", archivePath, outItems.size(), taggedCount, durationCount);
+    return true;
 }
 
 /*    
@@ -709,7 +872,37 @@ static bool EnqueueFileToWinamp(HWND hwndWinamp, const PlaylistItem& item)
         return false;
     }
 
-    if (!EnqueueFilePlainToWinamp(hwndWinamp, item.path.c_str()))
+    // WACUP's normal WM_COPYDATA enqueue uses its filename as the initial
+    // playlist title, then replaces it after metadata refresh or playback.
+    // The documented Winamp metadata-enqueue form can provide the already
+    // verified ID3 title immediately. Keep Winamp's existing plain enqueue
+    // route unchanged until its host-specific behavior is separately tested.
+    bool metadataEnqueued = false;
+    char hostExe[MAX_PATH]{};
+    GetModuleFileNameA(nullptr, hostExe, sizeof(hostExe));
+    const char* baseName = strrchr(hostExe, '\\');
+    baseName = baseName ? baseName + 1 : hostExe;
+    if (_stricmp(baseName, "wacup.exe") == 0 && !item.title.empty())
+    {
+        const int before = static_cast<int>(SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH));
+        enqueueFileWithMetaStruct metadata{};
+        metadata.filename = item.path.c_str();
+        metadata.title = item.title.c_str();
+        metadata.length = item.lengthMs > 0 ? (item.lengthMs + 500) / 1000 : -1;
+        const LRESULT result = SendMessage(hwndWinamp, WM_WA_IPC, reinterpret_cast<WPARAM>(&metadata), IPC_ENQUEUEFILE);
+        const int after = static_cast<int>(SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH));
+        if (before >= 0 && after == before + 1)
+        {
+            DebugLogWrite("INFO", "GEN", "ENQUEUE_WITH_METADATA", "path=%s | title=%s | length_seconds=%d | result=%lld", item.path.c_str(), item.title.c_str(), metadata.length, static_cast<long long>(result));
+            metadataEnqueued = true;
+        }
+        else
+        {
+            DebugLogWrite("WARN", "GEN", "ENQUEUE_WITH_METADATA_FALLBACK", "path=%s | before=%d | after=%d | result=%lld", item.path.c_str(), before, after, static_cast<long long>(result));
+        }
+    }
+
+    if (!metadataEnqueued && !EnqueueFilePlainToWinamp(hwndWinamp, item.path.c_str()))
     {
         DebugLogWrite("ERROR", "GEN", "ENQUEUE_FAIL", "path=%s | reason=plain_enqueue_failed", item.path.c_str());
         return false;
@@ -727,7 +920,9 @@ static bool EnqueueFileToWinamp(HWND hwndWinamp, const PlaylistItem& item)
         DebugLogWrite("INFO", "GEN", "PLCACHE_REFRESH_SKIP", "path=%s | reason=rar_virtual_entry_deferred_metadata", item.path.c_str());
     }
 
-    DebugLogWrite("INFO", "GEN", "ENQUEUE_ITEM", "path=%s | title=%s | scanned_length_ms=%d | enqueue_mode=plain", item.path.c_str(), item.title.c_str(), item.lengthMs);
+    const int insertedIndex = (int)SendMessage(hwndWinamp, WM_WA_IPC, 0, IPC_GETLISTLENGTH) - 1;
+    const std::string observedTitle = GetPlaylistTitle(hwndWinamp, insertedIndex);
+    DebugLogWrite("INFO", "GEN", "ENQUEUE_ITEM", "path=%s | requested_title=%s | observed_title=%s | index=%d | scanned_length_ms=%d | enqueue_mode=%s", item.path.c_str(), item.title.c_str(), observedTitle.c_str(), insertedIndex, item.lengthMs, metadataEnqueued ? "metadata" : "plain");
     return true;
 }
 
@@ -829,7 +1024,7 @@ static bool QueuePlayExpandedIndex(HWND hwndWinamp, int playlistIndex, const cha
 }
 
 
-static bool RebuildPlaylistWithExpandedZip(HWND hwndWinamp, int targetIndex, bool startPlayback)
+static bool RebuildPlaylistWithExpandedZip(HWND hwndWinamp, int targetIndex, bool startPlayback, const std::vector<PlaylistItem>* preparedItems = nullptr)
 {
     if (!hwndWinamp)
     {
@@ -863,7 +1058,45 @@ static bool RebuildPlaylistWithExpandedZip(HWND hwndWinamp, int targetIndex, boo
     std::vector<PlaylistItem> replacementItems;
     std::string firstVirtualPath;
 
-    if (!BuildReplacementItemsForArchive(hwndWinamp, archivePath, replacementItems, firstVirtualPath))
+    if (preparedItems)
+    {
+        replacementItems = *preparedItems;
+        if (replacementItems.empty())
+            return false;
+
+        const std::string expectedPrefix = std::string(archivePath) + ".archive_stream|";
+        for (const auto& item : replacementItems)
+        {
+            if (_strnicmp(item.path.c_str(), expectedPrefix.c_str(), expectedPrefix.size()) != 0)
+            {
+                DebugLogWrite("WARN", "GEN", "PREFLIGHT_STALE", "archive=%s | path=%s | reason=archive_mismatch", archivePath, item.path.c_str());
+                return false;
+            }
+        }
+        firstVirtualPath = replacementItems.front().path;
+
+        // WACUP may re-query a title while playing or stopping. Freeze the
+        // final title/duration in its input plugin BEFORE enqueueing anything.
+        using PrimeMetadataEx = int (__cdecl *)(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, unsigned, int);
+        const HMODULE inputModule = GetModuleHandleA("in_archive_stream.dll");
+        const auto prime = inputModule
+            ? reinterpret_cast<PrimeMetadataEx>(GetProcAddress(inputModule, "ArchiveStreamPrimePlaylistMetadataEx"))
+            : nullptr;
+        if (!prime)
+        {
+            DebugLogWrite("ERROR", "GEN", "PREFLIGHT_COMMIT_FAIL", "archive=%s | reason=input_plugin_tag_prime_export_missing", archivePath);
+            return false;
+        }
+        for (const auto& item : replacementItems)
+        {
+            if (!prime(item.path.c_str(), item.title.c_str(), item.tagTitle.c_str(), item.tagArtist.c_str(), item.tagAlbum.c_str(), item.tagAlbumArtist.c_str(), item.tagGenre.c_str(), item.tagYear.c_str(), item.tagTrackNumber, item.lengthMs))
+            {
+                DebugLogWrite("ERROR", "GEN", "PREFLIGHT_COMMIT_FAIL", "archive=%s | path=%s | reason=tag_prime_rejected", archivePath, item.path.c_str());
+                return false;
+            }
+        }
+    }
+    else if (!BuildReplacementItemsForArchive(archivePath, replacementItems, firstVirtualPath))
     {
         DebugLogWrite("ERROR", "GEN", "REBUILD_FAIL", "target_index=%d | archive=%s | reason=build_replacements_failed", targetIndex, archivePath);
         return false;
@@ -911,12 +1144,43 @@ static bool RebuildPlaylistWithExpandedZip(HWND hwndWinamp, int targetIndex, boo
     }
 
     int firstInsertedIndex = targetIndex;
+    for (size_t i = 0; i < replacementItems.size(); ++i)
+    {
+        const std::string observed = GetPlaylistTitle(hwndWinamp, targetIndex + (int)i);
+        if (observed != replacementItems[i].title)
+            DebugLogWrite("WARN", "GEN", "TITLE_MISMATCH_AFTER_MOVE", "index=%d | requested=%s | actual=%s", targetIndex + (int)i, replacementItems[i].title.c_str(), observed.c_str());
+    }
     SendMessage(hwndWinamp, WM_WA_IPC, firstInsertedIndex, IPC_SETPLAYLISTPOS);
     DebugLogWrite("INFO", "GEN", "EXPAND_REBUILD_DONE", "target_index=%d | first_inserted_index=%d | replacement_count=%zu | start_playback=%d | first_virtual=%s", targetIndex, firstInsertedIndex, replacementItems.size(), startPlayback ? 1 : 0, firstVirtualPath.c_str());
 
     if (startPlayback)
     {
         if (!QueuePlayExpandedIndex(hwndWinamp, firstInsertedIndex, firstVirtualPath.c_str())) DebugLogWrite("ERROR", "GEN", "EXPAND_PLAY_FAIL", "target_index=%d | reason=queue_play_failed", targetIndex);
+    }
+
+    // Prepared WACUP entries already contain their final titles/durations.
+    // Never queue a second post-play update that changes their playlist rows.
+    if (preparedItems)
+    {
+        DebugLogWrite("INFO", "GEN", "PREFLIGHT_COMMITTED", "archive=%s | entries=%zu | final_before_playback=1", archivePath, replacementItems.size());
+        return true;
+    }
+
+    // Winamp's existing route uses low-priority post-expansion metadata work.
+    using ScheduleMetadata = int (__cdecl *)(const char*);
+    const HMODULE inputModule = GetModuleHandleA("in_archive_stream.dll");
+    const auto schedule = inputModule
+        ? reinterpret_cast<ScheduleMetadata>(GetProcAddress(inputModule, "ArchiveStreamSchedulePlaylistMetadata"))
+        : nullptr;
+    if (schedule)
+    {
+        for (const PlaylistItem& item : replacementItems)
+            schedule(item.path.c_str());
+        DebugLogWrite("INFO", "GEN", "BACKGROUND_METADATA_SCHEDULED", "archive=%s | entries=%zu", archivePath, replacementItems.size());
+    }
+    else
+    {
+        DebugLogWrite("WARN", "GEN", "BACKGROUND_METADATA_UNAVAILABLE", "archive=%s | reason=input_plugin_export_missing", archivePath);
     }
 
     return true;
@@ -966,7 +1230,7 @@ bool ExpandSelectedOrCurrentZip(HWND hwndWinamp)
     return RebuildPlaylistWithExpandedZip(hwndWinamp, targetIndex, false);
 }
 
-bool ExpandZipPathInPlaylistAtIndex(HWND hwndWinamp, const char* zipPath, int preferredIndex, bool startPlayback)
+static bool ExpandArchiveAtIndexInternal(HWND hwndWinamp, const char* zipPath, int preferredIndex, bool startPlayback, const std::vector<PlaylistItem>* preparedItems)
 {
     if (!hwndWinamp || !zipPath || !zipPath[0])
     {
@@ -1001,7 +1265,17 @@ bool ExpandZipPathInPlaylistAtIndex(HWND hwndWinamp, const char* zipPath, int pr
         return false;
     }
 
-    return RebuildPlaylistWithExpandedZip(hwndWinamp, targetIndex, startPlayback);
+    return RebuildPlaylistWithExpandedZip(hwndWinamp, targetIndex, startPlayback, preparedItems);
+}
+
+bool ExpandZipPathInPlaylistAtIndex(HWND hwndWinamp, const char* zipPath, int preferredIndex, bool startPlayback)
+{
+    return ExpandArchiveAtIndexInternal(hwndWinamp, zipPath, preferredIndex, startPlayback, nullptr);
+}
+
+bool ExpandPreparedArchiveAtIndex(HWND hwndWinamp, const char* archivePath, int preferredIndex, const std::vector<ArchivePreparedPlaylistItem>& preparedItems, bool startPlayback)
+{
+    return ExpandArchiveAtIndexInternal(hwndWinamp, archivePath, preferredIndex, startPlayback, &preparedItems);
 }
 
 bool ExpandZipPathInPlaylist(HWND hwndWinamp, const char* zipPath, bool startPlayback)
