@@ -8,6 +8,8 @@ Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows 
 
 **Playback source fix (November 18, 2026):** MusicBee was accepting `.ast` archive-descriptor files into its queue but could not open them as playable tracks. The development adapter now queues `.mp3` hard links to the validated native descriptors; the BASS add-on verifies the linked descriptor before opening the archive directly. The C# descriptor-to-BASS PCM/seek regression passes without extracting audio, but playback in the MusicBee application must be checked after installation. XMPlay's embedded Options page now moves to the right of its navigation tree using the tree's measured screen bounds.
 
+**MusicBee playlist persistence (November 18, 2026):** Native archive tracks now use stable, small descriptor files under `%LOCALAPPDATA%\ArchiveStreamPlayer\MusicBee\v`, with zero-copy hard links used as MusicBee-compatible playable paths. Two-process restart tests confirmed identical track paths after the adapter closes for a six-track ZIP plus MP3-containing 7z and RAR archives; all persisted references passed native PCM decoding and seeking. MusicBee's Playing Tracks list is distinct from its library: an archive drop currently queues tracks rather than automatically adding them to Music/Tracks. The compressed archive must remain at its original path. Compatibility HTTP playback remains session-bound; old playlists referencing deleted temporary descriptors must be re-added once.
+
 ## Features
 
 - ZIP, 7z and RAR/RAR5, including password-protected, solid and multipart archives.

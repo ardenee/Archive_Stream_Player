@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -21,6 +22,7 @@ namespace MusicBeePlugin
         private readonly List<string> directories = new List<string>();
         private readonly List<string> shutdownUrls = new List<string>();
         private readonly object stateLock = new object();
+        private static readonly object persistentTrackLock = new object();
         private System.Windows.Forms.Timer playbackTraceTimer;
         private bool nativeMp3Loaded;
         private const uint BassUnicode = 0x80000000u;
@@ -400,6 +402,80 @@ namespace MusicBeePlugin
             return aliases.ToArray();
         }
 
+        // MusicBee saves the paths in Playing Tracks across launches. Native
+        // descriptors and their zero-copy aliases must not live in TEMP.
+        // Only descriptor metadata is persisted: audio stays in the archive.
+        private static string[] PersistNativePlayableTracks(string archive, string[] temporaryAliases)
+        {
+            var source = new FileInfo(Path.GetFullPath(archive));
+            if (!source.Exists)
+                throw new FileNotFoundException("Archive no longer exists.", source.FullName);
+
+            // Hash only the archive's identity and metadata, never audio bytes
+            // or a recalculated content CRC from the compressed entries.
+            string identity = source.FullName.ToUpperInvariant() + "\n" +
+                source.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n" +
+                source.LastWriteTimeUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string key;
+            using (SHA256 algorithm = SHA256.Create())
+            {
+                byte[] hash = algorithm.ComputeHash(Encoding.UTF8.GetBytes(identity));
+                key = BitConverter.ToString(hash).Replace("-", "").Substring(0, 24).ToLowerInvariant();
+            }
+
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (String.IsNullOrWhiteSpace(appData))
+                throw new IOException("The local application data location is unavailable.");
+
+            // Use a compact on-disk key: long audio titles and Win32 MAX_PATH
+            // must still have room for a temporary metadata filename.
+            string stableFolder = Path.Combine(appData, "ArchiveStreamPlayer", "MusicBee", "v", key);
+            var paths = new List<string>(temporaryAliases.Length);
+            lock (persistentTrackLock)
+            {
+                Directory.CreateDirectory(stableFolder);
+                foreach (string temporaryAlias in temporaryAliases)
+                {
+                    string temporaryDescriptor = Path.ChangeExtension(temporaryAlias, ".ast");
+                    if (!File.Exists(temporaryDescriptor))
+                        throw new FileNotFoundException("The temporary archive descriptor is missing.", temporaryDescriptor);
+
+                    string persistentDescriptor = Path.Combine(stableFolder, Path.GetFileName(temporaryDescriptor));
+                    string persistentAlias = Path.ChangeExtension(persistentDescriptor, ".mp3");
+                    if (File.Exists(persistentDescriptor))
+                    {
+                        // Keep existing playlist paths bound to their original
+                        // entry rather than silently retargeting on a reimport.
+                        if (!String.Equals(File.ReadAllText(persistentDescriptor, Encoding.UTF8),
+                                File.ReadAllText(temporaryDescriptor, Encoding.UTF8), StringComparison.Ordinal))
+                            throw new IOException("An existing persistent archive descriptor has different content.");
+                    }
+                    else
+                    {
+                        string pending = persistentDescriptor + "~" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                        try
+                        {
+                            File.Copy(temporaryDescriptor, pending, false);
+                            File.Move(pending, persistentDescriptor);
+                        }
+                        finally
+                        {
+                            if (File.Exists(pending))
+                                File.Delete(pending);
+                        }
+                    }
+
+                    if (!File.Exists(persistentAlias) &&
+                        !CreateNativeDescriptorHardLink(persistentAlias, persistentDescriptor, IntPtr.Zero))
+                        throw new IOException("Failed to create a persistent archive hard link (Win32 " +
+                            Marshal.GetLastWin32Error().ToString(System.Globalization.CultureInfo.InvariantCulture) + ").");
+                    paths.Add(persistentAlias);
+                }
+            }
+            Trace("NATIVE_PERSIST_READY root=LOCALAPPDATA tracks=" + paths.Count + " source=" + Path.GetExtension(archive));
+            return paths.ToArray();
+        }
+
         private string[] TryStartNativeAudioSession(string archive, string sessionFolder)
         {
             // Validated MP3/WAV/FLAC/OGG/AAC/M4A/WMA from streamable ZIP/7z/RAR.
@@ -517,8 +593,19 @@ namespace MusicBeePlugin
                     Trace("NATIVE_ALIAS_FALLBACK reason=musicbee_requires_audio_extension");
                     return null;
                 }
-                Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + playable.Length + " helper=DLL http=0 cache=shared");
-                return playable;
+                try
+                {
+                    string[] stableTracks = PersistNativePlayableTracks(archive, playable);
+                    Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + stableTracks.Length + " helper=DLL http=0 persistence=LOCALAPPDATA");
+                    return stableTracks;
+                }
+                catch (Exception persistenceError)
+                {
+                    // An empty (not null) result prevents the compatibility
+                    // route from silently adding another ephemeral path.
+                    Trace("NATIVE_PERSIST_FAIL type=" + persistenceError.GetType().Name);
+                    return new string[0];
+                }
             }
             catch (Exception e)
             {
@@ -541,9 +628,17 @@ namespace MusicBeePlugin
             string[] nativeTracks = TryStartNativeAudioSession(archive, folder);
             if (nativeTracks != null)
             {
-                lock (stateLock)
-                    directories.Add(folder);
-                Trace("SESSION_READY route=NATIVE tracks=" + nativeTracks.Length);
+                // The native queue uses stable aliases. The temporary folder
+                // contains only enumeration staging files, never playlist URLs.
+                try
+                {
+                    Directory.Delete(folder, true);
+                }
+                catch (Exception cleanupError)
+                {
+                    Trace("NATIVE_STAGING_CLEANUP_SKIP type=" + cleanupError.GetType().Name);
+                }
+                Trace("SESSION_READY route=NATIVE tracks=" + nativeTracks.Length + " persistent=1");
                 return nativeTracks;
             }
             string bridge = Path.Combine(baseDir, "archive_player_bridge.exe");
