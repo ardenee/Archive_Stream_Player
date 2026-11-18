@@ -62,7 +62,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="aimp_archive_stream.cpp"/>
-    <ClInclude Include="aimp_settings_panel.h"/>
+    <ClInclude Include="aimp_sdk_preferences.h"/>
     <ClCompile Include="..\shared\debug_log.cpp"/>
     <None Include="aimp_archive_stream.def"/>
   </ItemGroup>

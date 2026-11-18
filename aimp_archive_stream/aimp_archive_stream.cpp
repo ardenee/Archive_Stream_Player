@@ -9,7 +9,7 @@
 #include <apiOptions.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
-#include "aimp_settings_panel.h"
+#include "aimp_sdk_preferences.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
@@ -721,7 +721,13 @@ namespace
         }
         HWND WINAPI CreateFrame(HWND parent) override
         {
-            return panel_.Create(parent, g_module, this, &OptionsFrame::SettingsModified);
+            HWND frame = panel_.Create(parent, this, &OptionsFrame::SettingsModified);
+            if (!frame)
+            {
+                DebugLogWrite("WARN", "AIMP", "SETTINGS_FRAME_CREATE_FAIL", "reason=native_ui_creation_failed");
+                panel_.Destroy();
+            }
+            return frame;
         }
         void WINAPI DestroyFrame() override
         {
@@ -758,7 +764,7 @@ namespace
             }
         }
         ComCounter refs_;
-        AimpNativeSettingsPanel panel_;
+        AimpSdkPreferences panel_{g_core};
     };
 
     class Plugin final : public IAIMPPlugin
