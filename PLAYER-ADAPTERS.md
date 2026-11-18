@@ -7,7 +7,7 @@
 | Winamp / WACUP 32-bit | Installs the native input and playlist plugins |
 | foobar2000 32/64-bit | Installs the matching native component |
 | AIMP 32/64-bit | Installs the matching native plugin |
-| XMPlay 32-bit | Installs the 7z/RAR plugin; XMPlay handles ordinary ZIP files itself |
+| XMPlay 32-bit | Installs `xmp-archive-stream.dll`. In **Options → Decoders**, select **Archive Stream ZIP/7z/RAR → Config** for native settings. XMPlay handles ordinary ZIP files itself |
 | MusicBee 32-bit | Installs native playback and Tools menu plugins |
 | MediaMonkey 5 / 2024 | Installs native playback and archive Tools menu directly |
 | VLC 3 64-bit | Use the **Open an archive in VLC** Start Menu shortcut |

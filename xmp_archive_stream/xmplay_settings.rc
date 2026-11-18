@@ -1,0 +1,43 @@
+#include <windows.h>
+#include <winver.h>
+
+// Native XMPlay Config dialog. The tabs and fields are supplied by
+// ArchiveNativeSettingsPanel, sharing only the settings backend with AIMP.
+2000 DIALOGEX 0, 0, 505, 400
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN
+CAPTION "Archive Stream Player - XMPlay"
+FONT 9, "Segoe UI"
+BEGIN
+    DEFPUSHBUTTON "Save and close", IDOK, 312, 370, 98, 20
+    PUSHBUTTON "Close", IDCANCEL, 417, 370, 74, 20
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,2,3,0
+ PRODUCTVERSION 0,2,3,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Archive Stream Player"
+            VALUE "FileDescription", "Archive Stream Player - XMPlay ZIP/7z/RAR archive plugin"
+            VALUE "FileVersion", "0.2.3.0"
+            VALUE "InternalName", "xmp-archive-stream.dll"
+            VALUE "OriginalFilename", "xmp-archive-stream.dll"
+            VALUE "ProductName", "Archive Stream Player"
+            VALUE "ProductVersion", "0.2.3.0"
+            VALUE "LegalCopyright", "Archive Stream Player contributors (MIT); third-party licences retained"
+            VALUE "Comments", "https://github.com/ardenee/Archive_Stream_Player"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
