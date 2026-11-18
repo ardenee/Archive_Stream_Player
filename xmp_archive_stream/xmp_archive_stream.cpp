@@ -425,10 +425,10 @@ extern "C" XMPARC* WINAPI XMPARC_GetInterface(DWORD face, InterfaceProc get)
     (void)traceConfigured;
     DebugLogWrite("INFO", "XMPLAY", "PLUGIN_INIT", "xmparc=1");
     static XMPARC adapter{
-        XMPARC_FLAG_CONFIG,
+        XMPARC_FLAG_CONFIG | XMPARC_FLAG_OPTIONS,
         "Archive Stream ZIP/7z/RAR\0zip/7z/rar/001",
         CheckFile, GetFileList, DecompressFile,
-        About, Configure, nullptr
+        About, Configure, XmplayNativeOptions::HostedPageProc
     };
     return &adapter;
 }

@@ -24,6 +24,20 @@ public:
         return DialogBoxParamW(module, MAKEINTRESOURCEW(2000), owner, DialogProc, reinterpret_cast<LPARAM>(this));
     }
 
+    // XMPARC_FLAG_OPTIONS: XMPlay creates resource 1000 within its own
+    // Options tree. The instance must outlive that host-owned child page.
+    static INT_PTR CALLBACK HostedPageProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
+    {
+        static XmplayNativeOptions hosted;
+        if (message == WM_INITDIALOG)
+        {
+            INITCOMMONCONTROLSEX init{sizeof(init), ICC_TAB_CLASSES};
+            InitCommonControlsEx(&init);
+            return DialogProc(dialog, message, wparam, reinterpret_cast<LPARAM>(&hosted));
+        }
+        return DialogProc(dialog, message, wparam, lparam);
+    }
+
 private:
     enum : int
     {
@@ -297,6 +311,10 @@ private:
         }
         if (message == WM_CLOSE)
         {
+            // XMPlay owns its embedded Options page. It must never be
+            // destroyed as though it were our modal Config dialog.
+            if ((GetWindowLongPtrW(dialog, GWL_STYLE) & WS_CHILD) != 0)
+                return FALSE;
             EndDialog(dialog, IDCANCEL);
             return TRUE;
         }

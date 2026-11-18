@@ -4,6 +4,45 @@
 
 // XMPlay-style compact configuration dialog (XMPlay SDK samples use
 // 8-point Tahoma and approximately 262 x 175 dialog units).
+// Resource 1000 is an XMPlay host-owned Options tree page.
+// Resource 2000 remains the standalone Config dialog.
+1000 DIALOGEX 0, 0, 222, 168
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE
+CAPTION "Archive Stream Player"
+FONT 8, "Tahoma"
+BEGIN
+    CONTROL        "", 4001, "SysTabControl32", WS_TABSTOP | TCS_TABS, 4, 4, 214, 137
+
+    LTEXT          "Playback buffer (MB, 1-512):", 4111, 12, 32, 141, 12
+    EDITTEXT       4101, 157, 29, 43, 14, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT          "Maximum cache (MB, 0-20480):", 4112, 12, 52, 141, 12
+    EDITTEXT       4102, 157, 49, 43, 14, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT          "Cache age (days, 1-365):", 4113, 12, 72, 141, 12
+    EDITTEXT       4103, 157, 69, 43, 14, ES_NUMBER | ES_AUTOHSCROLL
+    AUTOCHECKBOX   "Automatically clean old cache files", 4104, 12, 91, 197, 12
+    AUTOCHECKBOX   "Warm solid archives in the background", 4105, 12, 107, 197, 12
+    PUSHBUTTON     "Open cache", 4106, 12, 124, 73, 15
+    PUSHBUTTON     "Clear cache...", 4107, 91, 124, 73, 15
+
+    LTEXT          "Password list (one password per line):", 4211, 12, 33, 197, 11
+    EDITTEXT       4201, 12, 49, 153, 14, ES_AUTOHSCROLL
+    PUSHBUTTON     "Browse...", 4202, 170, 48, 42, 15
+    AUTOCHECKBOX   "Prompt for passwords when needed", 4203, 12, 76, 197, 12
+    AUTOCHECKBOX   "Ask before saving successful passwords", 4204, 12, 95, 197, 12
+    LTEXT          "Keep password files in a private folder.", 4212, 12, 121, 197, 18
+
+    AUTOCHECKBOX   "Enable archive diagnostics logging", 4301, 12, 35, 197, 12
+    LTEXT          "Log directory (blank = shared default):", 4311, 12, 64, 197, 11
+    EDITTEXT       4302, 12, 81, 197, 14, ES_AUTOHSCROLL
+    PUSHBUTTON     "Open log folder", 4303, 12, 109, 88, 15
+
+    LTEXT          "Archive track-title preset:", 4411, 12, 35, 197, 11
+    COMBOBOX       4401, 12, 53, 197, 103, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT          "Applies to newly added archive tracks.", 4412, 12, 92, 197, 12
+    LTEXT          "Original audio tags are not modified.", 4413, 12, 112, 197, 12
+
+    PUSHBUTTON     "Save settings", 4002, 135, 148, 76, 15
+END
 2000 DIALOGEX 0, 0, 262, 175
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Archive Stream Player"

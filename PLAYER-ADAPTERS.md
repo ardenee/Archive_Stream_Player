@@ -7,12 +7,12 @@
 | Winamp / WACUP 32-bit | Installs the native input and playlist plugins |
 | foobar2000 32/64-bit | Installs the matching native component |
 | AIMP 32/64-bit | Installs the matching native plugin |
-| XMPlay 32-bit | Installs `xmp-archive-stream.dll`. In **Options → Decoders**, select **Archive Stream ZIP/7z/RAR → Config** for native settings. XMPlay handles ordinary ZIP files itself |
+| XMPlay 32-bit | Installs `xmp-archive-stream.dll`. In **Options → Decoders**, select the **Archive Stream Player** tree page, or use **Archive Stream ZIP/7z/RAR → Config** for the standalone dialog. XMPlay handles ordinary ZIP files itself |
 | MusicBee 32-bit | Installs native playback and Tools menu plugins; archive-file drops are handled by the native queueing path |
 | MediaMonkey 5 / 2024 | Installs native playback and Now Playing archive-drop handling; plugin settings replace four redundant Tools menu commands |
 | VLC 3 64-bit | Use the **Open an archive in VLC** Start Menu shortcut |
 
-Plugin settings follow the player's own UI: **Winamp/WACUP** uses its input plugin's compact configuration dialog; **foobar2000** uses Preferences → Tools → Archive Stream; **AIMP** uses Preferences → Plugins → Archive Stream Player with AIMP SDK-native tabs and controls; and **XMPlay** uses Options → Decoders → Archive Stream → Config. All use consistent shared settings underneath, although some players control playlist titles themselves.
+Plugin settings follow the player's own UI: **Winamp/WACUP** uses its input plugin's compact configuration dialog; **foobar2000** uses Preferences → Tools → Archive Stream; **AIMP** uses Preferences → Plugins → Archive Stream Player with AIMP SDK-native tabs and controls; and **XMPlay** uses its embedded Options → Decoders → Archive Stream Player page (with Config still available). All use consistent shared settings underneath, although some players control playlist titles themselves.
 
 The **Configure Archive Stream Player** shortcut also manages shared passwords, cache, titles and logging.
 

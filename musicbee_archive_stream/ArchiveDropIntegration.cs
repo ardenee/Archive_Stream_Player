@@ -17,7 +17,6 @@ namespace MusicBeePlugin
         private readonly List<Control> archiveDropTargets = new List<Control>();
         private System.Windows.Forms.Timer archiveDropRetry;
         private Control archiveDropRoot;
-        private bool archiveDropChangedRootAllowDrop;
         private bool archiveDropClosing;
         private int archiveDropAttempts;
         private string lastArchiveDropSignature = "";
@@ -57,7 +56,7 @@ namespace MusicBeePlugin
 
             archiveDropAttempts = 0;
             archiveDropRetry = new System.Windows.Forms.Timer();
-            archiveDropRetry.Interval = 1000;
+            archiveDropRetry.Interval = 2500;
             archiveDropRetry.Tick += RetryArchiveDropIntegration;
             archiveDropRetry.Start();
             TryAttachArchiveDropIntegration();
@@ -65,16 +64,39 @@ namespace MusicBeePlugin
 
         private void RetryArchiveDropIntegration(object sender, EventArgs args)
         {
-            if (archiveDropClosing || archiveDropRoot != null || ++archiveDropAttempts >= 45)
+            if (archiveDropClosing)
+                return;
+
+            if (archiveDropRoot == null)
             {
-                if (archiveDropRetry != null)
+                if (++archiveDropAttempts >= 45)
+                {
                     archiveDropRetry.Stop();
-                if (archiveDropRoot == null && !archiveDropClosing)
                     Trace("ARCHIVE_DROP_HOOK_UNAVAILABLE reason=musicbee_form_not_found");
+                    return;
+                }
+                TryAttachArchiveDropIntegration();
                 return;
             }
 
-            TryAttachArchiveDropIntegration();
+            if (archiveDropRoot.IsDisposed)
+            {
+                DetachArchiveDropControls();
+                StartArchiveDropIntegration();
+                return;
+            }
+
+            // MusicBee creates and replaces panels after its initial startup.
+            // Revisit the live control tree, without changing AllowDrop on any
+            // host-owned control. Only register listeners where it is enabled.
+            try
+            {
+                AttachArchiveDropControls(archiveDropRoot, true);
+            }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_DROP_RESCAN_FAILED type=" + error.GetType().Name);
+            }
         }
 
         private void TryAttachArchiveDropIntegration()
@@ -99,14 +121,11 @@ namespace MusicBeePlugin
             archiveDropRoot = root;
             try
             {
-                archiveDropChangedRootAllowDrop = !root.AllowDrop;
-                if (archiveDropChangedRootAllowDrop)
-                    root.AllowDrop = true;
+                // Never override MusicBee's own OLE drop target. Changing
+                // AllowDrop on the main form can break normal MusicBee drops.
                 AttachArchiveDropControls(root, true);
                 Trace("ARCHIVE_DROP_HOOK_READY main=" + root.GetType().Name +
                     " targets=" + archiveDropTargets.Count + " observed=" + archiveDropObserved.Count);
-                if (archiveDropRetry != null)
-                    archiveDropRetry.Stop();
             }
             catch (Exception error)
             {
@@ -117,31 +136,50 @@ namespace MusicBeePlugin
 
         private void AttachArchiveDropControls(Control control, bool isRoot)
         {
-            if (control == null || control.IsDisposed || archiveDropObserved.Contains(control))
+            if (control == null || control.IsDisposed)
                 return;
 
-            archiveDropObserved.Add(control);
-            control.ControlAdded += ArchiveDropControlAdded;
+            if (!archiveDropObserved.Contains(control))
+            {
+                archiveDropObserved.Add(control);
+                control.ControlAdded += ArchiveDropControlAdded;
+            }
 
-            // Preserve every existing drop-enabled MusicBee target. Controls
-            // without drop support are not changed, apart from the main form.
-            if (isRoot || control.AllowDrop)
+            if (control.AllowDrop && !archiveDropTargets.Contains(control))
             {
                 control.DragEnter += ArchiveDropDragEnter;
                 control.DragOver += ArchiveDropDragEnter;
                 control.DragDrop += ArchiveDropDragDrop;
                 archiveDropTargets.Add(control);
-                Trace("ARCHIVE_DROP_TARGET type=" + control.GetType().Name + " name=" + control.Name);
+                Trace("ARCHIVE_DROP_TARGET_ADDED type=" + control.GetType().Name);
+            }
+            else if (!control.AllowDrop && archiveDropTargets.Contains(control))
+            {
+                control.DragEnter -= ArchiveDropDragEnter;
+                control.DragOver -= ArchiveDropDragEnter;
+                control.DragDrop -= ArchiveDropDragDrop;
+                archiveDropTargets.Remove(control);
             }
 
-            foreach (Control child in control.Controls)
+            // Newly created and newly enabled controls may not have existed
+            // during startup. Recheck their current drop registration.
+            foreach (Control child in control.Controls.Cast<Control>().ToArray())
                 AttachArchiveDropControls(child, false);
         }
 
         private void ArchiveDropControlAdded(object sender, ControlEventArgs args)
         {
-            if (!archiveDropClosing && archiveDropRoot != null && args.Control != null)
+            if (archiveDropClosing || archiveDropRoot == null || args.Control == null)
+                return;
+
+            try
+            {
                 AttachArchiveDropControls(args.Control, false);
+            }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_DROP_NEW_CONTROL_FAILED type=" + error.GetType().Name);
+            }
         }
 
         private void ArchiveDropDragEnter(object sender, DragEventArgs args)
@@ -170,8 +208,14 @@ namespace MusicBeePlugin
                 return;
             }
 
-            if (archiveDropClosing || archives.Length == 0)
+            if (archiveDropClosing)
                 return;
+            if (archives.Length == 0)
+            {
+                if (args.Data != null && args.Data.GetDataPresent(DataFormats.FileDrop))
+                    Trace("ARCHIVE_DROP_IGNORED reason=not_archive_or_mixed_file_drop");
+                return;
+            }
 
             string signature = String.Join("|", archives);
             DateTime now = DateTime.UtcNow;
@@ -242,10 +286,6 @@ namespace MusicBeePlugin
                     observed.ControlAdded -= ArchiveDropControlAdded;
             }
 
-            if (archiveDropChangedRootAllowDrop && archiveDropRoot != null && !archiveDropRoot.IsDisposed)
-                archiveDropRoot.AllowDrop = false;
-
-            archiveDropChangedRootAllowDrop = false;
             archiveDropRoot = null;
             archiveDropTargets.Clear();
             archiveDropObserved.Clear();
