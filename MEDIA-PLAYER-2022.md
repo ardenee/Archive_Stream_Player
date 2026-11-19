@@ -1,6 +1,23 @@
 # Media Player (2022) SDK feasibility and integration decision
 
-**Target:** Windows 11 modern **Media Player** (`Microsoft.ZuneMusic`, `Microsoft.Media.Player.exe`). NOT legacy Windows Media Player (`wmplayer.exe`). Research-only status: **no native playback support is implemented or verified**. Do not mark this adapter supported or add an installer component until live playback passes.
+**Target:** Windows 11 modern **Media Player** (`Microsoft.ZuneMusic`, `Microsoft.Media.Player.exe`). NOT legacy Windows Media Player (`wmplayer.exe`). **Status: SDK feasibility prototypes have passed basic Cloud Files activation and archive byte-transfer tests, but no production adapter or fully verified playback/seeking is implemented.** Do not mark this adapter supported or add an installer component until the remaining gates pass.
+
+## DEV feasibility results — 19 November 2026
+
+The actual C++ test programs live in [media_player_2022](media_player_2022/README.md), built with Visual Studio 18 and Windows SDK 10.0.26100.0.
+
+| Gate | Outcome | Evidence / limitation |
+| --- | --- | --- |
+| Diagnostic `IMFSchemeHandler` COM activation | **Pass in standard-user Media Foundation harness** | Isolated `astprobe:` CLSID registered under HKCU. `IMFSourceResolver` invoked `CLASS_FACTORY_REQUESTED` and `BEGIN_CREATE_OBJECT` with a limited user token; elevated DEV shell could not load that HKCU class |
+| Modern Media Player opens ordinary M3U8 | **Pass** | Actual `Microsoft.ZuneMusic` activated with `IApplicationActivationManager::ActivateForFile`; playable-looking MP3 control appeared with metadata |
+| Modern Media Player invokes `astprobe:` scheme handler | **Not observed** | Custom URL appeared as `track.mp3` but the app did not activate the registered MF handler. Do not use this registration path as the production backend without further evidence |
+| Cloud Files API single-file callback / byte parity | **Pass** | Registered a disposable read-only sync root; created 68,336-byte MP3 placeholder; `CF_CALLBACK_TYPE_FETCH_DATA` and `CF_OPERATION_TYPE_TRANSFER_DATA` returned data; first 4,096 bytes matched original file. Initial standalone read took **60.82 seconds**, not acceptable playback latency |
+| Modern Media Player loads a CfAPI audio placeholder | **Pass at file activation/byte-delivery level** | Real Media Player accepted the placeholder via `ActivateForFile`; Windows requested bytes through our native provider; the player displayed a 2-second MP3 duration |
+| ZIP-to-Media Player via CfAPI + shared archive backend | **Pass at archive byte-delivery level (repeat test)** | With `M:\Music\VA - Subspecies 4 (2024).zip`, `archive_backend` opened independently streamable MP3 entry **index 1**, uncompressed size **20,661,882 bytes**. Media Player accepted the virtual file; Windows called the provider, which supplied **316 blocks** (65536 bytes maximum) and reported **zero archive read errors**. Placeholder ready in **~0.22 s**. No explicit extraction or HTTP bridge |
+| Whole-track hydration / disk behaviour | **Major unresolved limitation** | Despite `CF_HYDRATION_POLICY_PARTIAL | STREAMING_ALLOWED`, Windows requested **all 20,661,882 bytes** in one `FETCH_DATA`. Do NOT claim the implementation avoids whole-track reads or disk hydration; the OS may materialize the file |
+| Cleanup | **Pass after correction** | The initial test left a read-only 20.7 MB test file behind; provider cleanup now clears read-only on its own QA placeholder and removes file + sync root after disconnect. Repeat archive test reported no leftover root; temporary MF registration and test playlists removed |
+
+**Important:** Actual Media Player opened the projected ZIP-backed file and consumed its bytes, but the prototype does not yet certify audible playback, seek/restart timing, correct album metadata across multiple tracks, or acceptable cache/disk use. CfAPI is therefore **feasible but not yet acceptable for release** under our streaming-first policy.
 
 ## DEV inventory — 19 November 2026
 
@@ -40,13 +57,14 @@ Media Player must see the projected media as ordinary files, receive a normal M3
 
 Important: a Cloud Files provider has operational lifecycle requirements (start/stop/restart, sync-root registration/unregistration, process shutdown, stale placeholders, ACLs, cleanup, mount stability and availability). Cloud-provider UX may be distracting; evaluate this before selecting it for production.
 
-## Decision and proof sequence
+## Remaining acceptance work after initial proof
 
-1. **Small Media Foundation dispatch gate:** build a minimal `IMFSchemeHandler` that logs only registration/activation and returns a controlled failure. Verify in our own `IMFSourceResolver` harness, then hand an `ast:` URL via a temporary M3U8 to the actual `Microsoft.Media.Player.exe` app. If the app never invokes the handler, stop. Scope any COM registration to disposable test CLSID and only the test scheme; clean up registry entries. Do **not** modify Windows file associations or install codecs.
-2. **Cloud Files feasibility gate:** use the installed Microsoft CloudMirror SDK sample for provider lifecycle patterns, then a narrow C++ read-only PoC using our shared backend. Do not implement full syncing. Choose `PARTIAL | STREAMING_ALLOWED`, verify actual range fetch and disk behaviour. No need to enable ProjFS.
-3. Compare latency, seek performance, metadata visibility, disk writes and the app's handling of M3U8/normal tracks for ZIP and real RAR. Begin with 9-track Subspecies 4 ZIP and 10-track Natural Order 2 RAR. Then 7z, solid, encrypted and multipart, including interruption and restart.
-4. **ProjFS fallback:** only if CfAPI proves unsuitable and the optional Windows feature prerequisite is acceptable. Do not enable it automatically.
-5. Only after real application tests: implement `media_player_2022`, shell entry, stable mount/provider lifecycle, shared settings, uninstall cleanup, accurate README, installer selection and feature-matrix status.
+1. **Measure and mitigate whole-track fetches**: the first real MP3 received a single 20.7 MB `FETCH_DATA` request, even with partial hydration/streaming allowed. Measure actual NTFS bytes allocated, callback duration, and whether Media Player can seek or start audio before a full fetch completes. If this cannot respect bounded resource use, Cloud Files is not yet suitable for production.
+2. **Multi-track album**: create 9 stable placeholders for Subspecies 4 and 10 for Natural Order 2, with original codec extensions, exact lengths and bounded metadata. Build M3U8; verify actual Media Player playlist, pause, skip, seek (forward/backward), metadata and restart. No independent extraction or content CRC calculation.
+3. **Shared routing integration**: expand the diagnostic one-entry direct-stream mode to ZIP/7z/RAR with strict **stream → configured memory → managed cache** fallbacks for solid/encrypted/nonseekable entries, user-scoped credentials, cancellation and concurrency. Do not treat OS hydration as our managed cache.
+4. **Provider lifecycle**: standard-user permission test; crash/restart; uninstall cleanup; private user-specific sync root; read-only security; stale placeholders, archive disappearance and thread-safe cancellations. A shell menu should open archives without PowerShell or HTTP.
+5. **ProjFS fallback**: only if CfAPI fails requirements and enabling the optional feature is acceptable. We have NOT enabled it. Do not silently install system features.
+6. **Release gate**: ship a selectable installer option and update supported-feature matrix only after real-audio playback, seeking and all routing gates have passed. The current source is a PoC, not a full player adapter.
 
 ## Sources reviewed
 

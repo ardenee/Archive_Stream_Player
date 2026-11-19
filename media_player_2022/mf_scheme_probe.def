@@ -1,0 +1,4 @@
+LIBRARY mf_scheme_probe
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
