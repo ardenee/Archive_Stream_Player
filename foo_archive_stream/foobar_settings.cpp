@@ -80,6 +80,13 @@ FoobarArchiveSettings FoobarArchiveSettingsLoad()
         settings.displayTemplate = ArchiveAdapterWideToUtf8(common.titleTemplate);
         settings.useFileTags = common.useFileTags;
         settings.debugLogging = common.debugLogging;
+        // Preserve existing foobar-specific decoration until shared keys
+        // are introduced, then use the common settings for every host.
+        if (ArchiveAdapterTitleDecorationsConfigured())
+        {
+            settings.displayPrefix = ArchiveAdapterWideToUtf8(common.titlePrefix);
+            settings.displayPostfix = ArchiveAdapterWideToUtf8(common.titlePostfix);
+        }
     }
 
     settings.bufferSizeMb = std::clamp(settings.bufferSizeMb, static_cast<int>(MIN_BUFFER_SIZE_MB), static_cast<int>(MAX_BUFFER_SIZE_MB));
@@ -151,6 +158,8 @@ bool FoobarArchiveSettingsSave(const FoobarArchiveSettings& requested, std::stri
     common.cacheAgeDays = static_cast<unsigned>(settings.cacheAgeDays);
     common.debugLogging = settings.debugLogging;
     common.useFileTags = settings.useFileTags;
+    common.titlePrefix = ArchiveAdapterUtf8ToWide(settings.displayPrefix);
+    common.titlePostfix = ArchiveAdapterUtf8ToWide(settings.displayPostfix);
     common.passwordListPath = ArchiveAdapterUtf8ToWide(settings.passwordListPath);
     if (!settings.displayTemplate.empty())
         common.titleTemplate = ArchiveAdapterUtf8ToWide(settings.displayTemplate);

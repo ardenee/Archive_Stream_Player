@@ -84,6 +84,8 @@ public:
         logDirectory_ = nullptr;
         titleTemplate_ = nullptr;
         useFileTags_ = nullptr;
+        titlePrefix_ = nullptr;
+        titlePostfix_ = nullptr;
         passwordBrowse_ = nullptr;
         logOpen_ = nullptr;
         if (font_)
@@ -108,6 +110,8 @@ public:
         SetChecked(savePasswords_, options.askToSavePassword);
         SetChecked(debugLogging_, options.debugLogging);
         SetChecked(useFileTags_, options.useFileTags);
+        SetWindowTextW(titlePrefix_, options.titlePrefix.c_str());
+        SetWindowTextW(titlePostfix_, options.titlePostfix.c_str());
         SetWindowTextW(passwordPath_, options.passwordListPath.c_str());
         SetWindowTextW(logDirectory_, options.logDirectory.c_str());
         unsigned chosen = 0;
@@ -140,6 +144,8 @@ public:
         SetChecked(savePasswords_, defaults.askToSavePassword);
         SetChecked(debugLogging_, defaults.debugLogging);
         SetChecked(useFileTags_, defaults.useFileTags);
+        SetWindowTextW(titlePrefix_, defaults.titlePrefix.c_str());
+        SetWindowTextW(titlePostfix_, defaults.titlePostfix.c_str());
         SetWindowTextW(passwordPath_, defaults.passwordListPath.c_str());
         SetWindowTextW(logDirectory_, defaults.logDirectory.c_str());
         SendMessageW(titleTemplate_, CB_SETCURSEL, 0, 0);
@@ -167,11 +173,20 @@ public:
         settings.askToSavePassword = Checked(savePasswords_);
         settings.debugLogging = Checked(debugLogging_);
         settings.useFileTags = Checked(useFileTags_);
+        settings.titlePrefix = ReadText(titlePrefix_);
+        settings.titlePostfix = ReadText(titlePostfix_);
         settings.passwordListPath = ReadText(passwordPath_);
         settings.logDirectory = ReadText(logDirectory_);
         const int selected = static_cast<int>(SendMessageW(titleTemplate_, CB_GETCURSEL, 0, 0));
         if (selected >= 0 && selected < static_cast<int>(titleTemplates_.size()))
             settings.titleTemplate = titleTemplates_[selected];
+        if (ArchiveAdapterWideToUtf8(settings.titlePrefix).size() > 20 ||
+            ArchiveAdapterWideToUtf8(settings.titlePostfix).size() > 20)
+        {
+            MessageBoxW(frame_, L"Title prefix and postfix must each be at most 20 UTF-8 bytes.",
+                L"Archive Stream Player", MB_OK | MB_ICONWARNING);
+            return false;
+        }
         if (settings.passwordListPath.size() >= 4096 || settings.logDirectory.size() >= 4096)
         {
             MessageBoxW(frame_, L"Password list and log directory paths must be shorter than 4096 characters.",
@@ -200,7 +215,8 @@ private:
         kClearCache = 4104, kBrowsePasswords = 4105, kOpenLog = 4106,
         kBuffer = 4200, kCacheLimit = 4201, kCacheAge = 4202, kAutoCleanup = 4203,
         kWarmSolid = 4204, kPasswordPath = 4205, kPrompt = 4206, kSavePassword = 4207,
-        kDebugLogging = 4208, kLogDirectory = 4209, kTitleTemplate = 4210, kUseFileTags = 4211
+        kDebugLogging = 4208, kLogDirectory = 4209, kTitleTemplate = 4210, kUseFileTags = 4211,
+        kTitlePrefix = 4212, kTitlePostfix = 4213
     };
     static constexpr std::array<const wchar_t*, 6> titleTemplates_ = {
         L"<filename>", L"<archivetype>: <filename>", L"<#>. <filename>",
@@ -227,6 +243,8 @@ private:
     HWND logDirectory_ = nullptr;
     HWND titleTemplate_ = nullptr;
     HWND useFileTags_ = nullptr;
+    HWND titlePrefix_ = nullptr;
+    HWND titlePostfix_ = nullptr;
     HWND passwordBrowse_ = nullptr;
     HWND logOpen_ = nullptr;
     std::array<std::vector<HWND>, 4> pageControls_;
@@ -357,8 +375,11 @@ private:
         for (const wchar_t* preset : titleTemplates_)
             SendMessageW(titleTemplate_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(preset));
         useFileTags_ = AddControl(3, L"BUTTON", L"Use File Tags (overrides title preset)", WS_TABSTOP | BS_AUTOCHECKBOX, 32, 165, 480, 25, kUseFileTags);
-        AddControl(3, L"STATIC", L"Tokens: <filename>  <archivetype>  <archive>  <filetype>  <#>", 0, 32, 204, 500, 30);
-        AddControl(3, L"STATIC", L"Uses embedded Title, Artist, Album and Track # where available. Missing tags fall back to filename; archive bytes remain unchanged.", 0, 32, 247, 500, 43);
+        AddControl(3, L"STATIC", L"Prefix (preset titles only):", 0, 32, 202, 235, 20);
+        titlePrefix_ = AddControl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 32, 225, 215, 24, kTitlePrefix);
+        AddControl(3, L"STATIC", L"Postfix (preset titles only):", 0, 268, 202, 235, 20);
+        titlePostfix_ = AddControl(3, L"EDIT", L"", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 268, 225, 215, 24, kTitlePostfix);
+        AddControl(3, L"STATIC", L"Use File Tags overrides presets and decorations; embedded audio and archive paths stay unchanged.", 0, 32, 268, 500, 40);
 
         // AIMP already owns Apply/OK/Reset. A second Save/Reload row is
         // redundant and visually conflicts with its Options page.

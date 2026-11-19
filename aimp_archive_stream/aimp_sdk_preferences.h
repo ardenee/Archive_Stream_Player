@@ -3,6 +3,7 @@
 // IAIMPServiceUI; the shared registry/settings backend stays host-independent.
 #include <apiGUI.h>
 #include <apiOptions.h>
+#include <apiPlaylists.h>
 #include <apiObjects.h>
 #include <windows.h>
 #include <shellapi.h>
@@ -22,6 +23,13 @@ class AimpSdkPreferences final : public IAIMPUIChangeEvents, public IAIMPUIMouse
 public:
     using ModifiedCallback = void (*)(void*);
     explicit AimpSdkPreferences(IAIMPCore* core) : core_(core) {}
+
+    // Host-owned, archive-only playlist refresh used after an archive
+    // expansion or startup; does not depend on an open Options page.
+    void RefreshArchiveTitlesForHost()
+    {
+        RefreshArchiveTitles();
+    }
 
     HRESULT WINAPI QueryInterface(REFIID iid, void** output) override
     {
@@ -136,6 +144,8 @@ public:
         logPath_ = nullptr;
         titlePreset_ = nullptr;
         useFileTags_ = nullptr;
+        titlePrefix_ = nullptr;
+        titlePostfix_ = nullptr;
         autoCleanup_ = nullptr;
         warmSolid_ = nullptr;
         promptPasswords_ = nullptr;
@@ -164,6 +174,8 @@ public:
         SetChecked(savePasswords_, current.askToSavePassword);
         SetChecked(debugLogging_, current.debugLogging);
         SetChecked(useFileTags_, current.useFileTags);
+        SetText(titlePrefix_, current.titlePrefix);
+        SetText(titlePostfix_, current.titlePostfix);
         int selected = 0;
         for (size_t i = 0; i < presets_.size(); ++i)
         {
@@ -187,7 +199,9 @@ public:
             Checked(debugLogging_) == current.debugLogging &&
             Checked(useFileTags_) == current.useFileTags;
         const bool pathMatch = GetText(passwordPath_) == current.passwordListPath &&
-            GetText(logPath_) == current.logDirectory;
+            GetText(logPath_) == current.logDirectory &&
+            GetText(titlePrefix_) == current.titlePrefix &&
+            GetText(titlePostfix_) == current.titlePostfix;
         DebugLogWrite(numericMatch && checkboxMatch && pathMatch ? "INFO" : "WARN", "AIMP", "SETTINGS_NATIVE_LOAD",
             "numeric=%d | checkboxes=%d | paths=%d | buffer=%u | pages=%d", numericMatch ? 1 : 0, checkboxMatch ? 1 : 0,
             pathMatch ? 1 : 0, actualBuffer, pageControl_ ? pageControl_->GetCount() : 0);
@@ -211,9 +225,86 @@ public:
         SetChecked(savePasswords_, defaults.askToSavePassword);
         SetChecked(debugLogging_, defaults.debugLogging);
         SetChecked(useFileTags_, defaults.useFileTags);
+        SetText(titlePrefix_, defaults.titlePrefix);
+        SetText(titlePostfix_, defaults.titlePostfix);
         titlePreset_->SetValueAsInt32(AIMPUI_COMBOBOX_PROPID_ITEMINDEX, 0);
         loading_ = false;
         MarkModified();
+    }
+
+    // Refresh only archive-backed playlist rows after shared title settings
+    // change. AIMP caches the first displayed metadata per item, so changing
+    // Use File Tags alone does not automatically replace existing filenames.
+    void RefreshArchiveTitles()
+    {
+        if (!core_)
+            return;
+        IAIMPServicePlaylistManager* manager = nullptr;
+        if (FAILED(core_->QueryInterface(IID_IAIMPServicePlaylistManager,
+            reinterpret_cast<void**>(&manager))) || !manager)
+            return;
+
+        unsigned refreshed = 0;
+        const int playlists = (std::min)(manager->GetLoadedPlaylistCount(), 100);
+        for (int p = 0; p < playlists; ++p)
+        {
+            IAIMPPlaylist* playlist = nullptr;
+            if (FAILED(manager->GetLoadedPlaylist(p, &playlist)) || !playlist)
+                continue;
+            const int count = (std::min)(playlist->GetItemCount(), 10000);
+            for (int i = 0; i < count; ++i)
+            {
+                IAIMPPlaylistItem* item = nullptr;
+                if (FAILED(playlist->GetItem(i, IID_IAIMPPlaylistItem,
+                    reinterpret_cast<void**>(&item))) || !item)
+                    continue;
+                IAIMPString* filename = nullptr;
+                if (SUCCEEDED(item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_FILENAME,
+                    IID_IAIMPString, reinterpret_cast<void**>(&filename))) && filename)
+                {
+                    if (filename->GetData() && filename->GetLength() > 0)
+                    {
+                        std::wstring uri(filename->GetData(), filename->GetLength());
+                        for (wchar_t& c : uri)
+                            c = static_cast<wchar_t>(towlower(c));
+                        // Archive Stream URI: absolute archive path followed
+                        // by :<entry-index>/internal/name.mp3. Ordinary files
+                        // and other users' virtual schemes are excluded.
+                        bool owned = false;
+                        for (const wchar_t* ext : {L".zip:", L".7z:", L".rar:"})
+                        {
+                            const size_t at = uri.rfind(ext);
+                            if (at == std::wstring::npos)
+                                continue;
+                            const size_t index = at + wcslen(ext);
+                            const size_t slash = uri.find(L'/', index);
+                            if (slash != std::wstring::npos && slash > index &&
+                                slash - index <= 10 && slash + 1 < uri.size())
+                            {
+                                owned = true;
+                                for (size_t j = index; j < slash; ++j)
+                                {
+                                    if (uri[j] < L'0' || uri[j] > L'9')
+                                    {
+                                        owned = false;
+                                        break;
+                                    }
+                                }
+                                if (owned)
+                                    break;
+                            }
+                        }
+                        if (owned && SUCCEEDED(item->ReloadInfo()))
+                            ++refreshed;
+                    }
+                    filename->Release();
+                }
+                item->Release();
+            }
+            playlist->Release();
+        }
+        manager->Release();
+        DebugLogWrite("INFO", "AIMP", "ARCHIVE_TITLE_REFRESH", "archive_tracks=%u | playlists=%d", refreshed, playlists);
     }
 
     bool Save()
@@ -235,12 +326,21 @@ public:
         settings.askToSavePassword = Checked(savePasswords_);
         settings.debugLogging = Checked(debugLogging_);
         settings.useFileTags = Checked(useFileTags_);
+        settings.titlePrefix = GetText(titlePrefix_);
+        settings.titlePostfix = GetText(titlePostfix_);
         settings.passwordListPath = GetText(passwordPath_);
         settings.logDirectory = GetText(logPath_);
         int selected = 0;
         titlePreset_->GetValueAsInt32(AIMPUI_COMBOBOX_PROPID_ITEMINDEX, &selected);
         if (selected >= 0 && selected < static_cast<int>(presets_.size()))
             settings.titleTemplate = presets_[static_cast<size_t>(selected)];
+        if (ArchiveAdapterWideToUtf8(settings.titlePrefix).size() > 20 ||
+            ArchiveAdapterWideToUtf8(settings.titlePostfix).size() > 20)
+        {
+            MessageBoxW(form_->GetHandle(), L"Title prefix and postfix must each be at most 20 UTF-8 bytes.",
+                L"Archive Stream Player", MB_OK | MB_ICONWARNING);
+            return false;
+        }
         if (settings.passwordListPath.size() >= 4096 || settings.logDirectory.size() >= 4096)
         {
             MessageBoxW(form_->GetHandle(), L"File and folder paths must be shorter than 4096 characters.",
@@ -257,6 +357,7 @@ public:
         if (!passwords.empty())
             ArchivePasswordSetListPath(passwords.c_str());
         ArchiveAdapterLogging::Configure(L"aimp", settings.debugLogging);
+        RefreshArchiveTitles();
         return true;
     }
 
@@ -327,6 +428,8 @@ private:
     IAIMPUIEdit* logPath_ = nullptr;
     IAIMPUIComboBox* titlePreset_ = nullptr;
     IAIMPUICheckBox* useFileTags_ = nullptr;
+    IAIMPUIEdit* titlePrefix_ = nullptr;
+    IAIMPUIEdit* titlePostfix_ = nullptr;
     IAIMPUICheckBox* autoCleanup_ = nullptr;
     IAIMPUICheckBox* warmSolid_ = nullptr;
     IAIMPUICheckBox* promptPasswords_ = nullptr;
@@ -513,8 +616,10 @@ private:
                 return false;
         }
         useFileTags_ = CheckBox(page, L"Use File Tags (overrides title preset)");
-        Label(page, L"Embedded Title, Artist, Album and Track # take priority when available; original audio stays unchanged.", 64);
-        return useFileTags_ != nullptr;
+        titlePrefix_ = Edit(page, L"Title prefix (up to 20 UTF-8 bytes)", 29);
+        titlePostfix_ = Edit(page, L"Title postfix (up to 20 UTF-8 bytes)", 29);
+        Label(page, L"Prefix and postfix apply to preset titles only. Use File Tags shows original embedded titles.", 47);
+        return useFileTags_ && titlePrefix_ && titlePostfix_;
     }
     void BrowsePasswordList()
     {

@@ -35,6 +35,11 @@ struct ArchiveAdapterPreferences
     std::wstring logDirectory;
     std::wstring passwordListPath = ArchiveAdapterDefaultPasswordList();
     std::wstring titleTemplate = L"<filename>";
+    // Consistent with foobar's existing custom title fields: up to 20
+    // UTF-8 bytes each, applied to preset titles only. Use File Tags
+    // overrides these decorations so original embedded titles stay intact.
+    std::wstring titlePrefix;
+    std::wstring titlePostfix;
 };
 
 inline bool ArchiveAdapterPreferencesConfigured()
@@ -47,6 +52,18 @@ inline bool ArchiveAdapterPreferencesConfigured()
     const LONG result = RegQueryValueExW(key, L"MemoryMB", nullptr, &kind, nullptr, &length);
     RegCloseKey(key);
     return result == ERROR_SUCCESS && kind == REG_DWORD && length == sizeof(DWORD);
+}
+
+inline bool ArchiveAdapterTitleDecorationsConfigured()
+{
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\ArchiveStreamPlayer\\Adapters", 0,
+        KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+        return false;
+    const LONG prefix = RegQueryValueExW(key, L"TitlePrefix", nullptr, nullptr, nullptr, nullptr);
+    const LONG postfix = RegQueryValueExW(key, L"TitlePostfix", nullptr, nullptr, nullptr, nullptr);
+    RegCloseKey(key);
+    return prefix == ERROR_SUCCESS || postfix == ERROR_SUCCESS;
 }
 
 inline std::string ArchiveAdapterWideToUtf8(const std::wstring& wide)
@@ -114,6 +131,8 @@ inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
     settings.debugLogging = number(L"DebugLogging", 0, 0, 1) != 0;
     settings.useFileTags = number(L"UseFileTags", 0, 0, 1) != 0;
     settings.logDirectory = string(L"LogDirectory");
+    settings.titlePrefix = string(L"TitlePrefix");
+    settings.titlePostfix = string(L"TitlePostfix");
     const std::wstring configuredList = string(L"PasswordList");
     if (!configuredList.empty())
         settings.passwordListPath = configuredList;
@@ -133,7 +152,9 @@ inline bool ArchiveAdapterPreferencesSave(const ArchiveAdapterPreferences& setti
 {
     if (settings.memoryMb < 1 || settings.memoryMb > 512 || settings.cacheLimitMb > 20480 ||
         settings.cacheAgeDays < 1 || settings.cacheAgeDays > 365 || settings.passwordListPath.size() >= 4096 ||
-        settings.logDirectory.size() >= 4096)
+        settings.logDirectory.size() >= 4096 ||
+        ArchiveAdapterWideToUtf8(settings.titlePrefix).size() > 20 ||
+        ArchiveAdapterWideToUtf8(settings.titlePostfix).size() > 20)
         return false;
 
     HKEY key = nullptr;
@@ -159,7 +180,9 @@ inline bool ArchiveAdapterPreferencesSave(const ArchiveAdapterPreferences& setti
         number(L"DebugLogging", settings.debugLogging ? 1 : 0) &&
         number(L"UseFileTags", settings.useFileTags ? 1 : 0) &&
         string(L"LogDirectory", settings.logDirectory) && string(L"PasswordList", settings.passwordListPath) &&
-        string(L"TitleTemplate", settings.titleTemplate);
+        string(L"TitleTemplate", settings.titleTemplate) &&
+        string(L"TitlePrefix", settings.titlePrefix) &&
+        string(L"TitlePostfix", settings.titlePostfix);
     RegCloseKey(key);
     return saved;
 }
@@ -235,7 +258,9 @@ inline std::wstring ArchiveAdapterPreferredTitle(const std::wstring& archive,
             return tagTitle;
         return ArchiveAdapterFormatTitle(archive, internalPath, entryNumber, L"<filename>");
     }
-    return ArchiveAdapterFormatTitle(archive, internalPath, entryNumber, settings.titleTemplate);
+    return settings.titlePrefix +
+        ArchiveAdapterFormatTitle(archive, internalPath, entryNumber, settings.titleTemplate) +
+        settings.titlePostfix;
 }
 
 #include <shellapi.h>

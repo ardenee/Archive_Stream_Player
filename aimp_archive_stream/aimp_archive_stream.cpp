@@ -5,11 +5,13 @@
 #include <wincred.h>
 #include <apiPlugin.h>
 #include <apiFileManager.h>
+#include <apiPlaylists.h>
 #include <apiObjects.h>
 #include <apiOptions.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
 #include "../shared/archive_adapter_tag_probe.h"
+#include "../shared/archive_adapter_audio_probe.h"
 #include "aimp_sdk_preferences.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
@@ -44,6 +46,60 @@ namespace
 {
     IAIMPCore* g_core = nullptr;
     HMODULE g_module = nullptr;
+    HWND g_titleRefreshWindow = nullptr;
+    constexpr UINT_PTR kArchiveTitleRefreshTimer = 5231;
+
+    // AIMP populates its playlist asynchronously after an archive expander
+    // returns. Refresh on the original GUI thread, never in the expander
+    // callback or a background I/O thread. Only archive-owned rows are
+    // touched and the timer is one-shot to avoid repeated metadata scans.
+    LRESULT CALLBACK ArchiveTitleRefreshWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+    {
+        if (message == WM_TIMER && wparam == kArchiveTitleRefreshTimer)
+        {
+            KillTimer(window, kArchiveTitleRefreshTimer);
+            if (g_core)
+            {
+                AimpSdkPreferences preferences(g_core);
+                preferences.RefreshArchiveTitlesForHost();
+            }
+            return 0;
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    void ScheduleArchiveTitleRefresh(UINT delay = 400)
+    {
+        if (g_titleRefreshWindow)
+            SetTimer(g_titleRefreshWindow, kArchiveTitleRefreshTimer, delay, nullptr);
+    }
+
+    bool InitializeArchiveTitleRefreshWindow()
+    {
+        if (g_titleRefreshWindow)
+            return true;
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = ArchiveTitleRefreshWindowProc;
+        wc.hInstance = g_module;
+        wc.lpszClassName = L"ArchiveStreamAimpMetadataRefresh";
+        if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+            return false;
+        g_titleRefreshWindow = CreateWindowExW(0, wc.lpszClassName, L"",
+            0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, g_module, nullptr);
+        return g_titleRefreshWindow != nullptr;
+    }
+
+    void CloseArchiveTitleRefreshWindow()
+    {
+        if (g_titleRefreshWindow)
+        {
+            KillTimer(g_titleRefreshWindow, kArchiveTitleRefreshTimer);
+            DestroyWindow(g_titleRefreshWindow);
+            g_titleRefreshWindow = nullptr;
+        }
+        if (g_module)
+            UnregisterClassW(L"ArchiveStreamAimpMetadataRefresh", g_module);
+    }
 
     std::wstring Utf8ToWide(const std::string& value)
     {
@@ -525,6 +581,7 @@ namespace
             const auto preferences = ArchiveAdapterPreferencesLoad();
             ArchiveTrackTags tags{};
             const bool tagged = preferences.useFileTags && ArchiveAdapterProbeEntryTags(archive_, entry_, tags);
+            DebugLogWrite("INFO", "AIMP", "VIRTUAL_FILEINFO_REQUEST", "index=%u | use_tags=%d | tag_found=%d | title=%s", entry_.index, preferences.useFileTags ? 1 : 0, tagged ? 1 : 0, tagged ? tags.title.c_str() : "");
             const std::wstring name = ArchiveAdapterPreferredTitle(archive_, Utf8ToWide(entry_.path),
                 entry_.index + 1, preferences, tagged ? Utf8ToWide(tags.title) : std::wstring());
             IAIMPString* nameValue = nullptr;
@@ -583,8 +640,27 @@ namespace
                         return result;
                 }
             }
-            return info->SetValueAsInt64(AIMP_FILEINFO_PROPID_FILESIZE,
-                static_cast<INT64>(entry_.size));
+            result = info->SetValueAsInt64(AIMP_FILEINFO_PROPID_FILESIZE, static_cast<INT64>(entry_.size));
+            if (FAILED(result))
+                return result;
+
+            // Supply AIMP's native duration/sample-rate/bitrate fields from
+            // bounded direct-stream headers, independent of Use File Tags.
+            // No full-track decode or cache/extraction during playlist load.
+            ArchiveAdapterAudioInfo audio{};
+            if (ArchiveAdapterProbeEntryAudio(archive_, entry_, audio))
+            {
+                if (audio.HasDuration())
+                    result = info->SetValueAsFloat(AIMP_FILEINFO_PROPID_DURATION, audio.DurationMilliseconds()); // AIMP SDK expects milliseconds.
+                if (SUCCEEDED(result) && audio.sampleRate)
+                    result = info->SetValueAsInt32(AIMP_FILEINFO_PROPID_SAMPLERATE, static_cast<int>(audio.sampleRate));
+                if (SUCCEEDED(result) && audio.bitrateKbps)
+                    result = info->SetValueAsInt32(AIMP_FILEINFO_PROPID_BITRATE, static_cast<int>(audio.bitrateKbps));
+                if (SUCCEEDED(result) && audio.channels)
+                    result = info->SetValueAsInt32(AIMP_FILEINFO_PROPID_CHANNELS, static_cast<int>(audio.channels));
+                DebugLogWrite(SUCCEEDED(result) ? "INFO" : "WARN", "AIMP", "AUDIO_INFO", "index=%u | duration_ms=%lld | rate=%u | kbps=%u | channels=%u | write_ok=%d", entry_.index, static_cast<long long>(audio.durationSeconds * 1000.0 + 0.5), audio.sampleRate, audio.bitrateKbps, audio.channels, SUCCEEDED(result) ? 1 : 0);
+            }
+            return result;
         }
         BOOL WINAPI IsExists() override
         {
@@ -598,6 +674,115 @@ namespace
         ComCounter refs_;
         std::wstring archive_;
         ArchiveEntry entry_;
+    };
+
+    // AIMP can restore playlist items from their persistent virtual URI.
+    // VirtualFile::GetFileInfo supplies tags during initial expansion, but
+    // after a restart/ReloadInfo AIMP may query the file-info extension with
+    // only the stored URI. Provide the exact same metadata in both paths.
+    // Never claim an ordinary MP3 or unrelated host URI.
+    static bool ArchiveTrackFromAimpUri(const std::wstring& uri,
+        std::wstring& archive, ArchiveEntry& entry)
+    {
+        if (uri.empty() || uri.size() > 8192)
+            return false;
+        std::wstring lower = uri;
+        for (wchar_t& c : lower)
+            c = static_cast<wchar_t>(towlower(c));
+        size_t delimiter = std::wstring::npos;
+        for (const wchar_t* ext : {L".zip:", L".7z:", L".rar:"})
+        {
+            const auto found = lower.rfind(ext);
+            if (found != std::wstring::npos &&
+                (delimiter == std::wstring::npos || found > delimiter))
+                delimiter = found + wcslen(ext) - 1;
+        }
+        if (delimiter == std::wstring::npos)
+            return false;
+        const size_t slash = uri.find(L'/', delimiter + 1);
+        if (slash == std::wstring::npos || slash <= delimiter + 1 ||
+            slash - delimiter > 12 || slash + 1 >= uri.size())
+            return false;
+        uint64_t parsedIndex = 0;
+        for (size_t at = delimiter + 1; at < slash; ++at)
+        {
+            const wchar_t digit = uri[at];
+            if (digit < L'0' || digit > L'9')
+                return false;
+            parsedIndex = parsedIndex * 10 + static_cast<unsigned>(digit - L'0');
+            if (parsedIndex > UINT32_MAX)
+                return false;
+        }
+        archive = uri.substr(0, delimiter);
+        std::vector<ArchiveEntry> entries;
+        std::string error;
+        if (!ArchiveListEntries(archive.c_str(), entries, error) || entries.size() > 10000)
+            return false;
+        for (const auto& candidate : entries)
+        {
+            if (candidate.index == parsedIndex && candidate.isSupportedAudio &&
+                !candidate.isFolder && Utf8ToWide(candidate.path) == uri.substr(slash + 1))
+            {
+                entry = candidate;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    class ArchiveFileInfoProvider final : public IAIMPExtensionFileInfoProvider
+    {
+    public:
+        HRESULT WINAPI QueryInterface(REFIID iid, void** output) override
+        {
+            if (!output)
+                return E_POINTER;
+            *output = nullptr;
+            if (!IsEqualIID(iid, IID_IUnknown) &&
+                !IsEqualIID(iid, IID_IAIMPExtensionFileInfoProvider))
+                return E_NOINTERFACE;
+            *output = static_cast<IAIMPExtensionFileInfoProvider*>(this);
+            AddRef();
+            return S_OK;
+        }
+        ULONG WINAPI AddRef() override { return refs_.Add(); }
+        ULONG WINAPI Release() override
+        {
+            const auto count = refs_.Sub();
+            if (!count)
+                delete this;
+            return count;
+        }
+        HRESULT WINAPI GetFileInfo(IAIMPString* fileURI, IAIMPFileInfo* info) override
+        {
+            if (!fileURI || !info || !fileURI->GetData() || fileURI->GetLength() <= 0)
+                return E_INVALIDARG;
+            try
+            {
+                const std::wstring uri(fileURI->GetData(), fileURI->GetLength());
+                std::wstring archive;
+                ArchiveEntry entry{};
+                if (!ArchiveTrackFromAimpUri(uri, archive, entry))
+                    return E_FAIL;
+                auto* virtualFile = new (std::nothrow) VirtualFile(archive, entry);
+                if (!virtualFile)
+                    return E_OUTOFMEMORY;
+                const HRESULT result = virtualFile->GetFileInfo(info);
+                virtualFile->Release();
+                DebugLogWrite("INFO", "AIMP", "FILEINFO_PROVIDER", "index=%u | hresult=0x%08X", entry.index, static_cast<unsigned>(result));
+                return result;
+            }
+            catch (const std::bad_alloc&)
+            {
+                return E_OUTOFMEMORY;
+            }
+            catch (...)
+            {
+                return E_FAIL;
+            }
+        }
+    private:
+        ComCounter refs_;
     };
 
     // AIMP will not offer ZIP/7z/RAR through its normal Add Files dialog
@@ -720,6 +905,7 @@ namespace
                     return E_FAIL;
                 }
                 *output = list;
+                ScheduleArchiveTitleRefresh();
                 DebugLogWrite("INFO", "AIMP", "EXPAND_OK", "count=%d", list->GetCount());
                 return S_OK;
             }
@@ -877,8 +1063,14 @@ namespace
             g_core = core;
             expander_ = new (std::nothrow) Expander();
             fileFormat_ = new (std::nothrow) ArchiveFileFormat();
-            if (!expander_ || !fileFormat_)
+            fileInfoProvider_ = new (std::nothrow) ArchiveFileInfoProvider();
+            if (!expander_ || !fileFormat_ || !fileInfoProvider_)
             {
+                if (fileInfoProvider_)
+                {
+                    fileInfoProvider_->Release();
+                    fileInfoProvider_ = nullptr;
+                }
                 if (fileFormat_)
                 {
                     fileFormat_->Release();
@@ -912,6 +1104,13 @@ namespace
                 g_core = nullptr;
                 return status;
             }
+            const HRESULT fileInfoStatus = core->RegisterExtension(IID_IAIMPServiceFileInfo, fileInfoProvider_);
+            if (FAILED(fileInfoStatus))
+            {
+                DebugLogWrite("WARN", "AIMP", "FILEINFO_REGISTER_UNAVAILABLE", "hresult=0x%08X", static_cast<unsigned>(fileInfoStatus));
+                fileInfoProvider_->Release();
+                fileInfoProvider_ = nullptr;
+            }
             // Options registration is optional for older AIMP hosts; failure
             // must not disable the fully functional archive decoder.
             options_ = new (std::nothrow) OptionsFrame();
@@ -925,19 +1124,30 @@ namespace
                     options_ = nullptr;
                 }
             }
-            DebugLogWrite("INFO", "AIMP", "REGISTER_OK", "file_expander=1 | audio_extensions=1 | options=%d", options_ ? 1 : 0);
+            if (!InitializeArchiveTitleRefreshWindow())
+                DebugLogWrite("WARN", "AIMP", "TITLE_REFRESH_WINDOW_UNAVAILABLE", "reason=create_failed");
+            else
+                ScheduleArchiveTitleRefresh(1400); // existing saved playlists
+            DebugLogWrite("INFO", "AIMP", "REGISTER_OK", "file_expander=1 | audio_extensions=1 | fileinfo=%d | options=%d", fileInfoProvider_ ? 1 : 0, options_ ? 1 : 0);
             return S_OK;
         }
         HRESULT WINAPI Finalize() override
         {
             if (g_core)
             {
+                CloseArchiveTitleRefreshWindow();
                 DebugLogWrite("INFO", "AIMP", "PLUGIN_FINALIZE", "expander=%p | format=%p", expander_, fileFormat_);
                 if (options_)
                 {
                     g_core->UnregisterExtension(options_);
                     options_->Release();
                     options_ = nullptr;
+                }
+                if (fileInfoProvider_)
+                {
+                    g_core->UnregisterExtension(fileInfoProvider_);
+                    fileInfoProvider_->Release();
+                    fileInfoProvider_ = nullptr;
                 }
                 if (fileFormat_)
                 {
@@ -962,6 +1172,7 @@ namespace
         ComCounter refs_;
         Expander* expander_ = nullptr;
         ArchiveFileFormat* fileFormat_ = nullptr;
+        ArchiveFileInfoProvider* fileInfoProvider_ = nullptr;
         OptionsFrame* options_ = nullptr;
     };
 }

@@ -42,7 +42,9 @@ Preferences > Tools > Archive Stream has separate compact pages for
 Playback and cache, Passwords and Diagnostics. foobar2000 controls
 playlist title appearance directly.
 The "Shared settings..." button opens the included configure-adapters.ps1
-for the cache, password, track title and warmer options used by all players.
+for the cache, password, track title, prefix/postfix and warmer
+options used by all players. Prefix/postfix decorate preset titles only;
+Use File Tags displays embedded titles unchanged.
 Component details and project links are available under Preferences > Components.
 
 Archive Stream reads the shared registry settings under

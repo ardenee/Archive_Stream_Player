@@ -36,6 +36,7 @@ try {
         $install += " The separate launch-archive.ps1 native launcher passes 7z/RAR to XMPARC, but XMPlay handles verified simple unencrypted Store/Deflate ZIP internally before XMPARC."
         $install += " Built-in ZIP playback does not use Archive Stream's password/cache/title settings. Use -UseHttpBridge for the shared backend or unsupported/encrypted ZIP."
     }
+    $install += " Shared TitlePrefix/TitlePostfix values decorate preset titles only; Use File Tags displays embedded titles and overrides decorations."
     $install += " Shared settings location: HKCU\Software\ArchiveStreamPlayer\Adapters."
     $install += " Winamp and foobar2000 offer native preference pages as well as this shared settings UI."
     $install | Set-Content -Path (Join-Path $stage 'INSTALL.txt') -Encoding UTF8
