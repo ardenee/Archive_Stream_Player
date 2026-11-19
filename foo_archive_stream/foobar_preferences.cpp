@@ -296,6 +296,7 @@ namespace
                 SetDlgItemInt(hwnd_, IDC_CACHE_AGE_DAYS, static_cast<UINT>(settings.cacheAgeDays), FALSE);
                 SetChecked(hwnd_, IDC_CACHE_SIZE_CLEANUP, settings.cacheSizeCleanup);
                 SetChecked(hwnd_, IDC_CACHE_AGE_CLEANUP, settings.cacheAgeCleanup);
+                SetChecked(hwnd_, IDC_USE_FILE_TAGS, settings.useFileTags);
                 break;
             case ArchivePreferencesSection::Passwords:
                 SetUtf8(hwnd_, IDC_PASSWORD_PATH, settings.passwordListPath);
@@ -322,6 +323,7 @@ namespace
                     return false;
                 settings.cacheSizeCleanup = Checked(hwnd_, IDC_CACHE_SIZE_CLEANUP);
                 settings.cacheAgeCleanup = Checked(hwnd_, IDC_CACHE_AGE_CLEANUP);
+                settings.useFileTags = Checked(hwnd_, IDC_USE_FILE_TAGS);
                 return true;
             case ArchivePreferencesSection::Passwords:
                 settings.passwordListPath = ReadUtf8(hwnd_, IDC_PASSWORD_PATH, error);

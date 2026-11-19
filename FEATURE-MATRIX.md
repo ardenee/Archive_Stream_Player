@@ -6,14 +6,14 @@
 
 | Player | Archive/audio decoding | Encryption and solid archives | Playlist titles | Install |
 | --- | --- | --- | --- | --- |
-| **Winamp 32-bit** | Archive Stream handles the archive **and all seven listed audio formats** | Passwords; RAM/cache for entries that cannot stream | Shared title presets, with refresh support | Native plugin |
-| **WACUP 32-bit** | Same Winamp-compatible archive and audio modules | Same shared password/cache options | Embedded artist/title metadata remains stable through play/stop (ZIP, RAR and solid 7z validated in DEV) | Native plugin |
-| **foobar2000 32/64-bit** | Archive Stream opens archive; **foobar2000 decodes audio** | Archive Stream passwords, RAM and cache | Live title updates | Native component |
-| **AIMP 32/64-bit** | Archive Stream opens archive; **AIMP decodes audio** | Native AIMP preferences for passwords, RAM, managed cache, logging and title presets; shared registry settings | Title presets; already-queued rows may not redraw | Native plugin |
-| **XMPlay 32-bit** | Archive Stream handles **7z/RAR**; XMPlay can handle ordinary ZIP itself; **XMPlay decodes audio** | XMPlay Options → Decoders → Archive Stream Player (embedded SDK page), plus separate Config dialog; built-in ZIP bypasses Archive Stream controls | Native title presets; reimport existing tracks to update titles | Native archive plugin v0.2.4 |
-| **MusicBee 32-bit** | Native BASS decoder supports the seven listed formats in standalone tests; host playback regression is under verification | ZIP/7z/RAR passwords, RAM/cache and fallback | New-track titles; requeue after template changes | MusicBee rejected queued `.ast` files; the new zero-copy `.mp3` hard-link aliases pass native PCM/seek tests. Archive-only OLE drop handling is registered without replacing MusicBee targets. Native ZIP/7z/RAR descriptors persist across restarts (two-process path/PCM/seek tests pass); drops onto Tracks are intended to use MusicBee's SDK library-import API while drops onto Playing Tracks remain queue-only; live SDK probe confirmed six archive aliases actually in MusicBee's library; the Tracks view still showed no entries and the DisplayedFiles query returned false during startup. A delayed refresh and focused diagnostics are in place (live visual confirmation pending); BASS advertises the `.mp3` alias and preserves normal MP3 decoding, with host double-click playback awaiting confirmation |
-| **MediaMonkey 5 / 2024** | Archive Stream native input module plays **all seven listed formats** | ZIP/7z/RAR passwords, RAM/cache and fallback | Embedded ID3/FLAC/Ogg tags, track times and persistent playlists | Direct installer; drop into Now Playing, no extra Archive Stream Tools entries |
-| **VLC 3 64-bit** | Archive Stream opens archive; **VLC decodes audio** | Passwords, RAM/cache and fallback | Titles on newly opened albums | Native launcher |
+| **Winamp 32-bit** | Archive Stream handles archive and all seven audio formats | Passwords; RAM/cache when streaming is impossible | Title presets or optional embedded tags; background refresh | Native plugin |
+| **WACUP 32-bit** | Same Winamp-compatible modules | Shared password/cache options | Embedded artist/title/album metadata stable during play/stop in DEV | Native plugin |
+| **foobar2000 32/64-bit** | Archive Stream opens archive; host decodes audio | Passwords, RAM and cache | Use File Tags disables synthetic title override so host tag parsing can run | Native component |
+| **AIMP 32/64-bit** | Archive Stream opens archive; host decodes audio | Shared password, RAM, cache and logging | Use File Tags: direct-stream ID3/FLAC/Ogg Title/Artist/Album/Track/Genre/Date; filenames as fallback | Native plugin |
+| **XMPlay 32-bit** | Archive Stream opens 7z/RAR, host can open ZIP; XMPlay decodes audio | Native Options and Config | Use File Tags leaves entry names intact for native host tags; title presets available | Native archive plugin v0.2.4 |
+| **MusicBee 32-bit** | Native BASS archive PCM decoding, stream first | Passwords and RAM/cache fallback | ID3 metadata aliases (Title/Artist/Album/Track/Genre/Year); 9/9 real RAR rows and direct playback verified | Single native Archive Player playlist, versioned metadata paths and once-only migration; Clear List not auto-restored |
+| **MediaMonkey 5 / 2024** | Native archive audio decoding | ZIP/7z/RAR passwords and cache | Existing ID3/FLAC/Ogg tag reader, durations and persistent playlists | Direct installer / Now Playing drop |
+| **VLC 3 64-bit** | Archive Stream opens archive, VLC decodes audio | Passwords, RAM/cache | Bounded embedded Title probe in Use File Tags mode; real 9-track Tauregen RAR playlist passed | Native launcher |
 | **WACUP 64-bit** | Compatibility mode, **not a native plugin** | Depends on compatibility route | Playlist reload may be needed | Not a native installer selection |
 | **Windows Media Player** | Experimental compatibility only | Not certified | Not certified | Not in installer |
 
@@ -32,7 +32,9 @@
 | **Damaged file, missing volume or wrong password** | Reports a failure rather than pretending a track played |
 | **Uncommon unsupported compression or encrypted method** | May be rejected; it will not convert the archive to a different format |
 
-**RAM and cache settings** are the same shared preferences for all playback routes using Archive Stream's backend. XMPlay's own ZIP loader is **not** an Archive Stream route and therefore does not follow our ZIP password, RAM, cache or title controls. VLC's launcher can also override shared settings for that launch.
+**Use File Tags** is shared by all adapters and defaults off. When enabled, the synthetic title template is overridden where embedded tags are readable. Our bounded parser covers ID3v2, FLAC Vorbis comments and Ogg Vorbis/Opus; independently unstreamable solid/password entries fall back to filenames until the player decodes the audio. No metadata probe calculates archive CRCs or extracts an entire solid album. Some hosts need a playlist reload to repaint old rows.
+
+**RAM and cache settings** are the same shared preferences for all playback routes using Archive Stream backend. XMPlay built-in ZIP handling does not follow our ZIP cache/password/title controls; VLC launcher options may override shared preferences.
 
 ## What the plugin does not do
 

@@ -39,7 +39,8 @@ BEGIN
     LTEXT          "Archive track-title preset:", 4411, 12, 35, 197, 11
     COMBOBOX       4401, 12, 53, 197, 103, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT          "Applies to newly added archive tracks.", 4412, 12, 92, 197, 12
-    LTEXT          "Original audio tags are not modified.", 4413, 12, 112, 197, 12
+    LTEXT          "Original audio tags are not modified.", 4413, 12, 109, 197, 12
+    AUTOCHECKBOX   "Use File Tags (overrides title preset)", 4402, 12, 124, 197, 12
 
     PUSHBUTTON     "Save settings", 4002, 135, 148, 76, 15
 END
@@ -76,7 +77,8 @@ BEGIN
     LTEXT          "Archive track-title preset:", 4411, 16, 35, 220, 11
     COMBOBOX       4401, 16, 53, 222, 103, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT          "Applies to newly added archive tracks.", 4412, 16, 92, 230, 12
-    LTEXT          "The original audio tags are not modified.", 4413, 16, 112, 230, 12
+    LTEXT          "Original audio tags stay unchanged.", 4413, 16, 108, 230, 12
+    AUTOCHECKBOX   "Use File Tags (overrides title preset)", 4402, 16, 127, 230, 12
 
     PUSHBUTTON     "Apply", 4002, 94, 153, 49, 15
     DEFPUSHBUTTON  "OK", IDOK, 149, 153, 49, 15

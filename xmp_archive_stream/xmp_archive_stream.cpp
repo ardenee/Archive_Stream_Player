@@ -100,11 +100,11 @@ namespace
     std::string DisplayEntryName(const ArchiveEntry& entry, const std::set<std::string>& duplicates,
         const std::wstring& archive, const ArchiveAdapterPreferences& prefs)
     {
-        if (prefs.titleTemplate == L"<filename>" || prefs.titleTemplate.empty())
+        if (prefs.useFileTags || prefs.titleTemplate == L"<filename>" || prefs.titleTemplate.empty())
             return EntryName(entry, duplicates);
 
-        const std::wstring wide = ArchiveAdapterFormatTitle(archive, ArchiveAdapterUtf8ToWide(entry.path),
-            entry.index + 1, prefs.titleTemplate);
+        const std::wstring wide = ArchiveAdapterPreferredTitle(archive, ArchiveAdapterUtf8ToWide(entry.path),
+            entry.index + 1, prefs);
         std::wstring label = wide;
         for (wchar_t& c : label)
         {

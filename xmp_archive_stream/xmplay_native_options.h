@@ -117,7 +117,7 @@ private:
         PasswordPath = 4201, BrowsePassword = 4202, PromptPassword = 4203,
         SavePassword = 4204, PasswordLabel = 4211, PasswordHelp = 4212,
         EnableLogging = 4301, LogDirectory = 4302, OpenLog = 4303, LogLabel = 4311,
-        TitlePreset = 4401, TitleLabel = 4411, TitleHelp1 = 4412, TitleHelp2 = 4413
+        TitlePreset = 4401, UseFileTags = 4402, TitleLabel = 4411, TitleHelp1 = 4412, TitleHelp2 = 4413
     };
 
     static constexpr std::array<const wchar_t*, 6> TitlePresets = {
@@ -189,6 +189,7 @@ private:
         Check(dialog_, PromptPassword, values.promptPasswords);
         Check(dialog_, SavePassword, values.askToSavePassword);
         Check(dialog_, EnableLogging, values.debugLogging);
+        Check(dialog_, UseFileTags, values.useFileTags);
         SetDlgItemTextW(dialog_, PasswordPath, values.passwordListPath.c_str());
         SetDlgItemTextW(dialog_, LogDirectory, values.logDirectory.c_str());
         int index = 0;
@@ -221,6 +222,7 @@ private:
         values.promptPasswords = Checked(dialog_, PromptPassword);
         values.askToSavePassword = Checked(dialog_, SavePassword);
         values.debugLogging = Checked(dialog_, EnableLogging);
+        values.useFileTags = Checked(dialog_, UseFileTags);
         values.passwordListPath = ReadText(dialog_, PasswordPath);
         values.logDirectory = ReadText(dialog_, LogDirectory);
         const int selected = static_cast<int>(SendDlgItemMessageW(dialog_, TitlePreset, CB_GETCURSEL, 0, 0));
@@ -250,7 +252,7 @@ private:
             PasswordPath, BrowsePassword, PromptPassword, SavePassword, PasswordLabel, PasswordHelp
         };
         static constexpr int diagnostics[] = {EnableLogging, LogDirectory, OpenLog, LogLabel};
-        static constexpr int titles[] = {TitlePreset, TitleLabel, TitleHelp1, TitleHelp2};
+        static constexpr int titles[] = {TitlePreset, UseFileTags, TitleLabel, TitleHelp1, TitleHelp2};
         const std::array<const int*, 4> controls{playback, passwords, diagnostics, titles};
         const std::array<size_t, 4> sizes{
             std::size(playback), std::size(passwords), std::size(diagnostics), std::size(titles)

@@ -135,6 +135,7 @@ public:
         passwordPath_ = nullptr;
         logPath_ = nullptr;
         titlePreset_ = nullptr;
+        useFileTags_ = nullptr;
         autoCleanup_ = nullptr;
         warmSolid_ = nullptr;
         promptPasswords_ = nullptr;
@@ -162,6 +163,7 @@ public:
         SetChecked(promptPasswords_, current.promptPasswords);
         SetChecked(savePasswords_, current.askToSavePassword);
         SetChecked(debugLogging_, current.debugLogging);
+        SetChecked(useFileTags_, current.useFileTags);
         int selected = 0;
         for (size_t i = 0; i < presets_.size(); ++i)
         {
@@ -182,7 +184,8 @@ public:
             Checked(warmSolid_) == current.warmSolidArchives &&
             Checked(promptPasswords_) == current.promptPasswords &&
             Checked(savePasswords_) == current.askToSavePassword &&
-            Checked(debugLogging_) == current.debugLogging;
+            Checked(debugLogging_) == current.debugLogging &&
+            Checked(useFileTags_) == current.useFileTags;
         const bool pathMatch = GetText(passwordPath_) == current.passwordListPath &&
             GetText(logPath_) == current.logDirectory;
         DebugLogWrite(numericMatch && checkboxMatch && pathMatch ? "INFO" : "WARN", "AIMP", "SETTINGS_NATIVE_LOAD",
@@ -207,6 +210,7 @@ public:
         SetChecked(promptPasswords_, defaults.promptPasswords);
         SetChecked(savePasswords_, defaults.askToSavePassword);
         SetChecked(debugLogging_, defaults.debugLogging);
+        SetChecked(useFileTags_, defaults.useFileTags);
         titlePreset_->SetValueAsInt32(AIMPUI_COMBOBOX_PROPID_ITEMINDEX, 0);
         loading_ = false;
         MarkModified();
@@ -230,6 +234,7 @@ public:
         settings.promptPasswords = Checked(promptPasswords_);
         settings.askToSavePassword = Checked(savePasswords_);
         settings.debugLogging = Checked(debugLogging_);
+        settings.useFileTags = Checked(useFileTags_);
         settings.passwordListPath = GetText(passwordPath_);
         settings.logDirectory = GetText(logPath_);
         int selected = 0;
@@ -321,6 +326,7 @@ private:
     IAIMPUIEdit* passwordPath_ = nullptr;
     IAIMPUIEdit* logPath_ = nullptr;
     IAIMPUIComboBox* titlePreset_ = nullptr;
+    IAIMPUICheckBox* useFileTags_ = nullptr;
     IAIMPUICheckBox* autoCleanup_ = nullptr;
     IAIMPUICheckBox* warmSolid_ = nullptr;
     IAIMPUICheckBox* promptPasswords_ = nullptr;
@@ -506,8 +512,9 @@ private:
             if (FAILED(hr))
                 return false;
         }
-        Label(page, L"Controls archive-entry titles; embedded audio tags are not modified.", 64);
-        return true;
+        useFileTags_ = CheckBox(page, L"Use File Tags (overrides title preset)");
+        Label(page, L"Embedded Title, Artist, Album and Track # take priority when available; original audio stays unchanged.", 64);
+        return useFileTags_ != nullptr;
     }
     void BrowsePasswordList()
     {

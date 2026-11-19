@@ -27,6 +27,9 @@
     <Compile Include="Plugin.cs"/>
     <Compile Include="ArchiveDropIntegration.cs"/>
     <Compile Include="ArchiveDropLibraryRouting.cs"/>
+    <Compile Include="ArchivePlayerTab.cs"/>
+    <Compile Include="ArchivePlayerMetadata.cs"/>
+    <Compile Include="ArchivePlayerId3Alias.cs"/>
     <Compile Include="ArchiveOleDropTarget.cs"/>
     <Compile Include="$(MusicBeeSdkRoot)\MusicBeeInterface.cs" Link="MusicBeeInterface.cs"/>
   </ItemGroup>

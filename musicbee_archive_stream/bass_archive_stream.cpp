@@ -29,6 +29,7 @@
 #include "dr_flac.h"
 #include "mf_audio_decoder.h"
 #include "archive_adapter_preferences.h"
+#include "archive_track_tags.h"
 #include "archive_unified_cache.h"
 
 const BASS_FUNCTIONS* bassfunc = nullptr;
@@ -245,7 +246,8 @@ struct ArchivePcm
     DWORD channels = 0;
     DWORD sampleRate = 0;
     QWORD pcmBytes = 0;
-    std::vector<char> displayTitleTags; // BASS TAG_* UTF-8 TITLE=<shared preset>, double-NUL
+    std::vector<char> displayTitleTags; // BASS TAG_* UTF-8 metadata, double-NUL
+    std::vector<unsigned char> displayId3; // Verified ID3 metadata alias, BASS_TAG_ID3V2
 
     static const ADDON_FUNCTIONS callbacks;
     static void WINAPI Free(void* ptr);
@@ -921,7 +923,11 @@ QWORD WINAPI ArchivePcm::Length(void* ptr, DWORD mode)
 const char* WINAPI ArchivePcm::GetTags(void* ptr, DWORD type)
 {
     auto* state = static_cast<ArchivePcm*>(ptr);
-    if (!state || state->displayTitleTags.empty())
+    if (!state)
+        return nullptr;
+    if (type == BASS_TAG_ID3V2 && !state->displayId3.empty())
+        return reinterpret_cast<const char*>(state->displayId3.data());
+    if (state->displayTitleTags.empty())
         return nullptr;
     switch (type)
     {
@@ -1082,6 +1088,53 @@ static bool ConvertDescriptorName(BASSFILE file, std::string& path)
     return true;
 }
 
+
+// Native ID3 metadata aliases are separate, tiny files. The paired .ast
+// remains an unmodified text manifest. Accept ID3 aliases only if their
+// complete trailing manifest byte-for-byte matches a valid paired .ast file.
+// Existing same-file hard-link aliases retain their original verification.
+static bool MusicBeeValidateId3Alias(const std::string& aliasPath, const std::string& manifestPath,
+    std::vector<unsigned char>& id3)
+{
+    id3.clear();
+    std::ifstream input(aliasPath, std::ios::binary | std::ios::ate);
+    std::ifstream manifest(manifestPath, std::ios::binary | std::ios::ate);
+    if (!input || !manifest)
+        return false;
+
+    const std::streamoff aliasLength = input.tellg();
+    const std::streamoff manifestLength = manifest.tellg();
+    if (aliasLength <= 50 || aliasLength > 32768 || manifestLength < 36 || manifestLength > 16384)
+        return false;
+
+    std::vector<unsigned char> alias(static_cast<size_t>(aliasLength));
+    std::vector<unsigned char> original(static_cast<size_t>(manifestLength));
+    input.seekg(0);
+    manifest.seekg(0);
+    if (!input.read(reinterpret_cast<char*>(alias.data()), static_cast<std::streamsize>(alias.size())) ||
+        !manifest.read(reinterpret_cast<char*>(original.data()), static_cast<std::streamsize>(original.size())))
+        return false;
+    if (std::memcmp(alias.data(), "ID3\x03\0\0", 6) != 0)
+        return false;
+    for (size_t i = 6; i <= 9; ++i)
+    {
+        if (alias[i] & 0x80)
+            return false;
+    }
+
+    const size_t tagLength = 10 + (size_t(alias[6]) << 21) + (size_t(alias[7]) << 14) +
+        (size_t(alias[8]) << 7) + alias[9];
+    if (tagLength <= 20 || tagLength + original.size() != alias.size() ||
+        std::memcmp(alias.data() + tagLength, original.data(), original.size()) != 0)
+        return false;
+
+    ArchiveTrackTags tags{};
+    if (!ArchiveTrackTagParser::Parse("mp3", alias.data(), tagLength, tags) || tags.title.empty())
+        return false;
+    id3.assign(alias.begin(), alias.begin() + tagLength);
+    return true;
+}
+
 static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
 {
     if (gOpeningNestedFile)
@@ -1100,6 +1153,7 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     }
     Trace("DESCRIPTOR_NAME_OK", "");
     bool manifestValid = ArchiveNativeTrackRead(descriptorPath.c_str(), virtualTrack);
+    std::vector<unsigned char> verifiedId3;
     // MusicBee's playlist admits ordinary audio filenames, not .ast files.
     // A .mp3 alias is a zero-copy hard link to the real .ast descriptor:
     // validate the paired .ast file with the existing strict parser before
@@ -1127,6 +1181,12 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
                 CloseHandle(original);
             if (manifestValid)
                 Trace("MANIFEST_MP3_ALIAS_VALID", "link=verified");
+            else
+            {
+                manifestValid = MusicBeeValidateId3Alias(descriptorPath, manifestPath, verifiedId3);
+                if (manifestValid)
+                    Trace("MANIFEST_MP3_ID3_ALIAS_VALID", "manifest=byte_equal");
+            }
         }
     }
     if (!manifestValid)
@@ -1141,9 +1201,9 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     mz_uint index = 0;
     if (!ParseVirtualArchivePath(virtualTrack.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
         return 0;
-    const auto title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archive),
+    const auto title = ArchiveAdapterPreferredTitle(ArchiveAdapterUtf8ToWide(archive),
         ArchiveAdapterUtf8ToWide(member), static_cast<unsigned>(index) + 1,
-        ArchiveAdapterPreferencesLoad().titleTemplate);
+        ArchiveAdapterPreferencesLoad());
     const std::string titleUtf8 = ArchiveAdapterWideToUtf8(title);
     if (titleUtf8.empty() || titleUtf8.size() > 4096 ||
         titleUtf8.find('\r') != std::string::npos || titleUtf8.find('\n') != std::string::npos ||
@@ -1157,9 +1217,29 @@ static HSTREAM WINAPI CreateArchiveStream(BASSFILE descriptor, DWORD flags)
     Trace("MANIFEST_OK", FormatNote(format));
     MusicBeeInitializePasswordBackend();
     auto state = std::make_unique<ArchivePcm>();
-    const std::string titleField = "TITLE=" + titleUtf8;
-    state->displayTitleTags.assign(titleField.begin(), titleField.end());
-    state->displayTitleTags.push_back('\0');
+    state->displayId3 = std::move(verifiedId3);
+    ArchiveTrackTags aliasTags{};
+    const bool tagMode = ArchiveAdapterPreferencesLoad().useFileTags && !state->displayId3.empty() &&
+        ArchiveTrackTagParser::Parse("mp3", state->displayId3.data(), state->displayId3.size(), aliasTags);
+    auto appendTag = [&state](const std::string& key, const std::string& value)
+    {
+        if (value.empty())
+            return;
+        const std::string item = key + "=" + value;
+        state->displayTitleTags.insert(state->displayTitleTags.end(), item.begin(), item.end());
+        state->displayTitleTags.push_back('\0');
+    };
+    appendTag("TITLE", tagMode && !aliasTags.title.empty() ? aliasTags.title : titleUtf8);
+    if (tagMode)
+    {
+        appendTag("ARTIST", aliasTags.artist);
+        appendTag("ALBUM", aliasTags.album);
+        appendTag("ALBUMARTIST", aliasTags.albumArtist);
+        if (aliasTags.trackNumber)
+            appendTag("TRACKNUMBER", std::to_string(aliasTags.trackNumber));
+        appendTag("GENRE", aliasTags.genre);
+        appendTag("DATE", aliasTags.year);
+    }
     state->displayTitleTags.push_back('\0');
     state->format = format;
     state->archivePathUtf8 = archive;
@@ -2109,9 +2189,9 @@ extern "C" int __stdcall ArchiveStreamFormatNativeTitleW(const wchar_t* virtualT
         mz_uint index = 0;
         if (!ParseVirtualArchivePath(encoded.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
             return 0;
-        const std::wstring title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archive),
+        const std::wstring title = ArchiveAdapterPreferredTitle(ArchiveAdapterUtf8ToWide(archive),
             ArchiveAdapterUtf8ToWide(member), static_cast<unsigned>(index) + 1,
-            ArchiveAdapterPreferencesLoad().titleTemplate);
+            ArchiveAdapterPreferencesLoad());
         if (title.empty() || title.size() >= capacity)
             return 0;
         std::copy_n(title.c_str(), title.size() + 1, output);
@@ -2122,6 +2202,74 @@ extern "C" int __stdcall ArchiveStreamFormatNativeTitleW(const wchar_t* virtualT
         return 0;
     }
 }
+
+// A bounded, read-only metadata probe for MusicBee's background title update.
+// Do not use for solid/encrypted entries: those must never be decompressed just
+// to populate playlist metadata. Percent-encoded UTF-8 TSV avoids delimiter
+// injection, leaves archive bytes intact and never generates content CRCs.
+extern "C" int __stdcall ArchiveStreamReadNativeFileTagsW(const wchar_t* virtualTrack, wchar_t* output, DWORD capacity)
+{
+    if (!virtualTrack || !*virtualTrack || !output || capacity < 2 || capacity > 16384)
+        return 0;
+    output[0] = L'\0';
+    try
+    {
+        const std::string virtualUtf8 = ArchiveAdapterWideToUtf8(virtualTrack);
+        if (virtualUtf8.empty() || virtualUtf8.size() > 16384)
+            return 0;
+        char archive[MAX_PATH * 4]{};
+        char member[1024]{};
+        mz_uint index = 0;
+        if (!ParseVirtualArchivePath(virtualUtf8.c_str(), archive, sizeof(archive), &index, member, sizeof(member)))
+            return 0;
+        const std::string ext = std::filesystem::path(member).extension().string();
+        if (ext != ".mp3" && ext != ".flac" && ext != ".ogg" && ext != ".opus")
+            return 0;
+        if (ArchiveGetEntryStreamCapability(archive, index) != ARCHIVE_STREAM_CAPABILITY_SUPPORTED)
+            return 0;
+
+        ArchiveStreamContext stream{};
+        std::string error;
+        if (!ArchiveOpenValidatedEntryStream(&stream, archive, index, 4096, &error))
+            return 0;
+        constexpr size_t maxTagPrefix = 256 * 1024;
+        std::vector<unsigned char> prefix(maxTagPrefix);
+        size_t bytes = 0;
+        while (bytes < prefix.size())
+        {
+            const size_t count = ArchiveReadEntryStream(&stream, prefix.data() + bytes, prefix.size() - bytes);
+            if (!count)
+                break;
+            bytes += count;
+            // Try parsing after each read; most ID3 and Vorbis tags are small.
+            ArchiveTrackTags early{};
+            if (bytes >= 4096 && ArchiveTrackTagParser::Parse(ext.substr(1), prefix.data(), bytes, early) && early.Any())
+                break;
+        }
+        ArchiveCloseEntryStream(&stream);
+        ArchiveTrackTags tags{};
+        if (!ArchiveTrackTagParser::Parse(ext.substr(1), prefix.data(), bytes, tags) || !tags.Any())
+            return 0;
+        const std::string encoded = ArchiveTrackTagParser::Escape(tags.title) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.artist) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.album) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.albumArtist) + "\t" +
+            std::to_string(tags.trackNumber) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.genre) + "\t" +
+            ArchiveTrackTagParser::Escape(tags.year);
+        const std::wstring wide = ArchiveAdapterUtf8ToWide(encoded);
+        if (wide.empty() || wide.size() >= capacity)
+            return 0;
+        std::copy_n(wide.c_str(), wide.size() + 1, output);
+        return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+extern "C" int __stdcall ArchiveStreamSupportsMusicBeeTagAlias() { return 2; }
 
 extern "C" const void* WINAPI BASSplugin(DWORD face)
 {

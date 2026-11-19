@@ -44,15 +44,20 @@ Install this package into the MusicBee application folder:
   Plugins\archive_player_bridge.exe
   Plugins\configure-adapters.ps1
 
-Restart MusicBee. Drag ZIP, 7z or RAR albums into the player
-or use Tools > Archive Stream: Add Archive Audio.
+Restart MusicBee. Drag ZIP, 7z or RAR albums onto a supported
+MusicBee pane or use Tools > Archive Stream: Add Archive Audio.
+The native Archive Player playlist tab opens automatically and persists.
+Use Tools > Archive Stream: Open Archive Player to reopen its tab.
 Use Tools > Archive Stream: Settings for cache and password options.
 
 Play MP3, WAV, FLAC, OGG Vorbis, AAC, M4A and WMA. Supported solid
 or encrypted archives may use memory or the managed cache when direct
 streaming is not available. Passwords are stored only with permission.
-Changing title preferences for existing MusicBee queue entries may
-require re-adding those entries.
+Use Shared Settings > Use File Tags to show embedded Title / Artist /
+Album / Track # / Genre / Year instead of synthetic filename titles.
+MusicBee stores small ID3 aliases rather than extracted audio; original
+archives and .ast descriptors remain unchanged. Old playlist references
+stay playable while existing Archive Player rows upgrade safely.
 
 Do not replace the MusicBee bass.dll or install another BASS runtime.
 The package does not include third-party BASS runtime binaries.

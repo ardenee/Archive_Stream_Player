@@ -133,6 +133,7 @@ namespace MusicBeePlugin
                     IsArchivePath, QueueArchiveDropFiles, Trace);
                 Trace("ARCHIVE_DROP_HOOK_READY main=" + root.GetType().Name +
                     " targets=" + archiveDropTargets.Count + " observed=" + archiveDropObserved.Count);
+                ScheduleArchivePlayerStartup();
             }
             catch (Exception error)
             {
@@ -266,28 +267,27 @@ namespace MusicBeePlugin
                     if (archiveDropClosing || tracks.Length == 0)
                         continue;
 
-                    if (destination == ArchiveDropDestination.MusicLibrary)
+                    // Archive files always open the dedicated, persistent
+                    // MusicBee playlist tab, regardless of which host pane
+                    // accepted the original archive drop.
+                    if (OpenArchivePlayerTab(tracks))
                     {
-                        int imported = ImportNativeArchiveTracksIntoLibrary(tracks);
-                        if (imported != tracks.Length)
-                        {
-                            MessageBox.Show("Only " + imported + " of " + tracks.Length +
-                                " archive tracks were accepted into the MusicBee library. The archive must remain in its original location.",
-                                "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        }
-                        if (imported > 0)
-                            StartPlaybackDiagnostics();
+                        Trace("ARCHIVE_DROP_TAB_RESULT success=1 tracks=" + tracks.Length +
+                            " extension=" + Path.GetExtension(archive));
                     }
                     else
                     {
+                        // Keep the previously working native queue as a
+                        // compatibility fallback if a host lacks playlist APIs.
                         bool queued = api.NowPlayingList_QueueFilesLast != null &&
                             api.NowPlayingList_QueueFilesLast(tracks);
-                        Trace("ARCHIVE_DROP_QUEUE_RESULT queued=" + (queued ? "1" : "0") +
-                            " tracks=" + tracks.Length + " extension=" + Path.GetExtension(archive));
+                        Trace("ARCHIVE_DROP_FALLBACK_QUEUE queued=" + (queued ? "1" : "0") +
+                            " tracks=" + tracks.Length + " extension=" + Path.GetExtension(archive) +
+                            " original_destination=" + destination);
                         if (queued)
                             StartPlaybackDiagnostics();
                         else
-                            MessageBox.Show("MusicBee did not accept the archive tracks.",
+                            MessageBox.Show("MusicBee could not add these archive tracks.",
                                 "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
                 }

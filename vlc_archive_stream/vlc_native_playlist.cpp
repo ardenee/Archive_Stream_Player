@@ -9,6 +9,7 @@
 #include "archive_common.h"
 #include "archive_passwords.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_adapter_tag_probe.h"
 #include "../shared/archive_adapter_logging.h"
 #include <algorithm>
 #include <cstdint>
@@ -93,8 +94,10 @@ std::string EncodeUri(const std::wstring& archive, const ArchiveEntry& entry)
 
 std::string SafeTitle(const std::wstring& archive, const ArchiveEntry& entry, const ArchiveAdapterPreferences& settings)
 {
-    std::wstring title = ArchiveAdapterFormatTitle(archive, ArchiveAdapterUtf8ToWide(entry.path),
-        entry.index + 1, settings.titleTemplate);
+    ArchiveTrackTags tags{};
+    const bool tagged = settings.useFileTags && ArchiveAdapterProbeEntryTags(archive, entry, tags);
+    std::wstring title = ArchiveAdapterPreferredTitle(archive, ArchiveAdapterUtf8ToWide(entry.path),
+        entry.index + 1, settings, tagged ? ArchiveAdapterUtf8ToWide(tags.title) : std::wstring());
     if (title.empty())
         title = ArchiveAdapterUtf8ToWide(entry.path);
     std::string utf8 = ArchiveAdapterWideToUtf8(title);

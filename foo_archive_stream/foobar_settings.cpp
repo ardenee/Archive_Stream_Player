@@ -26,6 +26,7 @@ namespace
     cfg_string cfgPasswords({ 0x25e4857c, 0x58b2, 0x4fe6, {0xb5,0x43,0xce,0x0d,0x5d,0xb4,0x00,0x09} }, "");
     cfg_int cfgDebugEnabled({ 0x25e4857c, 0x58b2, 0x4fe6, {0xb5,0x43,0xce,0x0d,0x5d,0xb4,0x00,0x0a} }, 0);
     cfg_string cfgDebugPath({ 0x25e4857c, 0x58b2, 0x4fe6, {0xb5,0x43,0xce,0x0d,0x5d,0xb4,0x00,0x0b} }, "");
+    cfg_int cfgUseFileTags({ 0x25e4857c, 0x58b2, 0x4fe6, {0xb5,0x43,0xce,0x0d,0x5d,0xb4,0x00,0x0c} }, 0);
 
     std::string ReadString(cfg_string& value)
     {
@@ -62,6 +63,7 @@ FoobarArchiveSettings FoobarArchiveSettingsLoad()
     settings.displayPrefix = ReadString(cfgPrefix);
     settings.displayPostfix = ReadString(cfgPostfix);
     settings.displayTemplate = ReadString(cfgTemplate);
+    settings.useFileTags = cfgUseFileTags.get() != 0;
     settings.passwordListPath = ReadString(cfgPasswords);
     settings.debugLogging = cfgDebugEnabled.get() != 0;
     settings.debugLogPath = ReadString(cfgDebugPath);
@@ -76,6 +78,7 @@ FoobarArchiveSettings FoobarArchiveSettingsLoad()
         settings.cacheAgeDays = static_cast<int>(common.cacheAgeDays);
         settings.passwordListPath = ArchiveAdapterWideToUtf8(common.passwordListPath);
         settings.displayTemplate = ArchiveAdapterWideToUtf8(common.titleTemplate);
+        settings.useFileTags = common.useFileTags;
         settings.debugLogging = common.debugLogging;
     }
 
@@ -137,6 +140,7 @@ bool FoobarArchiveSettingsSave(const FoobarArchiveSettings& requested, std::stri
     cfgPrefix = settings.displayPrefix.c_str();
     cfgPostfix = settings.displayPostfix.c_str();
     cfgTemplate = settings.displayTemplate.c_str();
+    cfgUseFileTags = settings.useFileTags ? 1 : 0;
     cfgPasswords = settings.passwordListPath.c_str();
     cfgDebugEnabled = settings.debugLogging ? 1 : 0;
     cfgDebugPath = settings.debugLogPath.c_str();
@@ -146,6 +150,7 @@ bool FoobarArchiveSettingsSave(const FoobarArchiveSettings& requested, std::stri
     common.cacheLimitMb = static_cast<unsigned>(settings.cacheSizeMb);
     common.cacheAgeDays = static_cast<unsigned>(settings.cacheAgeDays);
     common.debugLogging = settings.debugLogging;
+    common.useFileTags = settings.useFileTags;
     common.passwordListPath = ArchiveAdapterUtf8ToWide(settings.passwordListPath);
     if (!settings.displayTemplate.empty())
         common.titleTemplate = ArchiveAdapterUtf8ToWide(settings.displayTemplate);

@@ -18,3 +18,4 @@
 #define IDC_CACHE_VIEW            2211
 #define IDC_CACHE_CLEAR           2212
 #define IDC_SHARED_SETTINGS       2214
+#define IDC_USE_FILE_TAGS          2215

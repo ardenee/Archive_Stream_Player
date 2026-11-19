@@ -211,6 +211,8 @@ namespace MusicBeePlugin
                 Trace(item == null ? "MENU_ITEM_FAILED" : "MENU_ITEM_REGISTERED");
                 api.MB_AddMenuItem("mnuTools/Archive Stream: Settings...",
                     "Configure shared titles, cache cleanup, passwords and diagnostic logging", OnShowSettings);
+                api.MB_AddMenuItem("mnuTools/Archive Stream: Open Archive Player",
+                    "Open or restore the Archive Player tab", OnOpenArchivePlayer);
             }
             return info;
         }
@@ -235,15 +237,20 @@ namespace MusicBeePlugin
                         Trace("NATIVE_PASSWORD_NO_QUEUE bridge=0");
                         return;
                     }
-                    bool queued = tracks.Length > 0 && api.NowPlayingList_QueueFilesLast != null &&
-                        api.NowPlayingList_QueueFilesLast(tracks);
-                    Trace("QUEUE_RESULT accepted=" + (queued ? "1" : "0") + " tracks=" + tracks.Length);
-                    if (queued)
-                        StartPlaybackDiagnostics();
-                    if (!queued)
+                    bool opened = OpenArchivePlayerTab(tracks);
+                    Trace("ADD_ARCHIVE_TAB_RESULT opened=" + (opened ? "1" : "0") +
+                        " tracks=" + tracks.Length);
+                    if (!opened)
                     {
-                        MessageBox.Show("MusicBee did not accept the archive audio tracks.",
-                            "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        bool queued = api.NowPlayingList_QueueFilesLast != null &&
+                            api.NowPlayingList_QueueFilesLast(tracks);
+                        Trace("ADD_ARCHIVE_FALLBACK_QUEUE queued=" + (queued ? "1" : "0") +
+                            " tracks=" + tracks.Length);
+                        if (queued)
+                            StartPlaybackDiagnostics();
+                        else
+                            MessageBox.Show("MusicBee did not accept the archive audio tracks.",
+                                "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
                 }
                 catch (Exception e)
@@ -394,6 +401,9 @@ namespace MusicBeePlugin
         private static string[] CreateMusicBeePlayableAliases(List<string> descriptors)
         {
             var aliases = new List<string>(descriptors.Count);
+            bool nativeId3 = NativeSupportsId3Alias();
+            bool useTags = UseArchiveFileTags();
+            int id3Count = 0;
             foreach (string descriptor in descriptors)
             {
                 if (!descriptor.EndsWith(".ast", StringComparison.OrdinalIgnoreCase) || !File.Exists(descriptor))
@@ -403,15 +413,39 @@ namespace MusicBeePlugin
                 }
 
                 string alias = Path.ChangeExtension(descriptor, ".mp3");
-                if (File.Exists(alias) || !CreateNativeDescriptorHardLink(alias, descriptor, IntPtr.Zero))
+                if (File.Exists(alias))
                 {
-                    Trace("NATIVE_ALIAS_FAIL reason=hardlink_unavailable win32=" + Marshal.GetLastWin32Error());
+                    Trace("NATIVE_ALIAS_FAIL reason=alias_already_exists");
+                    return null;
+                }
+
+                bool created = false;
+                if (nativeId3)
+                {
+                    try
+                    {
+                        CreateId3ManifestAlias(descriptor, alias, useTags);
+                        created = true;
+                        ++id3Count;
+                    }
+                    catch (Exception error)
+                    {
+                        Trace("NATIVE_ID3_ALIAS_FALLBACK reason=" + error.GetType().Name);
+                        if (File.Exists(alias))
+                            File.Delete(alias);
+                    }
+                }
+                if (!created && !CreateNativeDescriptorHardLink(alias, descriptor, IntPtr.Zero))
+                {
+                    Trace("NATIVE_ALIAS_FAIL reason=metadata_alias_unavailable win32=" + Marshal.GetLastWin32Error());
                     return null;
                 }
                 aliases.Add(alias);
             }
 
-            Trace("NATIVE_ALIAS_READY count=" + aliases.Count + " transport=HARDLINK_TO_AST stream=1");
+            Trace("NATIVE_ALIAS_READY count=" + aliases.Count + " id3=" + id3Count +
+                " fallback_hardlinks=" + (aliases.Count - id3Count) +
+                " use_tags=" + (useTags ? "1" : "0") + " stream=1");
             return aliases.ToArray();
         }
 
@@ -478,11 +512,25 @@ namespace MusicBeePlugin
                         }
                     }
 
-                    if (!File.Exists(persistentAlias) &&
-                        !CreateNativeDescriptorHardLink(persistentAlias, persistentDescriptor, IntPtr.Zero))
-                        throw new IOException("Failed to create a persistent archive hard link (Win32 " +
-                            Marshal.GetLastWin32Error().ToString(System.Globalization.CultureInfo.InvariantCulture) + ").");
-                    paths.Add(persistentAlias);
+                    // The alias now contains a valid ID3 metadata block and
+                    // the exact original .ast text as a verified trailing
+                    // reference. Never overwrite the .ast through a hard link.
+                    if (IsId3Alias(temporaryAlias))
+                    {
+                        // Fresh MusicBee URLs let its own ID3 reader populate
+                        // Title / Artist / Album / Track No. Legacy URLs and
+                        // playback queues remain valid alongside the new ones.
+                        string versioned = VersionedMusicBeeAlias(persistentDescriptor,
+                            UseArchiveFileTags(), temporaryAlias);
+                        paths.Add(versioned);
+                    }
+                    else
+                    {
+                        PersistMusicBeeAlias(temporaryAlias, persistentAlias);
+                        if (!File.Exists(persistentAlias))
+                            throw new IOException("Failed to persist a native archive alias.");
+                        paths.Add(persistentAlias);
+                    }
                 }
             }
             Trace("NATIVE_PERSIST_READY root=LOCALAPPDATA tracks=" + paths.Count + " source=" + Path.GetExtension(archive));

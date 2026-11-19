@@ -9,6 +9,7 @@ param(
     [Nullable[bool]]$SetWarmSolidArchives = $null,
     [string]$SetPasswordList = '',
     [string]$SetTitleTemplate = '',
+    [Nullable[bool]]$SetUseFileTags = $null,
     [Nullable[bool]]$SetPromptPasswords = $null,
     [Nullable[bool]]$SetAskToSavePassword = $null,
     [Nullable[bool]]$SetDebugLogging = $null,
@@ -42,6 +43,7 @@ function Read-AdapterSettings {
         WarmSolidArchives = [bool](& $get 'WarmSolidArchives' 1)
         PasswordList = [string](& $get 'PasswordList' '')
         TitleTemplate = [string](& $get 'TitleTemplate' '<filename>')
+        UseFileTags = [bool](& $get 'UseFileTags' 0)
         PromptPasswords = [bool](& $get 'PromptPasswords' 1)
         AskToSavePassword = [bool](& $get 'AskToSavePassword' 1)
         DebugLogging = [bool](& $get 'DebugLogging' 0)
@@ -61,7 +63,7 @@ function Write-AdapterSettings($settings) {
     foreach ($number in @('MemoryMB','CacheLimitMB','CacheAgeDays')) {
         New-ItemProperty -LiteralPath $path -Name $number -Value ([int]$settings.$number) -PropertyType DWord -Force | Out-Null
     }
-    foreach ($flag in @('PromptPasswords','AskToSavePassword','CacheAutoCleanup','WarmSolidArchives','DebugLogging')) {
+    foreach ($flag in @('PromptPasswords','AskToSavePassword','CacheAutoCleanup','WarmSolidArchives','DebugLogging','UseFileTags')) {
         New-ItemProperty -LiteralPath $path -Name $flag -Value ([int][bool]$settings.$flag) -PropertyType DWord -Force | Out-Null
     }
     foreach ($field in @('TitleTemplate','PasswordList','LogDirectory')) {
@@ -189,6 +191,7 @@ if ($null -ne $SetCacheAutoCleanup) { $config.CacheAutoCleanup = [bool]$SetCache
 if ($null -ne $SetWarmSolidArchives) { $config.WarmSolidArchives = [bool]$SetWarmSolidArchives; $set = $true }
 if ($SetPasswordList) { $config.PasswordList = $SetPasswordList; $set = $true }
 if ($SetTitleTemplate) { $config.TitleTemplate = $SetTitleTemplate; $set = $true }
+if ($null -ne $SetUseFileTags) { $config.UseFileTags = [bool]$SetUseFileTags; $set = $true }
 if ($null -ne $SetPromptPasswords) { $config.PromptPasswords = [bool]$SetPromptPasswords; $set = $true }
 if ($null -ne $SetAskToSavePassword) { $config.AskToSavePassword = [bool]$SetAskToSavePassword; $set = $true }
 if ($null -ne $SetDebugLogging) { $config.DebugLogging = [bool]$SetDebugLogging; $set = $true }
@@ -216,7 +219,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $form = New-Object Windows.Forms.Form
 $form.Text = 'Archive Stream Player - Settings (all players)'
-$form.ClientSize = New-Object Drawing.Size(650,740)
+$form.ClientSize = New-Object Drawing.Size(650,780)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
@@ -308,29 +311,34 @@ if ($title.SelectedIndex -ge 0) {
     $example = $example.Replace('<filetype>', 'mp3').Replace('<archive>', 'Album').Replace('<#>', '1')
     $titlePreview.Text = "Example title: $example"
 }
+$useFileTags = New-Object Windows.Forms.CheckBox
+$useFileTags.Text = 'Use File Tags (overrides title preset when tags are available)'
+$useFileTags.Location = New-Object Drawing.Point(20,418)
+$useFileTags.Width=570; $useFileTags.Checked=$config.UseFileTags
+$form.Controls.Add($useFileTags)
 $logging = New-Object Windows.Forms.CheckBox
 $logging.Text = 'Enable diagnostic logging for all players'
-$logging.Location = New-Object Drawing.Point(20,417)
+$logging.Location = New-Object Drawing.Point(20,453)
 $logging.Width=340; $logging.Checked=$config.DebugLogging
 $form.Controls.Add($logging)
-Label 20 451 'Log folder (blank = local ArchiveStreamPlayer Logs folder)'|Out-Null
+Label 20 487 'Log folder (blank = local ArchiveStreamPlayer Logs folder)'|Out-Null
 $logs = New-Object Windows.Forms.TextBox
-$logs.Location = New-Object Drawing.Point(20,475)
+$logs.Location = New-Object Drawing.Point(20,511)
 $logs.Width=490; $logs.Text=$config.LogDirectory
 $form.Controls.Add($logs)
-$browseLogs = Button 520 472 105 'Browse...'
+$browseLogs = Button 520 508 105 'Browse...'
 $browseLogs.Add_Click({
     $picker = New-Object Windows.Forms.FolderBrowserDialog
     $picker.Description='Select a folder for per-player diagnostic logs'
     if($picker.ShowDialog() -eq 'OK') { $logs.Text=$picker.SelectedPath }
 })
-Label 20 512 'Fallback cache is shared across players and reused when a track is requested again.'|Out-Null
-$cacheStatus=Label 20 540 (Get-CacheSummary)
-$managedStatus=Label 20 563 (Get-ManagedCacheSummary)
-$logStatus=Label 20 586 (Get-LogSummary)
-$open = Button 20 643 135 'Open temp folder'
+Label 20 548 'Fallback cache is shared across players and reused when a track is requested again.'|Out-Null
+$cacheStatus=Label 20 576 (Get-CacheSummary)
+$managedStatus=Label 20 599 (Get-ManagedCacheSummary)
+$logStatus=Label 20 622 (Get-LogSummary)
+$open = Button 20 679 135 'Open temp folder'
 $open.Add_Click({ Start-Process explorer.exe -ArgumentList @($env:TEMP) })
-$clear = Button 166 643 169 'Clear stale temp cache'
+$clear = Button 166 679 169 'Clear stale temp cache'
 $clear.Add_Click({
     try {
         $count=Clear-StaleSessions
@@ -340,13 +348,13 @@ $clear.Add_Click({
         [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Cannot clear cache')|Out-Null
     }
 })
-$managedOpen = Button 20 609 150 'Open managed cache'
+$managedOpen = Button 20 645 150 'Open managed cache'
 $managedOpen.Add_Click({
     $folder=Get-ManagedCacheFolder
     if (-not (Test-Path -LiteralPath $folder -PathType Container)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
     Start-Process explorer.exe -ArgumentList @($folder)
 })
-$managedClear = Button 181 609 170 'Clear managed cache'
+$managedClear = Button 181 645 170 'Clear managed cache'
 $managedClear.Add_Click({
     try {
         if ([Windows.Forms.MessageBox]::Show('Delete all reusable Archive Stream Player track files?','Clear managed cache', 'YesNo', 'Warning') -ne 'Yes') { return }
@@ -355,7 +363,7 @@ $managedClear.Add_Click({
         [Windows.Forms.MessageBox]::Show("Removed $count cached tracks.",'Archive Stream')|Out-Null
     } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Cannot clear managed cache')|Out-Null }
 })
-$logsOpen = Button 362 609 126 'Open logs folder'
+$logsOpen = Button 362 645 126 'Open logs folder'
 $logsOpen.Add_Click({
     try {
         $folder = if ($logs.Text) { [IO.Path]::GetFullPath($logs.Text) } else { Join-Path $env:LOCALAPPDATA 'ArchiveStreamPlayer\Logs' }
@@ -363,7 +371,7 @@ $logsOpen.Add_Click({
         Start-Process explorer.exe -ArgumentList @($folder)
     } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Cannot open log folder')|Out-Null }
 })
-$logsClear = Button 362 643 126 'Clear all logs'
+$logsClear = Button 362 679 126 'Clear all logs'
 $logsClear.Add_Click({
     try {
         if ([Windows.Forms.MessageBox]::Show('Delete shared diagnostic logs? Files currently in use will be kept.','Clear Archive Stream logs', 'YesNo', 'Warning') -ne 'Yes') { return }
@@ -373,8 +381,8 @@ $logsClear.Add_Click({
         [Windows.Forms.MessageBox]::Show("Removed $count log files.",'Archive Stream')|Out-Null
     } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Cannot clear logs')|Out-Null }
 })
-$ok = Button 442 693 86 'Save'
-$cancel = Button 538 693 86 'Cancel'
+$ok = Button 442 729 86 'Save'
+$cancel = Button 538 729 86 'Cancel'
 $cancel.Add_Click({ $form.Close() })
 $ok.Add_Click({
     $requested = [PSCustomObject]@{
@@ -382,6 +390,7 @@ $ok.Add_Click({
         CacheAgeDays=[int]$age.Value; CacheAutoCleanup=[bool]$autoCleanup.Checked
         WarmSolidArchives=[bool]$warm.Checked
         PasswordList=$password.Text; TitleTemplate=[string]$title.SelectedItem
+        UseFileTags=[bool]$useFileTags.Checked
         PromptPasswords=$prompt.Checked; AskToSavePassword=$savePassword.Checked
         DebugLogging=[bool]$logging.Checked; LogDirectory=[string]$logs.Text
     }

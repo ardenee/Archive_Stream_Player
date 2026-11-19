@@ -101,7 +101,7 @@ namespace
 
         bool process_field(t_uint32 field, metadb_handle* handle, titleformat_text_out* out) override
         {
-            if (field != 0 || !out || !IsArchiveHandle(handle))
+            if (field != 0 || !out || !IsArchiveHandle(handle) || ArchiveAdapterPreferencesLoad().useFileTags)
                 return false;
 
             std::wstring archive, internal;

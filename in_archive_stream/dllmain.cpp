@@ -615,8 +615,8 @@ static void FormatStableVirtualTitle(const char* virtualPath, const char* intern
         if (ParseVirtualDisplayPath(virtualPath, archivePath, sizeof(archivePath), &parsedIndex, ignored, sizeof(ignored)))
         {
             const auto shared = ArchiveAdapterPreferencesLoad();
-            const std::wstring title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archivePath),
-                ArchiveAdapterUtf8ToWide(internalPath), static_cast<unsigned>(archiveIndex + 1), shared.titleTemplate);
+            const std::wstring title = ArchiveAdapterPreferredTitle(ArchiveAdapterUtf8ToWide(archivePath),
+                ArchiveAdapterUtf8ToWide(internalPath), static_cast<unsigned>(archiveIndex + 1), shared);
             if (!title.empty())
             {
                 const int count = WideCharToMultiByte(CP_ACP, 0, title.c_str(), -1,

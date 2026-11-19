@@ -172,6 +172,8 @@ static HWND g_cacheAgeEdit = NULL;
 static HWND g_displayPrefixEdit = NULL;
 static HWND g_displayPostfixEdit = NULL;
 static HWND g_displayTemplateEdit = NULL;
+static HWND g_useFileTagsCheck = NULL;
+static bool g_useFileTagsEnabled = false;
 static HWND g_displayPresetCombo = NULL;
 static HWND g_passwordListEdit = NULL;
 static HWND g_debugLoggingCheck = NULL;
@@ -612,6 +614,7 @@ void LoadConfig()
         g_configuredCacheSizeMb = ClampCacheMb(shared.cacheLimitMb);
         g_cacheMaxAgeDays = ClampCacheAgeDays(shared.cacheAgeDays);
         g_debugLoggingEnabled = shared.debugLogging;
+        g_useFileTagsEnabled = shared.useFileTags;
 
         const std::string passwordUtf8 = ArchiveAdapterWideToUtf8(shared.passwordListPath);
         if (!passwordUtf8.empty() && passwordUtf8.size() < sizeof(g_rarPasswordListPath))
@@ -766,6 +769,7 @@ void SaveConfig()
     common.cacheLimitMb = static_cast<unsigned>(g_configuredCacheSizeMb);
     common.cacheAgeDays = g_cacheMaxAgeDays;
     common.debugLogging = g_debugLoggingEnabled;
+    common.useFileTags = g_useFileTagsEnabled;
     common.passwordListPath = ArchiveAdapterUtf8ToWide(g_rarPasswordListPath);
     if (!ArchiveAdapterPreferencesSave(common))
         DebugLogWrite("WARN", "CONFIG", "SHARED_SAVE_FAIL", "source=winamp");
@@ -939,6 +943,10 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             HWND hTokenHelp = CreateWindowExA(0, "STATIC", "Tokens: <archive> <archivetype> <filename> <filetype> <#>", WS_CHILD | WS_VISIBLE, 90, 410, 380, 20, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hTokenHelp, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+            g_useFileTagsCheck = CreateWindowExA(0, "BUTTON", "Use File Tags (overrides title preset)", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 90, 430, 380, 21, hwnd, (HMENU)4511, g_hInstance, NULL);
+            SendMessage(g_useFileTagsCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+            SendMessage(g_useFileTagsCheck, BM_SETCHECK, g_useFileTagsEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
             HWND hPasswordLabel = CreateWindowExA(0, "STATIC", "Archive password file:", WS_CHILD | WS_VISIBLE, 16, 440, 120, 20, hwnd, NULL, g_hInstance, NULL);
             SendMessage(hPasswordLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -1212,6 +1220,7 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 RarSetPasswordListPath(g_rarPasswordListPath);
                 bool debugLoggingEnabled = SendMessage(g_debugLoggingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 g_debugLoggingEnabled = debugLoggingEnabled;
+                g_useFileTagsEnabled = g_useFileTagsCheck && SendMessage(g_useFileTagsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
                 if (!g_debugLogPath[0])
                     BuildDefaultDebugLogPath(g_debugLogPath, sizeof(g_debugLogPath));
@@ -1303,6 +1312,7 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             g_displayPrefixEdit = NULL;
             g_displayPostfixEdit = NULL;
             g_displayTemplateEdit = NULL;
+            g_useFileTagsCheck = NULL;
             g_displayPresetCombo = NULL;
             g_passwordListEdit = NULL;
             g_debugLoggingCheck = NULL;

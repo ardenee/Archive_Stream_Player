@@ -14,6 +14,7 @@ struct FoobarArchiveSettings
     std::string displayPrefix;
     std::string displayPostfix;
     std::string displayTemplate = "<filename>";
+    bool useFileTags = false;
     std::string passwordListPath; // Empty = FoobarArchiveStream/keeps.txt.
     bool debugLogging = false;
     std::string debugLogPath; // Empty = FoobarArchiveStream/foo_archive_stream.log.

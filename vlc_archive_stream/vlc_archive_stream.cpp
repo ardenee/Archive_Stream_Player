@@ -23,6 +23,7 @@ extern "C" int poll(struct pollfd*, unsigned, int);
 #include "archive_format.h"
 #include "archive_passwords.h"
 #include "../shared/archive_adapter_preferences.h"
+#include "../shared/archive_adapter_tag_probe.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include <algorithm>
@@ -388,7 +389,11 @@ int Open(vlc_object_t* object)
                 if (entry.isFolder || !entry.isSupportedAudio || entry.size == 0)
                     continue;
                 const std::string filename = entry.path;
-                auto title = ArchiveAdapterWideToUtf8(ArchiveAdapterFormatTitle(archive, ArchiveAdapterUtf8ToWide(filename), entry.index + 1, s->prefs.titleTemplate));
+                ArchiveTrackTags tags{};
+                const bool tagged = s->prefs.useFileTags && ArchiveAdapterProbeEntryTags(archive, entry, tags);
+                auto title = ArchiveAdapterWideToUtf8(ArchiveAdapterPreferredTitle(archive,
+                    ArchiveAdapterUtf8ToWide(filename), entry.index + 1, s->prefs,
+                    tagged ? ArchiveAdapterUtf8ToWide(tags.title) : std::wstring()));
                 if (title.empty())
                     title = filename;
                 for (char& ch : title)

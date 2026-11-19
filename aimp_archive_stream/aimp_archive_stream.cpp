@@ -9,6 +9,7 @@
 #include <apiOptions.h>
 #include "archive_backend.h"
 #include "archive_adapter_preferences.h"
+#include "../shared/archive_adapter_tag_probe.h"
 #include "aimp_sdk_preferences.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
@@ -522,7 +523,10 @@ namespace
             if (!info)
                 return E_POINTER;
             const auto preferences = ArchiveAdapterPreferencesLoad();
-            const std::wstring name = ArchiveAdapterFormatTitle(archive_, Utf8ToWide(entry_.path), entry_.index + 1, preferences.titleTemplate);
+            ArchiveTrackTags tags{};
+            const bool tagged = preferences.useFileTags && ArchiveAdapterProbeEntryTags(archive_, entry_, tags);
+            const std::wstring name = ArchiveAdapterPreferredTitle(archive_, Utf8ToWide(entry_.path),
+                entry_.index + 1, preferences, tagged ? Utf8ToWide(tags.title) : std::wstring());
             IAIMPString* nameValue = nullptr;
             HRESULT result = NewAimpString(name, &nameValue);
             if (FAILED(result))
@@ -538,6 +542,47 @@ namespace
             nameValue->Release();
             if (FAILED(result))
                 return result;
+
+            // Use File Tags takes priority over title presets. The shared
+            // direct-stream probe never extracts solid/password archives or
+            // calculates CRCs. Missing fields are left for AIMP's normal
+            // fallback, with a nonempty filename-derived Title.
+            if (tagged)
+            {
+                auto setTag = [&](int property, const std::string& utf8) -> HRESULT
+                {
+                    if (utf8.empty())
+                        return S_OK;
+                    IAIMPString* value = nullptr;
+                    const HRESULT status = NewAimpString(Utf8ToWide(utf8), &value);
+                    if (FAILED(status))
+                        return status;
+                    const HRESULT applied = info->SetValueAsObject(property, value);
+                    value->Release();
+                    return applied;
+                };
+                result = setTag(AIMP_FILEINFO_PROPID_ARTIST, tags.artist);
+                if (FAILED(result))
+                    return result;
+                result = setTag(AIMP_FILEINFO_PROPID_ALBUM, tags.album);
+                if (FAILED(result))
+                    return result;
+                result = setTag(AIMP_FILEINFO_PROPID_ALBUMARTIST, tags.albumArtist);
+                if (FAILED(result))
+                    return result;
+                result = setTag(AIMP_FILEINFO_PROPID_GENRE, tags.genre);
+                if (FAILED(result))
+                    return result;
+                result = setTag(AIMP_FILEINFO_PROPID_DATE, tags.year);
+                if (FAILED(result))
+                    return result;
+                if (tags.trackNumber)
+                {
+                    result = setTag(AIMP_FILEINFO_PROPID_TRACKNUMBER, std::to_string(tags.trackNumber));
+                    if (FAILED(result))
+                        return result;
+                }
+            }
             return info->SetValueAsInt64(AIMP_FILEINFO_PROPID_FILESIZE,
                 static_cast<INT64>(entry_.size));
         }

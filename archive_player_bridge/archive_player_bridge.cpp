@@ -31,6 +31,7 @@
 #include "../shared/archive_unified_cache.h"
 #include "../shared/archive_unified_warmer.h"
 #include "../shared/archive_track_tags.h"
+#include "../shared/archive_adapter_tag_probe.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -65,6 +66,7 @@ std::mutex g_fileMutex;
 std::mutex g_decryptMutex;
 std::unordered_map<uint32_t, std::wstring> g_fileCache;
 std::unordered_map<uint32_t, uint32_t> g_audioDurationMs;
+std::unordered_map<uint32_t, std::wstring> g_tagTitles;
 
 std::string Utf8(const std::wstring &w)
 {
@@ -158,8 +160,28 @@ std::string Name(const ArchiveEntry &e)
 }
 std::string Title(const ArchiveEntry& e, const std::wstring& titleTemplate)
 {
-    const auto value = ArchiveAdapterFormatTitle(g_settings.archive, Wide(e.path), e.index + 1, titleTemplate);
-    return Utf8(value);
+    auto settings = ArchiveAdapterPreferencesLoad();
+    if (!g_settings.titleOverride)
+        settings.titleTemplate = titleTemplate;
+    std::wstring embedded;
+    if (settings.useFileTags)
+    {
+        // One bounded probe per entry per bridge process. M3U and ASX playlist
+        // creation and subsequent refreshes reuse the result. Solid/password
+        // archives are never scanned merely to format their playlist labels.
+        auto found = g_tagTitles.find(e.index);
+        if (found == g_tagTitles.end())
+        {
+            ArchiveTrackTags tags{};
+            if (ArchiveAdapterProbeEntryTags(g_settings.archive, e, tags) && !tags.title.empty())
+                embedded = Wide(tags.title);
+            g_tagTitles.emplace(e.index, embedded);
+        }
+        else
+            embedded = found->second;
+    }
+    return Utf8(ArchiveAdapterPreferredTitle(g_settings.archive, Wide(e.path), e.index + 1,
+        settings, embedded));
 }
 uint64_t OggLittleEndian(const unsigned char* source, size_t bytes)
 {
@@ -1155,6 +1177,7 @@ int wmain(int argc, wchar_t **argv)
     SetConsoleCtrlHandler(OnCtrl, TRUE);
     const auto began = std::chrono::steady_clock::now();
     auto lastTitleTemplate = g_settings.titleTemplate;
+    bool lastUseFileTags = ArchiveAdapterPreferencesLoad().useFileTags;
     auto lastTitleCheck = began;
 
     while (!g_quit)
@@ -1163,8 +1186,9 @@ int wmain(int argc, wchar_t **argv)
         if (!g_settings.titleOverride && now - lastTitleCheck >= std::chrono::seconds(1))
         {
             lastTitleCheck = now;
-            const auto current = ArchiveAdapterPreferencesLoad().titleTemplate;
-            if (current != lastTitleTemplate)
+            const auto common = ArchiveAdapterPreferencesLoad();
+            const auto current = common.titleTemplate;
+            if (current != lastTitleTemplate || common.useFileTags != lastUseFileTags)
             {
                 // Replace playlist files atomically; clients already using the
                 // old playlist keep their current URLs until they reload it.
@@ -1182,7 +1206,8 @@ int wmain(int argc, wchar_t **argv)
                 if (refresh(m3u, false) && refresh(asx, true))
                 {
                     lastTitleTemplate = current;
-                    DebugLogWrite("INFO", "BRIDGE", "PLAYLIST_TITLES_REFRESHED", "tracks=%zu", audio);
+                    lastUseFileTags = common.useFileTags;
+                    DebugLogWrite("INFO", "BRIDGE", "PLAYLIST_TITLES_REFRESHED", "tracks=%zu | use_file_tags=%d", audio, common.useFileTags ? 1 : 0);
                 }
                 else
                     DebugLogWrite("WARN", "BRIDGE", "PLAYLIST_TITLES_REFRESH_FAIL", "winerr=%lu", GetLastError());

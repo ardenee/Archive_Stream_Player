@@ -1,6 +1,6 @@
 ; Open in Inno Setup 7 and choose Build > Compile.
 #define AppName "Archive Stream Player"
-#define AppVersion "0.1.10-dev"
+#define AppVersion "0.1.11-dev"
 #define HomeURL "https://www.arden.ie/projects/archive-stream-player/"
 
 [Setup]

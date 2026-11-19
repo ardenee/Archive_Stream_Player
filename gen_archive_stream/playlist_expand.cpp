@@ -342,8 +342,8 @@ static std::string BuildExpandedArchiveTitle(const char* virtualPath, const char
         if (ParseVirtualArchivePath(virtualPath, archivePath, sizeof(archivePath), &index, internal, sizeof(internal)))
         {
             const auto common = ArchiveAdapterPreferencesLoad();
-            const std::wstring title = ArchiveAdapterFormatTitle(ArchiveAdapterUtf8ToWide(archivePath),
-                ArchiveAdapterUtf8ToWide(entryName), static_cast<unsigned>(displayIndex ? displayIndex : index + 1), common.titleTemplate);
+            const std::wstring title = ArchiveAdapterPreferredTitle(ArchiveAdapterUtf8ToWide(archivePath),
+                ArchiveAdapterUtf8ToWide(entryName), static_cast<unsigned>(displayIndex ? displayIndex : index + 1), common);
             // Winamp's legacy playlist enqueue/title IPC is ANSI, while the
             // shared title formatter operates on Unicode. Convert at the host
             // boundary instead of displaying UTF-8 bytes as ANSI characters.

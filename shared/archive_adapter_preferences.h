@@ -29,6 +29,9 @@ struct ArchiveAdapterPreferences
     bool promptPasswords = true;
     bool askToSavePassword = true;
     bool debugLogging = false;
+    // When enabled, embedded audio metadata takes precedence over the title
+    // template; no full-archive extraction or CRC calculation is implied.
+    bool useFileTags = false;
     std::wstring logDirectory;
     std::wstring passwordListPath = ArchiveAdapterDefaultPasswordList();
     std::wstring titleTemplate = L"<filename>";
@@ -109,6 +112,7 @@ inline ArchiveAdapterPreferences ArchiveAdapterPreferencesLoad()
     settings.promptPasswords = number(L"PromptPasswords", 1, 0, 1) != 0;
     settings.askToSavePassword = number(L"AskToSavePassword", 1, 0, 1) != 0;
     settings.debugLogging = number(L"DebugLogging", 0, 0, 1) != 0;
+    settings.useFileTags = number(L"UseFileTags", 0, 0, 1) != 0;
     settings.logDirectory = string(L"LogDirectory");
     const std::wstring configuredList = string(L"PasswordList");
     if (!configuredList.empty())
@@ -153,6 +157,7 @@ inline bool ArchiveAdapterPreferencesSave(const ArchiveAdapterPreferences& setti
         number(L"PromptPasswords", settings.promptPasswords ? 1 : 0) &&
         number(L"AskToSavePassword", settings.askToSavePassword ? 1 : 0) &&
         number(L"DebugLogging", settings.debugLogging ? 1 : 0) &&
+        number(L"UseFileTags", settings.useFileTags ? 1 : 0) &&
         string(L"LogDirectory", settings.logDirectory) && string(L"PasswordList", settings.passwordListPath) &&
         string(L"TitleTemplate", settings.titleTemplate);
     RegCloseKey(key);
@@ -214,6 +219,23 @@ inline std::wstring ArchiveAdapterFormatTitle(const std::wstring& archive,
     replace(result, L"<archive>", archiveName);
     replace(result, L"<#>", std::to_wstring(entryNumber));
     return result;
+}
+
+// The shared title precedence rule for all adapters. Embedded tags must come
+// from already-decoded/streamed audio bytes; do not scan solid archives merely
+// to format a playlist row. A missing Title tag falls back to the filename,
+// never an empty title or the user's selected archive-name preset.
+inline std::wstring ArchiveAdapterPreferredTitle(const std::wstring& archive,
+    const std::wstring& internalPath, unsigned entryNumber,
+    const ArchiveAdapterPreferences& settings, const std::wstring& tagTitle = {})
+{
+    if (settings.useFileTags)
+    {
+        if (!tagTitle.empty())
+            return tagTitle;
+        return ArchiveAdapterFormatTitle(archive, internalPath, entryNumber, L"<filename>");
+    }
+    return ArchiveAdapterFormatTitle(archive, internalPath, entryNumber, settings.titleTemplate);
 }
 
 #include <shellapi.h>

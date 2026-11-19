@@ -23,7 +23,7 @@ BEGIN
     PUSHBUTTON    "Clear cache...", IDC_CACHE_CLEAR, 100, 138, 79, 18
     PUSHBUTTON    "Shared settings...", IDC_SHARED_SETTINGS, 188, 138, 87, 18
     LTEXT         "Passwords and diagnostics are on separate pages.", -1, 12, 162, 260, 11
-    LTEXT         "foobar2000 controls playlist title formatting.", -1, 12, 174, 260, 11
+    AUTOCHECKBOX  "Use File Tags (overrides archive title preset)", IDC_USE_FILE_TAGS, 12, 169, 260, 13
 END
 
 IDD_ARCHIVE_PASSWORDS DIALOGEX 0, 0, 284, 110
