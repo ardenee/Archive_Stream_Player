@@ -10,7 +10,7 @@ if (!(Test-Path -LiteralPath $csc)) { throw "Compiler missing: $csc" }
 
 $testExe = Join-Path $env:TEMP 'archive_stream_musicbee_tab_test.exe'
 try {
-    & $csc /nologo /define:AST_ARCHIVE_TAB_TEST /target:exe "/out:$testExe" /r:System.Windows.Forms.dll /r:System.Core.dll (Join-Path $PSScriptRoot 'verify_archive_player_tab.cs') (Join-Path $project 'ArchivePlayerTab.cs')
+    & $csc /nologo /define:AST_ARCHIVE_TAB_TEST /target:exe "/out:$testExe" /r:System.Windows.Forms.dll /r:System.Core.dll (Join-Path $PSScriptRoot 'verify_archive_player_tab.cs') (Join-Path $project 'ArchivePlayerTab.cs') (Join-Path $project 'ArchivePlayerTrackOrder.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Archive Player tab test build failed' }
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw 'Archive Player tab test failed' }

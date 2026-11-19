@@ -317,7 +317,7 @@ namespace MusicBeePlugin
                         {
                             string[] existing = null;
                             if (api.Playlist_QueryFilesEx(playlist, out existing))
-                                ScheduleArchivePlaylistMetadata(playlist, existing ?? new string[0]);
+                                ScheduleArchivePlaylistMetadata(playlist, existing ?? new string[0], ArchivePlayerNeedsFirstSort());
                         }
                     }
                     catch (Exception error)

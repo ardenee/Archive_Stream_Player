@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.Text;
 using System.Windows.Forms;
 
 namespace MusicBeePlugin
@@ -39,7 +41,56 @@ namespace MusicBeePlugin
                 Console.WriteLine(message);
         }
         private void StartPlaybackDiagnostics() {}
-        private void ScheduleArchivePlaylistMetadata(string playlist, IEnumerable<string> tracks) {}
+        private void ScheduleArchivePlaylistMetadata(string playlist, IEnumerable<string> tracks, bool sortRequested = false) {}
+        private static int ReadNativeArchiveFileTags(string virtualPath, StringBuilder output, uint capacity)
+        {
+            int number = 0;
+            if (virtualPath.Contains("|7|"))
+                number = 3;
+            else if (virtualPath.Contains("|8|"))
+                number = 1;
+            else if (virtualPath.Contains("|9|"))
+                number = 2;
+            if (number == 0)
+                return 0;
+            output.Append("Song\tArtist\tAlbum\t\t").Append(number).Append("\tGenre\t2026");
+            return 1;
+        }
+
+        private static void VerifyArchiveOrder()
+        {
+            string folder = Path.Combine(Path.GetTempPath(), "ast-sort-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                string[] paths = new string[5];
+                string[] names = { "ten", "two", "one", "other-ten", "other-two" };
+                string[] virtuals = {
+                    @"X:\Audio\album.rar.archive_stream|7|10 - Ten.mp3",
+                    @"X:\Audio\album.rar.archive_stream|8|02 - Two.mp3",
+                    @"X:\Audio\album.rar.archive_stream|9|01 - One.mp3",
+                    @"X:\Audio\second.zip.archive_stream|10|10 - Ten.mp3",
+                    @"X:\Audio\second.zip.archive_stream|11|02 - Two.mp3"
+                };
+                for (int i = 0; i < paths.Length; ++i)
+                {
+                    paths[i] = Path.Combine(folder, names[i] + ".mp3");
+                    File.WriteAllText(Path.ChangeExtension(paths[i], ".ast"),
+                        "ARCHIVE_STREAM_NATIVE_TRACK_V1\n" + virtuals[i] + "\n");
+                }
+                string[] sorted = OrderArchiveTracks(paths, true);
+                string[] expected = { paths[1], paths[2], paths[0], paths[4], paths[3] };
+                if (!sorted.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
+                    throw new Exception("Embedded TRACKNUMBER or filename fallback order is incorrect");
+                if (!OrderArchiveTracks(sorted, true).SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
+                    throw new Exception("Track ordering is not stable");
+                Console.WriteLine("ARCHIVE_PLAYER_SORT_TEST_PASS embedded_track_numbers=1 filename_fallback=1 independent_archive_groups=1");
+            }
+            finally
+            {
+                Directory.Delete(folder, true);
+            }
+        }
 
         private static readonly string Url = @"C:\MusicBee\Playlists\Archive Stream Player\Archive Player.mbp";
         private static readonly string AliasRoot = System.IO.Path.Combine(
@@ -110,6 +161,7 @@ namespace MusicBeePlugin
         }
         public static int Main()
         {
+            VerifyArchiveOrder();
             string marker = Plugin.ArchivePlayerMigrationMarker();
             if (System.IO.File.Exists(marker))
                 System.IO.File.Delete(marker);

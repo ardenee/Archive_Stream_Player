@@ -100,7 +100,7 @@ namespace MusicBeePlugin
         // New versioned ID3 URLs are the reliable source of MusicBee metadata.
         // A background migration never navigates tabs, never adds deleted
         // entries, and checks that Clear List / new drops did not race it.
-        private void ScheduleArchivePlaylistMetadata(string playlist, IEnumerable<string> tracks)
+        private void ScheduleArchivePlaylistMetadata(string playlist, IEnumerable<string> tracks, bool sortRequested = false)
         {
 #if AST_ARCHIVE_TAB_TEST
             return;
@@ -112,6 +112,7 @@ namespace MusicBeePlugin
             if (initial.Length == 0 || initial.Length > 10000)
                 return;
             bool tagsEnabled = UseArchiveFileTags();
+            string metadataSettings = CurrentArchiveMetadataSettings();
             Control root = archiveDropRoot;
 
             var thread = new Thread(() =>
@@ -129,7 +130,8 @@ namespace MusicBeePlugin
                     try
                     {
                         string replacement = VersionedMusicBeeAlias(
-                            Path.ChangeExtension(initial[i], ".ast"), tagsEnabled);
+                            Path.ChangeExtension(initial[i], ".ast"), tagsEnabled,
+                            initial[i], true);
                         if (!String.Equals(replacement, initial[i], StringComparison.OrdinalIgnoreCase))
                         {
                             migrated[i] = replacement;
@@ -142,10 +144,27 @@ namespace MusicBeePlugin
                         Trace("ARCHIVE_ID3_MIGRATION_ENTRY_FAIL type=" + error.GetType().Name);
                     }
                 }
-                Trace("ARCHIVE_TAB_ID3_SCAN checked=" + initial.Length + " versioned=" + versioned +
-                    " failed=" + failed + " use_tags=" + (tagsEnabled ? "1" : "0"));
-                if (versioned == 0 || archiveDropClosing || root.IsDisposed)
+                if (archiveDropClosing || root.IsDisposed)
                     return;
+                // Once on existing playlists, and when metadata settings
+                // change, sort within each archive by embedded TRACKNUMBER.
+                // Never intermingle tracks belonging to different archives.
+                if (sortRequested && failed == 0)
+                {
+                    string[] ordered = OrderArchiveTracks(migrated);
+                    if (!ordered.SequenceEqual(migrated, StringComparer.OrdinalIgnoreCase))
+                        migrated = ordered;
+                }
+                bool sortedChanged = !migrated.SequenceEqual(initial, StringComparer.OrdinalIgnoreCase);
+                Trace("ARCHIVE_TAB_ID3_SCAN checked=" + initial.Length + " versioned=" + versioned +
+                    " ordered=" + (sortRequested ? "1" : "0") +
+                    " failed=" + failed + " use_tags=" + (tagsEnabled ? "1" : "0"));
+                if (!sortedChanged)
+                {
+                    if (sortRequested && failed == 0)
+                        MarkArchivePlayerFirstSort();
+                    return;
+                }
 
                 try
                 {
@@ -161,9 +180,22 @@ namespace MusicBeePlugin
                             Trace("ARCHIVE_TAB_ID3_MIGRATION_SKIPPED reason=playlist_changed");
                             return;
                         }
+                        // A second shared-settings change may arrive while a
+                        // long archive metadata scan is still running. Never
+                        // publish labels for a superseded preference snapshot.
+                        if (!String.Equals(CurrentArchiveMetadataSettings(), metadataSettings,
+                            StringComparison.Ordinal))
+                        {
+                            Trace("ARCHIVE_TAB_ID3_MIGRATION_SKIPPED reason=settings_changed_during_scan");
+                            ScheduleArchivePlaylistMetadata(playlist, present, true);
+                            return;
+                        }
                         bool updated = api.Playlist_SetFiles(playlist, migrated);
                         Trace("ARCHIVE_TAB_ID3_MIGRATION_COMMIT success=" + (updated ? "1" : "0") +
-                            " tracks=" + migrated.Length + " versioned=" + versioned);
+                            " tracks=" + migrated.Length + " versioned=" + versioned +
+                            " sorted=" + (sortRequested ? "1" : "0"));
+                        if (updated && sortRequested && failed == 0)
+                            MarkArchivePlayerFirstSort();
                         if (updated && api.MB_RefreshPanels != null)
                             api.MB_RefreshPanels();
                     }));

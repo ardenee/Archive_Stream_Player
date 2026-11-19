@@ -17,6 +17,8 @@ namespace MusicBeePlugin
         private readonly List<Control> archiveDropObserved = new List<Control>();
         private readonly List<Control> archiveDropTargets = new List<Control>();
         private System.Windows.Forms.Timer archiveDropRetry;
+        private System.Windows.Forms.Timer archiveSettingsPoll;
+        private string archiveSettingsSnapshot;
         private Control archiveDropRoot;
         private ArchiveOleDropRegistration archiveOleRoot;
         private bool archiveDropClosing;
@@ -53,7 +55,21 @@ namespace MusicBeePlugin
 
         private void StartArchiveDropIntegration()
         {
-            if (archiveDropClosing || archiveDropRetry != null)
+            if (archiveDropClosing)
+                return;
+            // MusicBee can deliver PluginStartup on a non-UI thread.
+            // WinForms timers created there never tick without a message loop.
+            // Always create the retry and metadata timers on the host UI thread.
+            if (api.MB_GetWindowHandle != null)
+            {
+                Control root = Control.FromHandle(api.MB_GetWindowHandle());
+                if (root != null && root.InvokeRequired && root.IsHandleCreated)
+                {
+                    root.BeginInvoke((Action)StartArchiveDropIntegration);
+                    return;
+                }
+            }
+            if (archiveDropRetry != null)
                 return;
 
             archiveDropAttempts = 0;
@@ -62,6 +78,58 @@ namespace MusicBeePlugin
             archiveDropRetry.Tick += RetryArchiveDropIntegration;
             archiveDropRetry.Start();
             TryAttachArchiveDropIntegration();
+        }
+
+        private void StartArchiveSettingsPoll()
+        {
+            if (archiveSettingsPoll != null || archiveDropClosing)
+                return;
+            archiveSettingsSnapshot = CurrentArchiveMetadataSettings();
+            archiveSettingsPoll = new System.Windows.Forms.Timer();
+            archiveSettingsPoll.Interval = 1000;
+            archiveSettingsPoll.Tick += PollArchiveMetadataSettings;
+            archiveSettingsPoll.Start();
+            Trace("ARCHIVE_SETTINGS_MONITOR_READY");
+        }
+
+        private static string CurrentArchiveMetadataSettings()
+        {
+            bool useTags = UseArchiveFileTags();
+            string titleTemplate = "<filename>";
+            using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\ArchiveStreamPlayer\Adapters", false))
+            {
+                if (key != null)
+                    titleTemplate = key.GetValue("TitleTemplate", "<filename>") as string ?? "<filename>";
+            }
+            // The title preset has no effect in Use File Tags mode.
+            return useTags ? "TAGS" : "PRESET|" + titleTemplate;
+        }
+
+        private void PollArchiveMetadataSettings(object sender, EventArgs args)
+        {
+            if (archiveDropClosing || archiveDropRoot == null || archiveDropRoot.IsDisposed)
+                return;
+            try
+            {
+                string current = CurrentArchiveMetadataSettings();
+                if (String.Equals(archiveSettingsSnapshot, current, StringComparison.Ordinal))
+                    return;
+                archiveSettingsSnapshot = current;
+                string playlist = FindArchivePlayerPlaylist();
+                if (String.IsNullOrWhiteSpace(playlist) || api.Playlist_QueryFilesEx == null)
+                    return;
+                string[] tracks;
+                if (!api.Playlist_QueryFilesEx(playlist, out tracks) || tracks == null)
+                    return;
+                Trace("ARCHIVE_SETTINGS_METADATA_CHANGED mode=" + (UseArchiveFileTags() ? "TAGS" : "PRESET") +
+                    " tracks=" + tracks.Length);
+                ScheduleArchivePlaylistMetadata(playlist, tracks, true);
+            }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_SETTINGS_METADATA_POLL_FAIL type=" + error.GetType().Name);
+            }
         }
 
         private void RetryArchiveDropIntegration(object sender, EventArgs args)
@@ -137,6 +205,9 @@ namespace MusicBeePlugin
                     IsArchivePath, QueueArchiveDropFiles, Trace);
                 Trace("ARCHIVE_DROP_HOOK_READY main=" + root.GetType().Name +
                     " targets=" + archiveDropTargets.Count + " observed=" + archiveDropObserved.Count);
+                // This callback is on the MusicBee UI thread, so the
+                // WinForms settings timer has a live message pump.
+                StartArchiveSettingsPoll();
                 ScheduleArchivePlayerStartup();
             }
             catch (Exception error)
@@ -308,6 +379,14 @@ namespace MusicBeePlugin
 
         private void DetachArchiveDropControls()
         {
+            if (archiveSettingsPoll != null)
+            {
+                archiveSettingsPoll.Stop();
+                archiveSettingsPoll.Tick -= PollArchiveMetadataSettings;
+                archiveSettingsPoll.Dispose();
+                archiveSettingsPoll = null;
+                archiveSettingsSnapshot = null;
+            }
             if (archiveOleRoot != null)
             {
                 archiveOleRoot.Dispose();

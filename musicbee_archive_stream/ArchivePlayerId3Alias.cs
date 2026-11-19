@@ -61,7 +61,7 @@ namespace MusicBeePlugin
             stream.Write(bytes, 0, bytes.Length);
         }
 
-        private static string MetadataMarker(bool useTags)
+        private static string MetadataMarker(bool useTags, bool hasDuration = false)
         {
             string template = "";
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
@@ -71,7 +71,7 @@ namespace MusicBeePlugin
             }
             // When embedded tags are enabled, changing title presets does
             // not affect these entries. The marker supports lazy migration.
-            return "ARCHIVE_STREAM_MUSICBEE_ID3_V2|" +
+            return "ARCHIVE_STREAM_MUSICBEE_ID3_V3" + (hasDuration ? "_LENGTH|" : "|") +
                 (useTags ? "TAGS" : "PRESET:" + template);
         }
 
@@ -90,12 +90,12 @@ namespace MusicBeePlugin
             stream.Write(payload, 0, payload.Length);
         }
 
-        private static bool AliasHasMetadataMarker(string alias, bool useTags)
+        private static bool AliasHasMetadataMarker(string alias, bool useTags, bool hasDuration = false)
         {
             if (!IsId3Alias(alias))
                 return false;
             byte[] bytes = File.ReadAllBytes(alias);
-            byte[] marker = Encoding.UTF8.GetBytes(MetadataMarker(useTags));
+            byte[] marker = Encoding.UTF8.GetBytes(MetadataMarker(useTags, hasDuration));
             for (int i = 0; i + marker.Length <= bytes.Length; ++i)
             {
                 int j = 0;
@@ -107,7 +107,8 @@ namespace MusicBeePlugin
             return false;
         }
 
-        private static void CreateId3ManifestAlias(string descriptor, string alias, bool useTags)
+        private static void CreateId3ManifestAlias(string descriptor, string alias, bool useTags,
+            long durationMs = 0)
         {
             byte[] original = File.ReadAllBytes(descriptor);
             if (original.Length < 36 || original.Length > 16384)
@@ -142,6 +143,12 @@ namespace MusicBeePlugin
             using (var tagFrames = new MemoryStream())
             {
                 WriteId3Frame(tagFrames, "TIT2", title);
+                // ID3v2.3 TLEN is milliseconds. MusicBee may use it as
+                // initial duration metadata; unlike tag display preferences,
+                // this is always written when a verified decoder length exists.
+                if (durationMs > 0)
+                    WriteId3Frame(tagFrames, "TLEN",
+                        durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 if (useTags)
                 {
                     WriteId3Frame(tagFrames, "TPE1", metadata.artist);
@@ -155,7 +162,7 @@ namespace MusicBeePlugin
                     WriteId3Frame(tagFrames, "TYER", year);
                 }
                 WriteId3OpaqueFrame(tagFrames, "PRIV", Encoding.UTF8.GetBytes(
-                    "ArchiveStreamPlayer\0" + MetadataMarker(useTags)));
+                    "ArchiveStreamPlayer\0" + MetadataMarker(useTags, durationMs > 0)));
                 int length = checked((int)tagFrames.Length);
                 if (length < 13 || length > 16384)
                     throw new IOException("The ID3 metadata exceeds the safe size limit.");
@@ -189,7 +196,8 @@ namespace MusicBeePlugin
         // A NEW path forces MusicBee to read ID3 tags rather than continue to
         // show cached metadata for the old .mp3 hard-link URL. The old path and
         // descriptor stay available for saved queues and ongoing playback.
-        private static string VersionedMusicBeeAlias(string descriptor, bool useTags, string prebuiltAlias = null)
+        private static string VersionedMusicBeeAlias(string descriptor, bool useTags,
+            string prebuiltAlias = null, bool includeDuration = false)
         {
             byte[] source = File.ReadAllBytes(descriptor);
             if (source.Length < 36 || source.Length > 16384)
@@ -207,11 +215,18 @@ namespace MusicBeePlugin
             string leaf = Path.GetFileName(root);
             if (leaf.StartsWith("id3-", StringComparison.OrdinalIgnoreCase))
                 root = Path.GetDirectoryName(root);
+            // Duration probes are ONLY done by the low-priority metadata
+            // worker, never while the first playlist is being created.
+            // The initial V3 alias displays tracks immediately; a distinct
+            // versioned V3_LENGTH alias refreshes MusicBee when ready.
+            string durationSource = prebuiltAlias ?? Path.ChangeExtension(descriptor, ".mp3");
+            long durationMs = includeDuration ? QueryArchiveDurationMs(durationSource) : 0;
+            bool hasDuration = durationMs > 0;
             using (SHA256 sha = SHA256.Create())
             {
                 // Hash only a short settings-mode identifier, NEVER audio or
                 // archive content. Content CRCs remain solely archive headers.
-                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(MetadataMarker(useTags)));
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(MetadataMarker(useTags, hasDuration)));
                 string version = BitConverter.ToString(hash, 0, 5).Replace("-", "").ToLowerInvariant();
                 string folder = Path.Combine(root, "id3-" + version);
                 Directory.CreateDirectory(folder);
@@ -226,16 +241,17 @@ namespace MusicBeePlugin
                         File.ReadAllBytes(newDescriptor), source))
                         throw new IOException("A versioned alias descriptor has conflicting archive identity.");
 
-                    if (!AliasHasMetadataMarker(newAlias, useTags))
+                    if (!AliasHasMetadataMarker(newAlias, useTags, hasDuration))
                     {
                         string pending = Path.Combine(folder, "_id3-" +
                             Guid.NewGuid().ToString("N").Substring(0, 12) + ".tmp");
                         try
                         {
-                            if (prebuiltAlias != null && AliasHasMetadataMarker(prebuiltAlias, useTags))
+                            if (!hasDuration && prebuiltAlias != null &&
+                                AliasHasMetadataMarker(prebuiltAlias, useTags))
                                 File.Copy(prebuiltAlias, pending, false);
                             else
-                                CreateId3ManifestAlias(newDescriptor, pending, useTags);
+                                CreateId3ManifestAlias(newDescriptor, pending, useTags, durationMs);
                             PersistMusicBeeAlias(pending, newAlias);
                         }
                         finally
@@ -244,7 +260,7 @@ namespace MusicBeePlugin
                                 File.Delete(pending);
                         }
                     }
-                    if (!AliasHasMetadataMarker(newAlias, useTags))
+                    if (!AliasHasMetadataMarker(newAlias, useTags, hasDuration))
                         throw new IOException("Unable to publish a versioned ID3 archive alias.");
                 }
                 return newAlias;

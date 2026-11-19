@@ -657,7 +657,11 @@ namespace MusicBeePlugin
                 try
                 {
                     string[] stableTracks = PersistNativePlayableTracks(archive, playable);
-                    Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + stableTracks.Length + " helper=DLL http=0 persistence=LOCALAPPDATA");
+                    // Archive container order is not album track order.
+                    // Sort just this newly imported archive; never reorder a
+                    // different user's MusicBee playlist or previously added album.
+                    stableTracks = OrderArchiveTracks(stableTracks);
+                    Trace("NATIVE_MANIFEST_READY mode=AUDIO archive=" + Path.GetExtension(archive).ToLowerInvariant() + " tracks=" + stableTracks.Length + " ordering=track_tags_then_filename helper=DLL http=0 persistence=LOCALAPPDATA");
                     return stableTracks;
                 }
                 catch (Exception persistenceError)
