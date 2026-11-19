@@ -42,7 +42,7 @@ Name: "aimp64"; Description: "AIMP 64-bit - native plugin"; Types: custom
 Name: "xmplay"; Description: "XMPlay 32-bit - native 7z/RAR plugin"; Types: custom
 Name: "musicbee"; Description: "MusicBee 32-bit - native plugin and Tools menu"; Types: custom
 Name: "mediamonkey"; Description: "MediaMonkey 5/2024 - native playback and archive Tools menu"; Types: custom
-Name: "vlc"; Description: "VLC 3 64-bit - native archive launcher"; Types: custom
+Name: "vlc"; Description: "VLC 3 64-bit - native ZIP/7z/RAR Open File and drag-and-drop plugin"; Types: custom
 
 [Tasks]
 Name: "wacup_zip_override"; Description: "Use Archive Stream for ZIP files in WACUP (disable WACUP built-in ZIP plugin; restore on uninstall)"; Components: wacup; Flags: checkedonce
@@ -108,21 +108,17 @@ Source: "..\third_party\README.md"; DestName: "THIRD-PARTY-NOTICES.md"; DestDir:
 Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
 Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5-Native.mmip"; DestDir: "{app}\MediaMonkey"; Components: mediamonkey; Flags: ignoreversion
 
-; VLC uses an external native plugin via the launcher, not a file copied into Program Files\VLC.
-Source: "..\vlc_archive_stream\x64\Release\libarchive_stream_plugin.dll"; DestDir: "{app}\VLC\plugins\access"; Components: vlc; Flags: ignoreversion
-Source: "..\vlc_archive_stream\x64\Release\vlc_native_playlist.exe"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
-Source: "..\archive_player_bridge\x64\Release\archive_player_bridge.exe"; DestDir: "{app}\VLC\x64\Release"; Components: vlc; Flags: ignoreversion
-Source: "..\archive_player_bridge\launch-archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
-Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
-Source: "Open-VLC-Archive.ps1"; DestDir: "{app}\VLC"; Components: vlc; Flags: ignoreversion
+; VLC 3 x64 SDK access module is installed INTO VLC itself, so normal
+; Open File and archive drag/drop work without a script, shortcut or HTTP.
+Source: "..\vlc_archive_stream\x64\Release\libarchive_stream_plugin.dll"; DestDir: "{code:GetPlayerDir|vlc}\plugins\access"; Components: vlc; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\wscript.exe"; Parameters: "//B //Nologo ""{app}\launch-hidden.vbs"" ""{app}\configure-adapters.ps1"""
 Name: "{group}\Project homepage"; Filename: "{#HomeURL}"
-Name: "{group}\Open an archive in VLC"; Filename: "{sys}\wscript.exe"; Parameters: "//B //Nologo ""{app}\launch-hidden.vbs"" ""{app}\VLC\Open-VLC-Archive.ps1"" -VlcExe ""{code:GetPlayerExe|vlc}"""; Components: vlc
 Name: "{group}\MediaMonkey add-on packages (portable installs)"; Filename: "{app}\MediaMonkey"; Components: mediamonkey
 
 [Run]
+Filename: "{code:GetPlayerDir|vlc}\vlc-cache-gen.exe"; Parameters: """{code:GetPlayerDir|vlc}\plugins"""; StatusMsg: "Registering Archive Stream in VLC"; Flags: runhidden waituntilterminated; Components: vlc; Check: HasVlcCacheGen
 Filename: "{#HomeURL}"; Description: "Visit the project website"; Flags: shellexec postinstall skipifsilent unchecked
 
 [Code]
@@ -184,11 +180,19 @@ end;
 function ValidPlayerDir(const Folder: String; Index: Integer): Boolean;
 var
   ExePath: String;
+  VersionMS, VersionLS: Cardinal;
 begin
   Result := False;
   if Folder = '' then Exit;
   ExePath := AddBackslash(Folder) + AppExe(Index);
   Result := FileExists(ExePath) and IsExpectedArchitecture(ExePath, Index);
+  if Result and (Index = 9) then
+  begin
+    if not GetVersionNumbers(ExePath, VersionMS, VersionLS) then
+      Result := False
+    else
+      Result := (VersionMS shr 16) = 3;
+  end;
 end;
 
 procedure TryPlayerDir(Index: Integer; Candidate: String);
@@ -367,6 +371,11 @@ end;
 function GetPlayerExe(Param: String): String;
 begin
   Result := AddBackslash(GetPlayerDir(Param)) + 'vlc.exe';
+end;
+
+function HasVlcCacheGen: Boolean;
+begin
+  Result := FileExists(AddBackslash(GetPlayerDir('vlc')) + 'vlc-cache-gen.exe');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

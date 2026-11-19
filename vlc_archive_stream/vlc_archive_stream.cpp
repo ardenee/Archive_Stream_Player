@@ -18,6 +18,7 @@ extern "C" int poll(struct pollfd*, unsigned, int);
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_access.h>
+#include <vlc_url.h>
 #include "archive_backend.h"
 #include "archive_common.h"
 #include "archive_format.h"
@@ -479,6 +480,54 @@ void Close(vlc_object_t* object)
         access->p_sys = nullptr;
     }
 }
+// Claim only local supported archive files from VLC's ordinary File/Open/Drop path.
+// Non-archive input returns VLC_EGENERIC so VLC's built-in file access
+// continues to handle MP3s, videos, directories and all unrelated files.
+// VLC performs this redirect in-process: no PowerShell, HTTP or temp playlist.
+int OpenLocalArchive(vlc_object_t* object)
+{
+    auto* access = reinterpret_cast<stream_t*>(object);
+    if (!access || !access->psz_filepath || !access->psz_name ||
+        _stricmp(access->psz_name, "file") != 0)
+        return VLC_EGENERIC;
+    const std::wstring archive = ArchiveAdapterUtf8ToWide(access->psz_filepath);
+    if (archive.size() < 4 || archive.size() > 4095 ||
+        DetectArchiveFormatFromPath(archive.c_str()) == ArchiveFormat::Unknown)
+        return VLC_EGENERIC;
+    const DWORD attributes = GetFileAttributesW(archive.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
+        return VLC_EGENERIC;
+
+    const std::string utf8 = ArchiveAdapterWideToUtf8(archive);
+    if (utf8.empty() || utf8.size() > 4095)
+        return VLC_EGENERIC;
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string url = "ast://";
+    url.reserve(utf8.size() * 2 + 22);
+    for (unsigned char byte : utf8)
+    {
+        url += hex[byte >> 4];
+        url += hex[byte & 15];
+    }
+    url += "/list/album.m3u8";
+    // VLC 3 for Windows is built against MinGW/MSVCRT; the host frees
+    // redirected URLs with its own CRT. Allocate through VLC, never _strdup
+    // from our MSVC/UCRT DLL, to avoid cross-CRT heap corruption.
+    const HMODULE vlcCore = GetModuleHandleW(L"libvlccore.dll");
+    using VlcDuplicateUri = char* (__cdecl*)(const char*);
+    const auto duplicateUri = vlcCore ? reinterpret_cast<VlcDuplicateUri>(GetProcAddress(vlcCore, "vlc_uri_decode_duplicate")) : nullptr;
+    if (!duplicateUri)
+        return VLC_EGENERIC;
+    char* redirect = duplicateUri(url.c_str());
+    if (!redirect)
+        return VLC_ENOMEM;
+    access->psz_url = redirect;
+    DebugLogWrite("INFO", "VLC", "LOCAL_ARCHIVE_REDIRECT", "archive=%s | native=1 | http=0", utf8.c_str());
+    return VLC_ACCESS_REDIRECT;
+}
+
+void CloseLocalArchive(vlc_object_t*) {}
+
 } // namespace
 
 vlc_module_begin()
@@ -487,4 +536,13 @@ vlc_module_begin()
     set_capability("access", 210)
     add_shortcut("ast")
     set_callbacks(Open, Close)
+
+    // Higher priority than VLC's built-in file access (50), but only accept
+    // actual local archives; all other file types fall back to VLC unchanged.
+    add_submodule()
+    set_shortname("Archive Stream local archives")
+    set_description("Open ZIP/7z/RAR directly through VLC Open File and drag-and-drop")
+    set_capability("access", 60)
+    add_shortcut("file")
+    set_callbacks(OpenLocalArchive, CloseLocalArchive)
 vlc_module_end()

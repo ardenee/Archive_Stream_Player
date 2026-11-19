@@ -27,17 +27,24 @@ try {
     @'
 Archive Stream Player for VLC 3 (64-bit)
 
-Extract the package to a writable folder; no change to VLC's
-installation directory is required.
+Recommended: use the main Archive Stream Player installer to enable
+VLC 3 x64 Open File and archive drag-and-drop automatically.
 
-Use the archive launcher in this folder to open a ZIP, 7z or RAR album:
+For portable/manual VLC 3 x64 installs, copy the packaged DLL from
+plugins\access\libarchive_stream_plugin.dll into your VLC directory's
+plugins\access folder. Then run VLC's vlc-cache-gen.exe against VLC's
+plugins folder and restart VLC. After that, open an archive normally
+with Media > Open File or drag the archive into VLC.
+
+The older launcher remains available for diagnostics and compatibility:
 
   powershell -File .\launch-archive.ps1 -Player VLC
     -PlayerPath "C:\Path\To\VLC\vlc.exe" -Archive "C:\Music\album.7z"
 
 VLC plays the audio using its own codecs. Archive Stream supplies the
 ZIP/7z/RAR reader, encrypted archive passwords, streaming, RAM and
-managed-cache fallbacks, and album playlists.
+managed-cache fallbacks, and album playlists. No HTTP bridge or launcher
+is needed for ordinary VLC 3 x64 Open File or archive drag/drop.
 
 Use configure-adapters.ps1 to change shared settings. An explicit
 compatibility mode is available for older VLC versions where supported.
