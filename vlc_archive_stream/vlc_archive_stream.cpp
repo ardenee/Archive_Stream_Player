@@ -25,6 +25,7 @@ extern "C" int poll(struct pollfd*, unsigned, int);
 #include "archive_passwords.h"
 #include "../shared/archive_adapter_preferences.h"
 #include "../shared/archive_adapter_tag_probe.h"
+#include "../shared/archive_adapter_audio_probe.h"
 #include "../shared/archive_adapter_logging.h"
 #include "../shared/archive_unified_cache.h"
 #include <algorithm>
@@ -39,6 +40,20 @@ extern "C" int poll(struct pollfd*, unsigned, int);
 
 namespace
 {
+// Resolve VLC's logger at runtime: this MSVC plugin has no VLC import library.
+// VLC owns the log call, so Tools > Messages identifies the native module.
+void VlcNativeInfo(vlc_object_t* object, const char* message)
+{
+    using VlcLog = void (__cdecl*)(vlc_object_t*, int, const char*, const char*, unsigned, const char*, const char*, ...);
+    static const VlcLog log = []() -> VlcLog
+    {
+        const HMODULE module = GetModuleHandleW(L"libvlccore.dll");
+        return module ? reinterpret_cast<VlcLog>(GetProcAddress(module, "vlc_Log")) : nullptr;
+    }();
+    if (log)
+        log(object, VLC_MSG_INFO, "archive_stream", __FILE__, __LINE__, __func__, "%s", message);
+}
+
 enum class Route { None, Stream, Memory, Cache };
 struct State
 {
@@ -417,8 +432,13 @@ int Open(vlc_object_t* object)
                     if (valid)
                         ext = filename.substr(dot);
                 }
-                DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_TITLE", "index=%u | title=%s", entry.index, title.c_str());
-                playlist += "#EXTINF:-1," + title + "\r\n";
+                ArchiveAdapterAudioInfo audio{};
+                // Only bounded header probes of independently streamable entries;
+                // no full extraction, content CRCs or forced solid-archive reads.
+                const bool knownDuration = ArchiveAdapterProbeEntryAudio(archive, entry, audio) && audio.HasDuration();
+                const std::string duration = knownDuration ? std::to_string(audio.durationSeconds) : "-1";
+                DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_DURATION", "index=%u | duration_seconds=%s | known=%d | title=%s", entry.index, duration.c_str(), knownDuration ? 1 : 0, title.c_str());
+                playlist += "#EXTINF:" + duration + "," + title + "\r\n";
                 playlist += prefix + "/" + std::to_string(entry.index) + "/track" + ext + "\r\n";
                 ++selected;
             }
@@ -434,6 +454,7 @@ int Open(vlc_object_t* object)
             access->pf_control = Control;
             access->p_sys = s.release();
             DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_OPEN", "entries=%u | bytes=%llu", selected, static_cast<unsigned long long>(playlist.size()));
+            VlcNativeInfo(reinterpret_cast<vlc_object_t*>(access), ("Archive Stream Player: native archive playlist opened (" + std::to_string(selected) + " tracks, no HTTP)").c_str());
             return VLC_SUCCESS;
         }
         const auto found = std::find_if(entries.begin(), entries.end(), [index](const ArchiveEntry& e)
@@ -460,6 +481,7 @@ int Open(vlc_object_t* object)
         access->pf_control = Control;
         access->p_sys = s.release();
         DebugLogWrite("INFO", "VLC", "ACCESS_OPEN_OK", "index=%u", index);
+        VlcNativeInfo(reinterpret_cast<vlc_object_t*>(access), ("Archive Stream Player: native archive audio stream opened (entry " + std::to_string(index) + ")").c_str());
         return VLC_SUCCESS;
     }
     catch (...)
@@ -523,6 +545,7 @@ int OpenLocalArchive(vlc_object_t* object)
         return VLC_ENOMEM;
     access->psz_url = redirect;
     DebugLogWrite("INFO", "VLC", "LOCAL_ARCHIVE_REDIRECT", "archive=%s | native=1 | http=0", utf8.c_str());
+    VlcNativeInfo(reinterpret_cast<vlc_object_t*>(access), ("Archive Stream Player: native Open File/drag-drop handler active (no HTTP): " + utf8).c_str());
     return VLC_ACCESS_REDIRECT;
 }
 

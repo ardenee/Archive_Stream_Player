@@ -1,6 +1,6 @@
 # Archive Stream Player for VLC 3 (64-bit)
 
-**Open ZIP, 7z and RAR audio albums directly in VLC.** Version 1.4 of the native VLC 3 SDK access plugin supports VLC's normal **Media > Open File** and archive drag-and-drop, without PowerShell, HTTP, an external launcher or extracting an album to a directory.
+**Open ZIP, 7z and RAR audio albums directly in VLC.** Version 1.4.1 of the native VLC 3 SDK access plugin supports VLC's normal **Media > Open File** and archive drag-and-drop, without PowerShell, HTTP, an external launcher or extracting an album to a directory.
 
 ## How to use
 
@@ -8,6 +8,14 @@
 2. Restart VLC if it is already running.
 3. Use **Media > Open File** and choose an audio ZIP/7z/RAR archive, or drag the archive into VLC.
 4. VLC lists the archive's supported audio entries as tracks. Choose a track, play and seek normally.
+
+## Confirming the native plugin is used
+
+Open **Tools > Messages** (set verbosity to 1 or 2), then reopen an archive. Look for `Archive Stream Player: native Open File/drag-drop handler active (no HTTP)` and `Archive Stream Player: native archive playlist opened`. When playing a track, the native source is an `ast://` URI, not a `file://` archive path or local HTTP URL. You can also enable shared debug logging and check `ArchiveStreamPlayer/Logs/archive_stream_vlc.log` under your local application-data directory; entries include `LOCAL_ARCHIVE_REDIRECT`, `NATIVE_PLAYLIST_DURATION`, and `ROUTE_STREAM`/`ROUTE_MEMORY`/`ROUTE_CACHE`.
+
+## Track durations
+
+The native playlist now supplies real durations on opening for independently streamable **MP3 with a validated Info/Xing frame, FLAC with STREAMINFO, and WAV with a valid RIFF header**. It probes only bounded headers through the shared backend, never decodes whole albums, recalculates CRCs or extracts solid archives merely to obtain times. Unsupported/untrusted headers, other codecs, and solid or encrypted entries still begin with unknown duration until VLC reads the individual track. In DEV VLC 3.0.24, all nine Subspecies 4 MP3 durations appeared in the playlist before playing those tracks.
 
 VLC's built-in audio decoders decode the audio. Archive Stream supplies the archive container reader and each uncompressed audio byte stream. The route is **direct streaming first**, then memory when it fits the shared configured buffer, then managed disk cache only if necessary. Password prompts, encrypted archives, titles and logging use the shared settings. Archive files stay unchanged; content CRCs are never recalculated for metadata.
 

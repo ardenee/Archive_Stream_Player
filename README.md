@@ -50,7 +50,7 @@ Play music directly from **ZIP, 7z and RAR archives** in your favourite Windows 
 | MediaMonkey | 5 / 2024 |
 | VLC | 3, 64-bit |
 
-The installer detects supported players and lets you choose which plugins to install. **VLC 3 x64** installs its native access DLL directly into VLC and refreshes the plugin cache. Use VLC's normal Media > Open File or drag an archive into VLC; no separate shortcut is needed.
+The installer detects supported players and lets you choose which plugins to install. **VLC 3 x64** installs its native access DLL directly into VLC and refreshes the plugin cache. Use VLC's normal Media > Open File or drag an archive into VLC; no separate shortcut is needed. VLC's **Tools > Messages** now identifies the native handler explicitly, and version 1.4.1 supplies pre-play playlist times from trusted MP3/FLAC/WAV headers for independently streamable entries (DEV Subspecies 4: 9/9).
 
 WACUP 64-bit has no native plugin. Windows Media Player integration remains experimental and is not included in the installer.
 
