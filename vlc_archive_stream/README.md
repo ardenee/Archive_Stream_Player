@@ -1,34 +1,42 @@
 # Archive Stream Player for VLC 3 (64-bit)
 
-**Open ZIP, 7z and RAR audio albums directly in VLC.** Version 1.4.1 of the native VLC 3 SDK access plugin supports VLC's normal **Media > Open File** and archive drag-and-drop, without PowerShell, HTTP, an external launcher or extracting an album to a directory.
+**Open ZIP, 7z and RAR audio albums directly in VLC** with the native VLC 3 SDK access plugin (v1.5.0). Use VLC's ordinary **Media > Open File** (select All Files if needed) or drag an archive into VLC. No PowerShell, HTTP server, launcher, or album extraction is required.
 
-## How to use
+## Install and use
 
-1. Install Archive Stream Player and select the **VLC 3 64-bit** component. This installs `libarchive_stream_plugin.dll` into the VLC `plugins/access` directory and rebuilds VLC's plugin cache.
-2. Restart VLC if it is already running.
-3. Use **Media > Open File** and choose an audio ZIP/7z/RAR archive, or drag the archive into VLC.
-4. VLC lists the archive's supported audio entries as tracks. Choose a track, play and seek normally.
+1. Install Archive Stream Player and select the **VLC 3 64-bit** component. The installer places `libarchive_stream_plugin.dll` in VLC's `plugins/access` directory and regenerates its plugin cache.
+2. Restart VLC if it was running.
+3. Open or drop a ZIP, 7z or RAR audio archive.
+4. The album expands in VLC's native playlist. Play, seek, and select tracks as usual. VLC's own decoders handle the audio.
 
-## Confirming the native plugin is used
+Normal MP3, WAV, FLAC, videos, and other ordinary media remain owned by VLC's original access modules.
 
-Open **Tools > Messages** (set verbosity to 1 or 2), then reopen an archive. Look for `Archive Stream Player: native Open File/drag-drop handler active (no HTTP)` and `Archive Stream Player: native archive playlist opened`. When playing a track, the native source is an `ast://` URI, not a `file://` archive path or local HTTP URL. You can also enable shared debug logging and check `ArchiveStreamPlayer/Logs/archive_stream_vlc.log` under your local application-data directory; entries include `LOCAL_ARCHIVE_REDIRECT`, `NATIVE_PLAYLIST_DURATION`, and `ROUTE_STREAM`/`ROUTE_MEMORY`/`ROUTE_CACHE`.
+## Native VLC settings
 
-## Track durations
+Open **Tools > Preferences** (`Ctrl+P`), select **Show settings: All** at the bottom, then **Input / Codecs > Access modules > Archive Stream Player**.
 
-The native playlist now supplies real durations on opening for independently streamable **MP3 with a validated Info/Xing frame, FLAC with STREAMINFO, and WAV with a valid RIFF header**. It probes only bounded headers through the shared backend, never decodes whole albums, recalculates CRCs or extracts solid archives merely to obtain times. Unsupported/untrusted headers, other codecs, and solid or encrypted entries still begin with unknown duration until VLC reads the individual track. In DEV VLC 3.0.24, all nine Subspecies 4 MP3 durations appeared in the playlist before playing those tracks.
+Settings include the memory threshold (MiB), managed cache size/age and cleanup, password prompts and verified-password saving, password-list path, **Use File Tags**, six title formats, prefix/postfix, debug logging and log directory. VLC stores these preferences in its normal configuration.
 
-VLC's built-in audio decoders decode the audio. Archive Stream supplies the archive container reader and each uncompressed audio byte stream. The route is **direct streaming first**, then memory when it fits the shared configured buffer, then managed disk cache only if necessary. Password prompts, encrypted archives, titles and logging use the shared settings. Archive files stay unchanged; content CRCs are never recalculated for metadata.
+**Use VLC-specific Archive Stream settings** is off by default. Off means the shared Archive Stream Player settings continue to govern VLC as well as other adapters. Turn it on to use the values in VLC's own preferences page **for VLC only**; saving them does not overwrite other players' settings. Reopen the archive after changing options. The previously installed shared configuration utility remains available.
 
-Normal MP3/WAV/FLAC files and non-archive media continue through VLC's built-in file access. Unsupported containers and codecs are not automatically made playable. VLC 4 and VLC 32-bit are not supported by this VLC 3 module.
+## Metadata and durations before playback
 
-## Build and advanced compatibility
+Version 1.5.0 uses VLC's native directory-input API rather than a minimal M3U playlist. During archive listing it creates native VLC playlist items and supplies any available **title, artist, album, album artist, genre, date/year and track number** from bounded header/tag probes. The title preset controls the displayed title; **Use File Tags** only determines whether the embedded title overrides that preset. Other tag fields populate independently of that checkbox.
 
-Build `vlc_archive_stream.vcxproj` in **Release|x64** against the official VLC 3 SDK. Inno Setup 7 installs the module into the selected VLC installation. The standalone `package-native-vlc.ps1` also packages the DLL and legacy launcher for optional portable/diagnostic use; **the launcher is not required for regular playback**.
+For duration, validated MP3 Info/Xing (with available LAME gapless correction), FLAC STREAMINFO and WAV RIFF headers are used. Only directly streamable, unencrypted, non-solid entries are inspected before playback, with a bounded 256 KiB tag prefix. There is **no full-archive extraction or CRC recalculation** to obtain playlist metadata. For solid archives, encrypted entries, unsupported codecs and unusually large or unrecognised headers, some metadata remains unknown until VLC plays that track. Embedded cover art is not preloaded.
 
-The VLC module contains two SDK access handlers: the `file` handler recognises local archive paths and redirects them internally to `ast://`; the `ast` handler lists tracks in-process and provides seekable audio data. VLC itself decodes the audio. The optional legacy HTTP bridge is not involved in normal VLC 3 x64 operation.
+The older in-memory XSPF virtual-playlist path remains as a compatibility fallback; normal Open File/drag-and-drop uses the direct native directory API.
 
-## Limitations
+## Verify which plugin is active
 
-The plugin currently has no dedicated graphical preferences page inside VLC; shared settings are edited using the Archive Stream Player configuration shortcut. Existing titles may require reopening the archive to refresh. Live testing confirms direct-file playback on VLC 3.0.24 x64 for ZIP (nine-track Subspecies 4), generated 7z and RAR; a normal MP3 stayed with VLC's original filesystem access module. The code and installer update are in DEV; a previously published installer such as v0.1.7 does not include this updated module.
+Open **Tools > Messages**, choose verbosity **1** or **2**, and reopen the archive. Look for **Archive Stream Player: native tagged archive directory opened** and **Archive Stream Player: native archive audio stream opened**. The audio tracks use `ast://` virtual addresses, not HTTP. With shared or VLC diagnostic logging enabled, check `%LOCALAPPDATA%\ArchiveStreamPlayer\Logs\archive_stream_vlc.log` for `LOCAL_ARCHIVE_REDIRECT`, `NATIVE_DIRECTORY_TAGS`, `NATIVE_DIRECTORY_OPEN` and `ROUTE_STREAM`/`ROUTE_MEMORY`/`ROUTE_CACHE`.
+
+## Routing, validation and limitations
+
+Archive Stream uses **direct streaming first**, then a bounded memory buffer, then managed disk cache as a last resort. Shared password handling supports encrypted archives when the backend can decode them, but may require memory/cache fallback. The original archive is never modified.
+
+DEV validation on VLC **3.0.24 x64**: all nine Subspecies 4 ZIP tracks were listed with artist, album, genre, year, title and verified durations prior to playback; generated 7z and RAR WAV cases opened through the native directory and streamed successfully. A normal MP3 remained on VLC's built-in filesystem module. The standalone test is `test-native-directory-metadata.ps1`.
+
+Build `vlc_archive_stream.vcxproj` in **Release|x64** against VLC 3 SDK. Inno Setup 7 assembles the main Windows installer. VLC 4, VLC 32-bit, and native VLC cover-art preloading are not currently supported.
 
 See the [feature matrix](../FEATURE-MATRIX.md) and [licensing information](../LICENSING.md).

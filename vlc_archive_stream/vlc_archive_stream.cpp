@@ -18,6 +18,7 @@ extern "C" int poll(struct pollfd*, unsigned, int);
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_access.h>
+#include <vlc_input_item.h>
 #include <vlc_url.h>
 #include "archive_backend.h"
 #include "archive_common.h"
@@ -54,11 +55,176 @@ void VlcNativeInfo(vlc_object_t* object, const char* message)
         log(object, VLC_MSG_INFO, "archive_stream", __FILE__, __LINE__, __func__, "%s", message);
 }
 
+// Native VLC module preferences are stored in VLC's configuration (vlcrc).
+// The shared preferences remain authoritative unless VLC-specific overrides
+// are explicitly enabled. Never silently write a VLC value to HKCU shared prefs.
+const char* const kVlcTitleTemplates[] = {
+    "<filename>", "<archivetype>: <filename>", "<#>. <filename>",
+    "<filename> [<filetype>]", "<archivetype>: <#> - <filename>",
+    "[<archive>] <#> - <filename>"
+};
+const char* const kVlcTitleLabels[] = {
+    "Filename", "Archive type: filename", "Track number. Filename",
+    "Filename [filetype]", "Archive type: track - filename",
+    "[Archive] track - filename"
+};
+
+using VlcConfigInherit = int (__cdecl*)(vlc_object_t*, const char*, int, vlc_value_t*);
+using VlcConfigFree = void (__cdecl*)(void*);
+
+bool ReadVlcNativePreferences(vlc_object_t* object, ArchiveAdapterPreferences& prefs)
+{
+    const HMODULE vlc = GetModuleHandleW(L"libvlccore.dll");
+    const HMODULE crt = GetModuleHandleW(L"msvcrt.dll");
+    const auto inherit = vlc ? reinterpret_cast<VlcConfigInherit>(GetProcAddress(vlc, "var_Inherit")) : nullptr;
+    const auto hostFree = crt ? reinterpret_cast<VlcConfigFree>(GetProcAddress(crt, "free")) : nullptr;
+    if (!object || !inherit || !hostFree)
+        return false;
+    const auto flag = [&](const char* name) -> bool
+    {
+        vlc_value_t value{};
+        return inherit(object, name, VLC_VAR_BOOL, &value) == VLC_SUCCESS && value.b_bool;
+    };
+    if (!flag("ast-native-settings"))
+        return false;
+
+    const auto number = [&](const char* name, int64_t low, int64_t high, unsigned fallback) -> unsigned
+    {
+        vlc_value_t value{};
+        if (inherit(object, name, VLC_VAR_INTEGER, &value) != VLC_SUCCESS)
+            return fallback;
+        return value.i_int >= low && value.i_int <= high ? static_cast<unsigned>(value.i_int) : fallback;
+    };
+    const auto string = [&](const char* name, size_t maxBytes) -> std::string
+    {
+        vlc_value_t value{};
+        if (inherit(object, name, VLC_VAR_STRING, &value) != VLC_SUCCESS)
+            return {};
+        char* raw = value.psz_string;
+        if (!raw)
+            return {};
+        const size_t length = strnlen(raw, maxBytes + 1);
+        std::string text;
+        if (length <= maxBytes)
+            text.assign(raw, length);
+        // VLC 3 Windows owns these strings using MSVCRT (not the plugin's UCRT).
+        hostFree(raw);
+        return text;
+    };
+    const auto wide = [&](const char* name, size_t maxBytes) -> std::wstring
+    {
+        const std::string utf8 = string(name, maxBytes);
+        if (utf8.empty())
+            return {};
+        const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+        if (count <= 0)
+            return {};
+        std::wstring result(static_cast<size_t>(count), L'\0');
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), result.data(), count) != count)
+            return {};
+        return result;
+    };
+    const auto absolutePath = [](const std::wstring& path) -> bool
+    {
+        const bool drive = path.size() >= 3 && ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) &&
+            path[1] == L':' && (path[2] == L'\\' || path[2] == L'/');
+        const bool unc = path.size() >= 5 && path[0] == L'\\' && path[1] == L'\\';
+        return drive || unc;
+    };
+
+    prefs.memoryMb = number("ast-memory-mb", 1, 512, prefs.memoryMb);
+    prefs.cacheLimitMb = number("ast-cache-mb", 0, 20480, prefs.cacheLimitMb);
+    prefs.cacheAgeDays = number("ast-cache-days", 1, 365, prefs.cacheAgeDays);
+    prefs.cacheAutoCleanup = flag("ast-cache-cleanup");
+    prefs.promptPasswords = flag("ast-prompt-passwords");
+    prefs.askToSavePassword = flag("ast-save-passwords");
+    prefs.useFileTags = flag("ast-use-file-tags");
+    prefs.debugLogging = flag("ast-debug-logging");
+
+    const std::wstring templateValue = wide("ast-title-template", 128);
+    for (const char* candidate : kVlcTitleTemplates)
+    {
+        if (templateValue == ArchiveAdapterUtf8ToWide(candidate))
+        {
+            prefs.titleTemplate = templateValue;
+            break;
+        }
+    }
+    // VLC's options allow at most 20 UTF-8 bytes for each decoration;
+    // invalid values are ignored instead of being truncated mid-character.
+    const std::string prefix = string("ast-title-prefix", 64);
+    if (prefix.size() <= 20)
+        prefs.titlePrefix = wide("ast-title-prefix", 64);
+    const std::string postfix = string("ast-title-postfix", 64);
+    if (postfix.size() <= 20)
+        prefs.titlePostfix = wide("ast-title-postfix", 64);
+
+    const std::wstring passwordList = wide("ast-password-list", 4095);
+    if (absolutePath(passwordList))
+        prefs.passwordListPath = passwordList;
+    const std::wstring logDirectory = wide("ast-log-directory", 4095);
+    if (absolutePath(logDirectory))
+        prefs.logDirectory = logDirectory;
+    return true;
+}
+
+thread_local ArchiveAdapterPreferences g_vlcPasswordPrefs;
+thread_local bool g_vlcPasswordPrefsSet = false;
+
+void SetVlcPasswordPreferences(const ArchiveAdapterPreferences& prefs)
+{
+    g_vlcPasswordPrefs = prefs;
+    g_vlcPasswordPrefsSet = true;
+}
+
+// XSPF gives VLC artist, album, number and duration before it decodes a
+// track. M3U #EXTINF only provided the title and duration. Escape metadata
+// because archive-supplied tags are untrusted and may contain XML delimiters.
+std::string XmlText(const std::string& value)
+{
+    const std::string utf8 = ArchiveAdapterWideToUtf8(ArchiveAdapterUtf8ToWide(value));
+    std::string output;
+    output.reserve(utf8.size() + 16);
+    for (unsigned char byte : utf8)
+    {
+        switch (byte)
+        {
+        case '&': output += "&amp;"; break;
+        case '<': output += "&lt;"; break;
+        case '>': output += "&gt;"; break;
+        case '"': output += "&quot;"; break;
+        case '\'': output += "&apos;"; break;
+        default:
+            if (byte >= 32 || byte == 9 || byte == 10 || byte == 13)
+                output += static_cast<char>(byte);
+            else
+                output += ' ';
+            break;
+        }
+    }
+    return output;
+}
+
+void XspfField(std::string& playlist, const char* field, const std::string& value)
+{
+    if (!value.empty())
+    {
+        playlist += "<";
+        playlist += field;
+        playlist += ">";
+        playlist += XmlText(value);
+        playlist += "</";
+        playlist += field;
+        playlist += ">\r\n";
+    }
+}
+
 enum class Route { None, Stream, Memory, Cache };
 struct State
 {
     std::wstring archive;
     ArchiveEntry entry;
+    std::vector<ArchiveEntry> directoryEntries;
     ArchiveAdapterPreferences prefs;
     ArchiveBackendStream stream{};
     std::vector<unsigned char> memory;
@@ -93,7 +259,7 @@ bool DecodeLocation(std::string_view loc, std::wstring& archive, uint32_t& index
     auto suffix = loc.substr(slash + 1);
     auto end = suffix.find('/');
     auto digits = suffix.substr(0, end);
-    // "list" is a native M3U8 virtual member. VLC will fetch the playlist
+    // "list" is a native XSPF virtual member. VLC will fetch the playlist
     // and all referenced entries in the same process, preserving verified
     // archive-session credentials without a temporary password file.
     if (digits == "list")
@@ -125,7 +291,7 @@ bool AskPassword(const char* path, const char*, char* output, size_t capacity, b
     output[0] = '\0';
     if (save)
         *save = false;
-    const auto prefs = ArchiveAdapterPreferencesLoad();
+    const auto prefs = g_vlcPasswordPrefsSet ? g_vlcPasswordPrefs : ArchiveAdapterPreferencesLoad();
     if (!prefs.promptPasswords)
         return false;
     CREDUI_INFOW ui{};
@@ -203,6 +369,7 @@ bool SeekState(State& s, uint64_t position)
         return false;
     if (s.route == Route::Stream)
     {
+        SetVlcPasswordPreferences(s.prefs);
         ArchivePasswordSetPromptAllowedForCurrentThread(s.prefs.promptPasswords);
         if (!ArchiveSeekEntryStream(s.stream, position) && !MemoryOrCache(s))
             return false;
@@ -226,6 +393,7 @@ ssize_t Read(stream_t* access, void* out, size_t requested)
     const size_t needed = static_cast<size_t>((std::min)(static_cast<uint64_t>(requested), s->entry.size - s->position));
     if (s->route == Route::Stream)
     {
+        SetVlcPasswordPreferences(s->prefs);
         ArchivePasswordSetPromptAllowedForCurrentThread(s->prefs.promptPasswords);
         const auto got = ArchiveReadEntryStreamDetailed(s->stream, out, needed);
         if (got.bytesRead)
@@ -269,6 +437,8 @@ int Control(stream_t* access, int query, va_list args)
         return VLC_EGENERIC;
     switch (query)
     {
+    case STREAM_IS_DIRECTORY:
+        return access->pf_readdir ? VLC_SUCCESS : VLC_EGENERIC;
     case STREAM_CAN_SEEK:
     case STREAM_CAN_FASTSEEK:
     case STREAM_CAN_PAUSE:
@@ -288,6 +458,111 @@ int Control(stream_t* access, int query, va_list args)
     }
 }
 
+
+using VlcNewItem = input_item_t* (__cdecl*)(const char*, const char*, mtime_t, int, input_item_net_type);
+using VlcSetItemMeta = void (__cdecl*)(input_item_t*, vlc_meta_type_t, const char*);
+using VlcAppendItem = input_item_node_t* (__cdecl*)(input_item_node_t*, input_item_t*);
+using VlcReleaseItem = void (__cdecl*)(input_item_t*);
+
+int ReadArchiveDirectory(stream_t* access, input_item_node_t* node)
+{
+    auto* state = static_cast<State*>(access->p_sys);
+    if (!state || !node || state->entry.index != UINT32_MAX || !access->psz_location)
+        return VLC_EGENERIC;
+    const HMODULE core = GetModuleHandleW(L"libvlccore.dll");
+    const auto create = core ? reinterpret_cast<VlcNewItem>(GetProcAddress(core, "input_item_NewExt")) : nullptr;
+    const auto setMeta = core ? reinterpret_cast<VlcSetItemMeta>(GetProcAddress(core, "input_item_SetMeta")) : nullptr;
+    const auto append = core ? reinterpret_cast<VlcAppendItem>(GetProcAddress(core, "input_item_node_AppendItem")) : nullptr;
+    const auto release = core ? reinterpret_cast<VlcReleaseItem>(GetProcAddress(core, "input_item_Release")) : nullptr;
+    if (!create || !setMeta || !append || !release)
+        return VLC_EGENERIC;
+
+    try
+    {
+        const std::string_view location(access->psz_location);
+        const size_t slash = location.find('/');
+        if (slash == std::string_view::npos)
+            return VLC_EGENERIC;
+        const std::string prefix = "ast://" + std::string(location.substr(0, slash));
+        const auto normalize = [](const std::string& s)
+        {
+            return ArchiveAdapterWideToUtf8(ArchiveAdapterUtf8ToWide(s));
+        };
+        unsigned selected = 0;
+        for (const ArchiveEntry& entry : state->directoryEntries)
+        {
+            if (entry.isFolder || !entry.isSupportedAudio || entry.size == 0)
+                continue;
+            ArchiveTrackTags tags{};
+            const bool tagged = ArchiveAdapterProbeEntryTags(state->archive, entry, tags);
+            std::string title = ArchiveAdapterWideToUtf8(ArchiveAdapterPreferredTitle(state->archive,
+                ArchiveAdapterUtf8ToWide(entry.path), entry.index + 1, state->prefs,
+                (state->prefs.useFileTags && tagged) ? ArchiveAdapterUtf8ToWide(tags.title) : std::wstring()));
+            if (title.empty())
+                title = normalize(entry.path);
+
+            std::string ext;
+            const auto dot = entry.path.find_last_of('.');
+            if (dot != std::string::npos && entry.path.size() - dot <= 10)
+            {
+                bool valid = true;
+                for (size_t i = dot; i < entry.path.size(); ++i)
+                {
+                    const char c = entry.path[i];
+                    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '.'))
+                        valid = false;
+                }
+                if (valid)
+                    ext = entry.path.substr(dot);
+            }
+
+            ArchiveAdapterAudioInfo audio{};
+            const bool knownDuration = ArchiveAdapterProbeEntryAudio(state->archive, entry, audio) && audio.HasDuration();
+            const mtime_t duration = knownDuration ? static_cast<mtime_t>(audio.durationSeconds * CLOCK_FREQ + 0.5) : -1;
+            const std::string uri = prefix + "/" + std::to_string(entry.index) + "/track" + ext;
+            input_item_t* item = create(uri.c_str(), title.c_str(), duration, ITEM_TYPE_FILE, ITEM_LOCAL);
+            if (!item)
+                return VLC_ENOMEM;
+            const auto metadata = [&](vlc_meta_type_t key, const std::string& text)
+            {
+                if (!text.empty())
+                {
+                    const std::string utf8 = normalize(text);
+                    if (!utf8.empty())
+                        setMeta(item, key, utf8.c_str());
+                }
+            };
+            metadata(vlc_meta_Title, title);
+            if (tagged)
+            {
+                metadata(vlc_meta_Artist, tags.artist);
+                metadata(vlc_meta_Album, tags.album);
+                metadata(vlc_meta_AlbumArtist, tags.albumArtist);
+                metadata(vlc_meta_Genre, tags.genre);
+                metadata(vlc_meta_Date, tags.year);
+                if (tags.trackNumber)
+                    metadata(vlc_meta_TrackNumber, std::to_string(tags.trackNumber));
+            }
+            const bool inserted = append(node, item) != nullptr;
+            release(item);
+            if (!inserted)
+                return VLC_ENOMEM;
+            DebugLogWrite("INFO", "VLC", "NATIVE_DIRECTORY_TAGS", "archive=%s | index=%u | duration_seconds=%.3f | tagged=%d | title=%s | artist=%s | album=%s | genre=%s | year=%s",
+                ArchiveAdapterWideToUtf8(state->archive).c_str(), entry.index, knownDuration ? audio.durationSeconds : -1.0, tagged ? 1 : 0,
+                title.c_str(), tags.artist.c_str(), tags.album.c_str(), tags.genre.c_str(), tags.year.c_str());
+            ++selected;
+        }
+        DebugLogWrite("INFO", "VLC", "NATIVE_DIRECTORY_OPEN", "archive=%s | entries=%u | native_meta=1 | http=0", ArchiveAdapterWideToUtf8(state->archive).c_str(), selected);
+        VlcNativeInfo(reinterpret_cast<vlc_object_t*>(access), ("Archive Stream Player: native tagged archive directory opened (" + std::to_string(selected) + " tracks)").c_str());
+        return selected ? VLC_SUCCESS : VLC_EGENERIC;
+    }
+    catch (...)
+    {
+        return VLC_EGENERIC;
+    }
+}
+
 int Open(vlc_object_t* object)
 {
     auto* access = reinterpret_cast<stream_t*>(object);
@@ -302,6 +577,7 @@ int Open(vlc_object_t* object)
         auto s = std::make_unique<State>();
         s->archive = archive;
         s->prefs = ArchiveAdapterPreferencesLoad();
+        const bool nativePreferences = ReadVlcNativePreferences(object, s->prefs);
         // Native launcher v1.2 may supply a password-list path for its VLC
         // child process only. The CLI never changes HKCU/shared preferences.
         // Ignore the environment unless a complete absolute path is given;
@@ -376,9 +652,13 @@ int Open(vlc_object_t* object)
         ArchiveSetDataDirectoryName("VLCArchiveStream");
         char debug[8]{};
         const bool forced = GetEnvironmentVariableA("ARCHIVE_STREAM_ADAPTER_DEBUG", debug, sizeof(debug)) == 1 && debug[0] == '1';
-        ArchiveAdapterLogging::Configure(L"vlc", s->prefs.debugLogging || forced);
-        DebugLogWrite("INFO", "VLC", "NATIVE_PREFS", "memoryMb=%u | cacheLimitMb=%u | titleTemplate=%s",
-            s->prefs.memoryMb, s->prefs.cacheLimitMb, ArchiveAdapterWideToUtf8(s->prefs.titleTemplate).c_str());
+        const bool enableLogging = s->prefs.debugLogging || forced;
+        const std::wstring logPath = ArchiveAdapterLogging::FilePath(s->prefs, L"vlc");
+        DebugLogConfigureWide(enableLogging && !logPath.empty(), logPath.c_str(), false);
+        DebugLogWrite("INFO", "VLC", "NATIVE_PREFS", "source=%s | memoryMb=%u | cacheLimitMb=%u | titleTemplate=%s | useFileTags=%d | promptPasswords=%d",
+            nativePreferences ? "vlc" : "shared", s->prefs.memoryMb, s->prefs.cacheLimitMb,
+            ArchiveAdapterWideToUtf8(s->prefs.titleTemplate).c_str(), s->prefs.useFileTags ? 1 : 0, s->prefs.promptPasswords ? 1 : 0);
+        SetVlcPasswordPreferences(s->prefs);
         ArchivePasswordSetPromptCallback(s->prefs.promptPasswords ? AskPassword : nullptr);
         ArchivePasswordSetPromptAllowedForCurrentThread(s->prefs.promptPasswords);
         if (!s->prefs.passwordListPath.empty())
@@ -393,12 +673,28 @@ int Open(vlc_object_t* object)
             return VLC_EGENERIC;
         if (index == UINT32_MAX)
         {
+            const std::string_view requested(access->psz_location);
+            if (requested.find("/list/album.astdir") != std::string_view::npos)
+            {
+                // VLC native directory list supplies full metadata directly:
+                // artist, album, album artist, genre, date and track number.
+                s->entry.index = UINT32_MAX;
+                s->directoryEntries = std::move(entries);
+                access->pf_read = nullptr;
+                access->pf_block = nullptr;
+                access->pf_seek = nullptr;
+                access->pf_readdir = ReadArchiveDirectory;
+                access->pf_control = Control;
+                access->p_sys = s.release();
+                DebugLogWrite("INFO", "VLC", "NATIVE_DIRECTORY_ACCESS", "native_metadata=1 | http=0");
+                return VLC_SUCCESS;
+            }
             // VLC opens this as an ordinary playlist, then invokes this same
             // module for every track in the current process and session.
             const std::string_view location(access->psz_location);
             const auto split = location.find('/');
             const std::string prefix = "ast://" + std::string(location.substr(0, split));
-            std::string playlist = "#EXTM3U\r\n";
+            std::string playlist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\r\n<trackList>\r\n";
             unsigned selected = 0;
             for (const auto& entry : entries)
             {
@@ -406,10 +702,12 @@ int Open(vlc_object_t* object)
                     continue;
                 const std::string filename = entry.path;
                 ArchiveTrackTags tags{};
-                const bool tagged = s->prefs.useFileTags && ArchiveAdapterProbeEntryTags(archive, entry, tags);
+                // Artist/album metadata is independent of the title preset. Probe
+                // each directly streamable entry even when Use File Tags is off.
+                const bool tagged = ArchiveAdapterProbeEntryTags(archive, entry, tags);
                 auto title = ArchiveAdapterWideToUtf8(ArchiveAdapterPreferredTitle(archive,
                     ArchiveAdapterUtf8ToWide(filename), entry.index + 1, s->prefs,
-                    tagged ? ArchiveAdapterUtf8ToWide(tags.title) : std::wstring()));
+                    (s->prefs.useFileTags && tagged) ? ArchiveAdapterUtf8ToWide(tags.title) : std::wstring()));
                 if (title.empty())
                     title = filename;
                 for (char& ch : title)
@@ -438,10 +736,33 @@ int Open(vlc_object_t* object)
                 const bool knownDuration = ArchiveAdapterProbeEntryAudio(archive, entry, audio) && audio.HasDuration();
                 const std::string duration = knownDuration ? std::to_string(audio.durationSeconds) : "-1";
                 DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_DURATION", "index=%u | duration_seconds=%s | known=%d | title=%s", entry.index, duration.c_str(), knownDuration ? 1 : 0, title.c_str());
-                playlist += "#EXTINF:" + duration + "," + title + "\r\n";
-                playlist += prefix + "/" + std::to_string(entry.index) + "/track" + ext + "\r\n";
+                playlist += "<track>\r\n";
+                XspfField(playlist, "location", prefix + "/" + std::to_string(entry.index) + "/track" + ext);
+                XspfField(playlist, "title", title);
+                if (tagged)
+                {
+                    XspfField(playlist, "creator", tags.artist);
+                    XspfField(playlist, "album", tags.album);
+                    if (tags.trackNumber)
+                        playlist += "<trackNum>" + std::to_string(tags.trackNumber) + "</trackNum>\r\n";
+                    // XSPF standard has no genre/year elements. Preserve both
+                    // as annotation; VLC may also fill its Genre/Date fields
+                    // itself when the decoder opens the track.
+                    std::string annotation;
+                    if (!tags.genre.empty())
+                        annotation = "Genre: " + tags.genre;
+                    if (!tags.year.empty())
+                        annotation += (annotation.empty() ? "" : " | ") + std::string("Year: ") + tags.year;
+                    XspfField(playlist, "annotation", annotation);
+                }
+                if (knownDuration)
+                    playlist += "<duration>" + std::to_string(static_cast<uint64_t>(audio.durationSeconds * 1000.0 + 0.5)) + "</duration>\r\n";
+                playlist += "</track>\r\n";
+                DebugLogWrite("INFO", "VLC", "NATIVE_PLAYLIST_TAGS", "index=%u | tagged=%d | artist=%s | album=%s | genre=%s | year=%s",
+                    entry.index, tagged ? 1 : 0, tags.artist.c_str(), tags.album.c_str(), tags.genre.c_str(), tags.year.c_str());
                 ++selected;
             }
+            playlist += "</trackList>\r\n</playlist>\r\n";
             if (!selected || playlist.size() > 16 * 1024 * 1024)
                 return VLC_EGENERIC;
             s->entry.index = UINT32_MAX;
@@ -480,7 +801,7 @@ int Open(vlc_object_t* object)
         access->pf_seek = Seek;
         access->pf_control = Control;
         access->p_sys = s.release();
-        DebugLogWrite("INFO", "VLC", "ACCESS_OPEN_OK", "index=%u", index);
+        DebugLogWrite("INFO", "VLC", "ACCESS_OPEN_OK", "archive=%s | index=%u", ArchiveAdapterWideToUtf8(archive).c_str(), index);
         VlcNativeInfo(reinterpret_cast<vlc_object_t*>(access), ("Archive Stream Player: native archive audio stream opened (entry " + std::to_string(index) + ")").c_str());
         return VLC_SUCCESS;
     }
@@ -531,7 +852,7 @@ int OpenLocalArchive(vlc_object_t* object)
         url += hex[byte >> 4];
         url += hex[byte & 15];
     }
-    url += "/list/album.m3u8";
+    url += "/list/album.astdir"; // VLC native directory items carry complete metadata before playback.
     // VLC 3 for Windows is built against MinGW/MSVCRT; the host frees
     // redirected URLs with its own CRT. Allocate through VLC, never _strdup
     // from our MSVC/UCRT DLL, to avoid cross-CRT heap corruption.
@@ -559,6 +880,36 @@ vlc_module_begin()
     set_capability("access", 210)
     add_shortcut("ast")
     set_callbacks(Open, Close)
+
+    // VLC 3 native preferences: Tools > Preferences > Show settings: All
+    // > Input / Codecs > Access modules > Archive Stream Player.
+    set_category(CAT_INPUT)
+    set_subcategory(SUBCAT_INPUT_ACCESS)
+    set_help("Open ZIP, 7z and RAR directly. By default all adapters use the shared Archive Stream Player settings. Enable VLC-specific settings to override them for VLC only; reopen the album after saving.")
+    set_section("Settings source", "By default use the shared Archive Stream settings. Enable the following option for VLC-only overrides.")
+    add_bool("ast-native-settings", false, "Use VLC-specific Archive Stream settings", "Override shared settings in VLC only; other players are unaffected. Reopen the archive after saving.", false)
+
+    set_section("Streaming and managed cache", "Direct archive streaming first; if unsupported, memory, then managed disk cache.")
+    add_integer_with_range("ast-memory-mb", 50, 1, 512, "Memory buffer (MiB)", "Maximum uncompressed entry size to hold in memory when direct streaming is impossible.", false)
+    add_integer_with_range("ast-cache-mb", 2048, 0, 20480, "Maximum managed cache (MiB)", "Disk cache limit for entries that cannot be streamed or held in memory; 0 disables disk cache fallback.", false)
+    add_integer_with_range("ast-cache-days", 30, 1, 365, "Cache retention (days)", "Maximum age before cached entries are eligible for cleanup.", false)
+    add_bool("ast-cache-cleanup", true, "Automatic cache cleanup", "Enforce managed-cache size and age limits.", false)
+
+    set_section("Archive passwords", "Passwords are supplied to the shared archive backend. Only use a list you trust.")
+    add_bool("ast-prompt-passwords", true, "Prompt for missing archive passwords", "Ask for an archive password if no saved password succeeds.", false)
+    add_bool("ast-save-passwords", true, "Offer to save verified passwords", "Offer to save a password only after successful archive verification.", false)
+    add_loadfile("ast-password-list", "", "Password list file", "Optional absolute text-file path containing one password per line. Blank uses the shared default.", false)
+
+    set_section("Playlist metadata and track titles", "Embedded tags override title presets when enabled. Only bounded metadata is read before playback.")
+    add_bool("ast-use-file-tags", false, "Use File Tags", "Prefer embedded audio tags over synthetic track titles where available.", false)
+    add_string("ast-title-template", "<filename>", "Title format", "Applies when Use File Tags is disabled or the tag is unavailable.", false)
+        change_string_list(kVlcTitleTemplates, kVlcTitleLabels)
+    add_string("ast-title-prefix", "", "Title prefix", "Up to 20 UTF-8 bytes; applied only to preset titles.", false)
+    add_string("ast-title-postfix", "", "Title postfix", "Up to 20 UTF-8 bytes; applied only to preset titles.", false)
+
+    set_section("Diagnostics", "Track the actual stream, memory and cache routes taken by the native module.")
+    add_bool("ast-debug-logging", false, "Enable Archive Stream diagnostic logging", "Write the VLC host log on warnings/errors, using the selected log folder.", false)
+    add_directory("ast-log-directory", "", "Log directory", "Optional absolute directory. Blank uses the shared Archive Stream log directory.", false)
 
     // Higher priority than VLC's built-in file access (50), but only accept
     // actual local archives; all other file types fall back to VLC unchanged.
