@@ -274,9 +274,21 @@ bool ArchivePasswordLoadList(ArchivePasswordList& outList, std::string& error)
     }
 
     std::string line;
+    bool firstLine = true;
 
     while (std::getline(file, line))
     {
+        // PowerShell and many Windows editors write UTF-8 text with an
+        // optional BOM. It is a file marker, not part of the first password.
+        // Strip it only at offset zero; preserve all other password bytes.
+        if (firstLine && line.size() >= 3 &&
+            static_cast<unsigned char>(line[0]) == 0xEF &&
+            static_cast<unsigned char>(line[1]) == 0xBB &&
+            static_cast<unsigned char>(line[2]) == 0xBF)
+        {
+            line.erase(0, 3);
+        }
+        firstLine = false;
         ArchivePasswordTrimLine(line);
 
         if (line.empty() || line[0] == '#')
