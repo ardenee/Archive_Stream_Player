@@ -32,6 +32,7 @@
     <Compile Include="ArchivePlayerTrackOrder.cs"/>
     <Compile Include="ArchivePlayerDuration.cs"/>
     <Compile Include="ArchivePlayerDurationScan.cs"/>
+    <Compile Include="ArchivePlayerMp3Preview.cs"/>
     <Compile Include="ArchivePlayerVerifiedView.cs"/>
     <Compile Include="ArchivePlayerId3Alias.cs"/>
     <Compile Include="ArchiveOleDropTarget.cs"/>

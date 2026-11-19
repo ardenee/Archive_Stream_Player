@@ -1089,6 +1089,80 @@ static bool ConvertDescriptorName(BASSFILE file, std::string& path)
 }
 
 
+// A bounded MPEG-1/2 Layer III Info/Xing header copied from the first
+// real compressed-archive frame. Only a single genuine frame is allowed.
+// MusicBee uses this header when importing a playlist entry to populate
+// its built-in Time column; BASS still streams the full archive via .ast.
+// CBR/VBR frame counts are verified against the actual decoded duration.
+struct ArchiveMp3InfoPreview
+{
+    size_t frameBytes = 0;
+    DWORD expectedMs = 0;
+};
+
+static bool ParseArchiveMp3InfoPreview(const unsigned char* data, size_t size,
+    ArchiveMp3InfoPreview& info, DWORD verifiedDurationMs = 0)
+{
+    info = {};
+    if (!data || size < 32 || data[0] != 0xff || (data[1] & 0xe0) != 0xe0)
+        return false;
+    const unsigned version = (data[1] >> 3) & 3u;
+    const unsigned layer = (data[1] >> 1) & 3u;
+    const unsigned bitrateIndex = (data[2] >> 4) & 15u;
+    const unsigned rateIndex = (data[2] >> 2) & 3u;
+    if (version == 1 || layer != 1 || bitrateIndex == 0 || bitrateIndex == 15 ||
+        rateIndex == 3)
+        return false;
+    static constexpr unsigned rates[3][3] = {
+        {11025, 12000, 8000}, {22050, 24000, 16000}, {44100, 48000, 32000}
+    };
+    static constexpr unsigned bitrateMpeg1[16] = {
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0
+    };
+    static constexpr unsigned bitrateMpeg2[16] = {
+        0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0
+    };
+    const unsigned rate = rates[version == 3 ? 2 : version == 2 ? 1 : 0][rateIndex];
+    const unsigned bitrate = (version == 3 ? bitrateMpeg1 : bitrateMpeg2)[bitrateIndex] * 1000u;
+    const unsigned padding = (data[2] >> 1) & 1u;
+    const size_t frameBytes = ((version == 3 ? 144u : 72u) * bitrate / rate) + padding;
+    if (frameBytes < 48 || frameBytes > 4096 || frameBytes != size)
+        return false;
+    const bool mono = ((data[3] >> 6) & 3u) == 3u;
+    const size_t crcSize = (data[1] & 1u) ? 0u : 2u;
+    const size_t sideInfo = version == 3 ? (mono ? 17u : 32u) : (mono ? 9u : 17u);
+    const size_t offset = 4u + crcSize + sideInfo;
+    if (offset + 12u > frameBytes ||
+        (std::memcmp(data + offset, "Info", 4) != 0 &&
+         std::memcmp(data + offset, "Xing", 4) != 0))
+        return false;
+    auto readBigEndian = [data](size_t pos) -> uint32_t
+    {
+        return (uint32_t(data[pos]) << 24) | (uint32_t(data[pos + 1]) << 16) |
+            (uint32_t(data[pos + 2]) << 8) | uint32_t(data[pos + 3]);
+    };
+    if (!(readBigEndian(offset + 4) & 1u))
+        return false;
+    const uint32_t frames = readBigEndian(offset + 8);
+    if (frames < 2 || frames > 10000000)
+        return false;
+    const unsigned samples = version == 3 ? 1152u : 576u;
+    const uint64_t milliseconds = (uint64_t(frames) * samples * 1000u + rate / 2u) / rate;
+    if (milliseconds < 1000 || milliseconds > 604800000u)
+        return false;
+    if (verifiedDurationMs > 0)
+    {
+        const uint64_t diff = milliseconds > verifiedDurationMs ?
+            milliseconds - verifiedDurationMs : verifiedDurationMs - milliseconds;
+        const uint64_t tolerance = std::max<uint64_t>(1500u, verifiedDurationMs / 200u);
+        if (diff > tolerance)
+            return false;
+    }
+    info.frameBytes = frameBytes;
+    info.expectedMs = static_cast<DWORD>(milliseconds);
+    return true;
+}
+
 // Native ID3 metadata aliases are separate, tiny files. The paired .ast
 // remains an unmodified text manifest. Accept ID3 aliases only if their
 // complete trailing manifest byte-for-byte matches a valid paired .ast file.
@@ -1124,9 +1198,18 @@ static bool MusicBeeValidateId3Alias(const std::string& aliasPath, const std::st
 
     const size_t tagLength = 10 + (size_t(alias[6]) << 21) + (size_t(alias[7]) << 14) +
         (size_t(alias[8]) << 7) + alias[9];
-    if (tagLength <= 20 || tagLength + original.size() != alias.size() ||
-        std::memcmp(alias.data() + tagLength, original.data(), original.size()) != 0)
+    const size_t tailStart = alias.size() - original.size();
+    if (tagLength <= 20 || tagLength > tailStart ||
+        std::memcmp(alias.data() + tailStart, original.data(), original.size()) != 0)
         return false;
+    const size_t previewBytes = tailStart - tagLength;
+    if (previewBytes > 0)
+    {
+        ArchiveMp3InfoPreview preview{};
+        if (!ParseArchiveMp3InfoPreview(alias.data() + tagLength, previewBytes, preview))
+            return false;
+        Trace("MPEG_INFO_PREVIEW_VALIDATED", "original_manifest=byte_equal");
+    }
 
     ArchiveTrackTags tags{};
     if (!ArchiveTrackTagParser::Parse("mp3", alias.data(), tagLength, tags) || tags.title.empty())
@@ -2262,6 +2345,119 @@ extern "C" int __stdcall ArchiveStreamReadNativeFileTagsW(const wchar_t* virtual
             return 0;
         std::copy_n(wide.c_str(), wide.size() + 1, output);
         return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+// Read only the first genuine MP3 Info/Xing frame from a directly streamable
+// archive entry. The duration must already have been verified by native BASS,
+// and the frame count must agree. Never invent frames, decompress a whole
+// track, calculate a content CRC, or open solid/encrypted archives here.
+extern "C" int __stdcall ArchiveStreamReadNativeMp3InfoFrameW(const wchar_t* virtualTrack,
+    unsigned char* output, DWORD capacity, DWORD verifiedDurationMs)
+{
+    if (!virtualTrack || !*virtualTrack || !output || capacity < 512 || capacity > 4096 ||
+        verifiedDurationMs < 1000 || verifiedDurationMs > 604800000)
+        return 0;
+    try
+    {
+        const std::string virtualUtf8 = ArchiveAdapterWideToUtf8(virtualTrack);
+        if (virtualUtf8.empty() || virtualUtf8.size() > 16384)
+            return 0;
+        char archive[MAX_PATH * 4]{};
+        char member[1024]{};
+        mz_uint index = 0;
+        if (!ParseVirtualArchivePath(virtualUtf8.c_str(), archive, sizeof(archive), &index,
+            member, sizeof(member)) || GetAudioFormatFromPath(member) != AUDIO_FORMAT_MP3 ||
+            ArchiveGetEntryStreamCapability(archive, index) != ARCHIVE_STREAM_CAPABILITY_SUPPORTED)
+            return 0;
+
+        // All allocations precede opening a stream. The guard closes the
+        // stream on every return path, including unexpected exceptions.
+        constexpr size_t kLimit = 256 * 1024;
+        std::vector<unsigned char> prefix(kLimit);
+        ArchiveStreamContext stream{};
+        std::string error;
+        if (!ArchiveOpenValidatedEntryStream(&stream, archive, index, 4096, &error))
+            return 0;
+        struct StreamCloser
+        {
+            ArchiveStreamContext* stream = nullptr;
+            ~StreamCloser()
+            {
+                if (stream)
+                    ArchiveCloseEntryStream(stream);
+            }
+        } closer{&stream};
+        size_t got = 0;
+        auto readUntil = [&stream, &prefix, &got](size_t target)
+        {
+            while (got < target)
+            {
+                const size_t count = ArchiveReadEntryStream(&stream, prefix.data() + got, target - got);
+                if (!count)
+                    break;
+                got += count;
+            }
+        };
+        readUntil(10);
+        size_t audioStart = 0;
+        if (got >= 10 && std::memcmp(prefix.data(), "ID3", 3) == 0)
+        {
+            if ((prefix[6] & 0x80) || (prefix[7] & 0x80) ||
+                (prefix[8] & 0x80) || (prefix[9] & 0x80))
+            {
+                return 0;
+            }
+            audioStart = 10u + (size_t(prefix[6]) << 21) + (size_t(prefix[7]) << 14) +
+                (size_t(prefix[8]) << 7) + prefix[9];
+            if (prefix[5] & 0x10u)
+                audioStart += 10u; // ID3v2.4 footer
+        }
+        if (audioStart + 4096u > kLimit)
+        {
+            return 0;
+        }
+        readUntil(audioStart + 4096u);
+        const size_t scanEnd = std::min(got, audioStart + 1024u);
+        for (size_t at = audioStart; at + 32u < scanEnd; ++at)
+        {
+            // Determine the frame length from the header before parsing the
+            // Info/Xing data. A bounded candidate is copied only on success.
+            if (prefix[at] != 0xff || (prefix[at + 1] & 0xe0u) != 0xe0u)
+                continue;
+            const unsigned version = (prefix[at + 1] >> 3) & 3u;
+            const unsigned bitrateIndex = (prefix[at + 2] >> 4) & 15u;
+            const unsigned rateIndex = (prefix[at + 2] >> 2) & 3u;
+            if (version == 1 || ((prefix[at + 1] >> 1) & 3u) != 1 ||
+                bitrateIndex == 0 || bitrateIndex == 15 || rateIndex == 3)
+                continue;
+            static constexpr unsigned rates[3][3] = {
+                {11025, 12000, 8000}, {22050, 24000, 16000}, {44100, 48000, 32000}
+            };
+            static constexpr unsigned bitratesMpeg1[16] = {
+                0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0
+            };
+            static constexpr unsigned bitratesMpeg2[16] = {
+                0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0
+            };
+            const unsigned sr = rates[version == 3 ? 2 : version == 2 ? 1 : 0][rateIndex];
+            const unsigned bps = (version == 3 ? bitratesMpeg1 : bitratesMpeg2)[bitrateIndex] * 1000u;
+            const size_t bytes = ((version == 3 ? 144u : 72u) * bps / sr) +
+                ((prefix[at + 2] >> 1) & 1u);
+            if (bytes > capacity || at + bytes > got)
+                continue;
+            ArchiveMp3InfoPreview info{};
+            if (!ParseArchiveMp3InfoPreview(prefix.data() + at, bytes, info, verifiedDurationMs))
+                continue;
+            std::memcpy(output, prefix.data() + at, bytes);
+            Trace("MPEG_INFO_PREVIEW_READY", "source=stream verified_duration=1");
+            return static_cast<int>(bytes);
+        }
+        return 0;
     }
     catch (...)
     {

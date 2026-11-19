@@ -137,8 +137,51 @@ namespace MusicBeePlugin
                 if (!SameBytes(File.ReadAllBytes(descriptor), manifest))
                     throw new Exception("The real .ast manifest was changed.");
 
-                Console.WriteLine("MUSICBEE_ID3_V4_TEST_PASS tags=1 duration=1 no_internal_frames=1 " +
-                    "versioned_modes=3 idempotent=1 corrupt_alias_repaired=1 manifest_unchanged=1");
+                // One genuine MPEG1 Layer III Info-frame shape (synthetic
+                // unit fixture only, not submitted as playback audio).
+                // The production native exporter must additionally verify
+                // its real archive source and decoded PCM duration.
+                byte[] frame = new byte[1044];
+                frame[0] = 0xff; frame[1] = 0xfb; frame[2] = 0xe0; frame[3] = 0x04;
+                frame[36] = (byte)'I'; frame[37] = (byte)'n';
+                frame[38] = (byte)'f'; frame[39] = (byte)'o';
+                frame[43] = 1; // Info flags: frame count is supplied
+                frame[46] = 0x34; frame[47] = 0xc8; // 13512 MP3 frames
+                if (!ValidateNativeMp3InfoFrame(frame, 0, frame.Length) ||
+                    ValidateNativeMp3InfoFrame(frame, 0, frame.Length - 1))
+                    throw new Exception("One-frame MPEG Info validation failed.");
+                string previewDir = Path.Combine(root, MetadataAliasDirectoryName(true, true, true));
+                Directory.CreateDirectory(previewDir);
+                string previewAst = Path.Combine(previewDir, Path.GetFileName(descriptor));
+                string previewAlias = Path.ChangeExtension(previewAst, ".mp3");
+                File.WriteAllBytes(previewAst, manifest);
+                byte[] originalBytes = File.ReadAllBytes(withTagsAndDuration);
+                int tagLength = 10 + (originalBytes[6] << 21) + (originalBytes[7] << 14) +
+                    (originalBytes[8] << 7) + originalBytes[9];
+                using (var output = new MemoryStream())
+                {
+                    output.Write(originalBytes, 0, tagLength);
+                    output.Write(frame, 0, frame.Length);
+                    output.Write(manifest, 0, manifest.Length);
+                    File.WriteAllBytes(previewAlias, output.ToArray());
+                }
+                if (!AliasHasMetadataMarker(previewAlias, true, true, true) ||
+                    AliasHasMetadataMarker(previewAlias, true, true, false))
+                    throw new Exception("V5 Info alias identity/manifest invalid.");
+                byte[] damaged = File.ReadAllBytes(previewAlias);
+                damaged[tagLength + 36] ^= 0x20; // Info frame is now invalid
+                File.WriteAllBytes(previewAlias, damaged);
+                if (IsValidatedPlainId3Alias(previewAlias))
+                    throw new Exception("Corrupted MPEG header was accepted.");
+                damaged[tagLength + 36] ^= 0x20;
+                damaged[damaged.Length - 1] ^= 1; // Manifest tampered
+                File.WriteAllBytes(previewAlias, damaged);
+                if (IsValidatedPlainId3Alias(previewAlias))
+                    throw new Exception("Corrupted manifest after Info frame was accepted.");
+
+                Console.WriteLine("MUSICBEE_ID3_V5_TEST_PASS tags=1 duration=1 info_frame=1 " +
+                    "corrupt_mpeg_rejected=1 corrupt_manifest_rejected=1 " +
+                    "versioned_modes=4 idempotent=1 manifest_unchanged=1");
                 return 0;
             }
             finally

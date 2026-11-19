@@ -61,7 +61,7 @@ namespace MusicBeePlugin
             stream.Write(bytes, 0, bytes.Length);
         }
 
-        private static string MetadataMarker(bool useTags, bool hasDuration = false)
+        private static string MetadataMarker(bool useTags, bool hasDuration = false, bool hasMp3InfoFrame = false)
         {
             string template = "";
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\ArchiveStreamPlayer\Adapters", false))
@@ -71,7 +71,8 @@ namespace MusicBeePlugin
             }
             // When embedded tags are enabled, changing title presets does
             // not affect these entries. The marker supports lazy migration.
-            return "ARCHIVE_STREAM_MUSICBEE_ID3_V4" + (hasDuration ? "_LENGTH|" : "|") +
+            return "ARCHIVE_STREAM_MUSICBEE_ID3_V5" +
+                (hasMp3InfoFrame ? "_INFO" : "") + (hasDuration ? "_LENGTH|" : "|") +
                 (useTags ? "TAGS" : "PRESET:" + template);
         }
 
@@ -80,11 +81,11 @@ namespace MusicBeePlugin
         // (PRIV, TXXX, COMM or extra text frames). Only normal music tags
         // belong in the alias. The settings identity lives in the versioned
         // directory name, never in an ID3 frame or the archive payload.
-        private static string MetadataAliasDirectoryName(bool useTags, bool hasDuration)
+        private static string MetadataAliasDirectoryName(bool useTags, bool hasDuration, bool hasMp3InfoFrame = false)
         {
             using (SHA256 sha = SHA256.Create())
             {
-                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(MetadataMarker(useTags, hasDuration)));
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(MetadataMarker(useTags, hasDuration, hasMp3InfoFrame)));
                 return "id3-" + BitConverter.ToString(hash, 0, 5).Replace("-", "").ToLowerInvariant();
             }
         }
@@ -109,11 +110,16 @@ namespace MusicBeePlugin
                         return false;
                 }
                 int length = 10 + (bytes[6] << 21) + (bytes[7] << 14) + (bytes[8] << 7) + bytes[9];
-                if (length < 24 || length > 16384 || length + manifest.Length != bytes.Length)
+                int previewLength = bytes.Length - length - manifest.Length;
+                if (length < 24 || length > 16384 || previewLength < 0 ||
+                    previewLength > 4096)
+                    return false;
+                if (previewLength > 0 &&
+                    !ValidateNativeMp3InfoFrame(bytes, length, previewLength))
                     return false;
                 for (int i = 0; i < manifest.Length; ++i)
                 {
-                    if (bytes[length + i] != manifest[i])
+                    if (bytes[length + previewLength + i] != manifest[i])
                         return false;
                 }
 
@@ -143,17 +149,17 @@ namespace MusicBeePlugin
             catch (UnauthorizedAccessException) { return false; }
         }
 
-        private static bool AliasHasMetadataMarker(string alias, bool useTags, bool hasDuration = false)
+        private static bool AliasHasMetadataMarker(string alias, bool useTags, bool hasDuration = false, bool hasMp3InfoFrame = false)
         {
             string directory = Path.GetDirectoryName(alias);
             return !String.IsNullOrWhiteSpace(directory) &&
-                String.Equals(Path.GetFileName(directory), MetadataAliasDirectoryName(useTags, hasDuration),
+                String.Equals(Path.GetFileName(directory), MetadataAliasDirectoryName(useTags, hasDuration, hasMp3InfoFrame),
                     StringComparison.OrdinalIgnoreCase) &&
                 IsValidatedPlainId3Alias(alias);
         }
 
         private static void CreateId3ManifestAlias(string descriptor, string alias, bool useTags,
-            long durationMs = 0)
+            long durationMs = 0, byte[] mp3InfoFrame = null)
         {
             byte[] original = File.ReadAllBytes(descriptor);
             if (original.Length < 36 || original.Length > 16384)
@@ -219,6 +225,12 @@ namespace MusicBeePlugin
                     output.WriteByte((byte)(length & 0x7f));
                     tagFrames.Position = 0;
                     tagFrames.CopyTo(output);
+                    // A single real MPEG Info/Xing frame, verified against
+                    // decoded PCM duration, lets MusicBee's own file scanner
+                    // populate the native Time column after playback begins.
+                    // Never insert fabricated frames or audio payloads.
+                    if (mp3InfoFrame != null && mp3InfoFrame.Length > 0)
+                        output.Write(mp3InfoFrame, 0, mp3InfoFrame.Length);
                     output.Write(original, 0, original.Length);
                     output.Flush();
                 }
@@ -260,15 +272,20 @@ namespace MusicBeePlugin
                 root = Path.GetDirectoryName(root);
             // Duration probes are ONLY done by the low-priority metadata
             // worker, never while the first playlist is being created.
-            // The initial V4 alias displays tracks immediately; a distinct
-            // versioned V4_LENGTH alias refreshes MusicBee when ready.
+            // The initial V5 alias displays tags immediately. The background
+            // verification worker publishes a V5_INFO_LENGTH version only
+            // after validating a genuine Info/Xing frame against decoded PCM.
             string durationSource = prebuiltAlias ?? Path.ChangeExtension(descriptor, ".mp3");
             long durationMs = QueryArchiveDurationMs(durationSource, includeDuration);
             bool hasDuration = durationMs > 0;
+            byte[] mp3InfoFrame = hasDuration ?
+                ReadValidatedArchiveMp3InfoFrame(lines[1].TrimEnd('\r'), durationMs) : null;
+            bool hasMp3InfoFrame = mp3InfoFrame != null;
             {
                 // Hash the short preference/version identifier ONLY. We never
                 // compute archive/audio CRCs or audio content hashes.
-                string folder = Path.Combine(root, MetadataAliasDirectoryName(useTags, hasDuration));
+                string folder = Path.Combine(root,
+                    MetadataAliasDirectoryName(useTags, hasDuration, hasMp3InfoFrame));
                 Directory.CreateDirectory(folder);
                 string baseName = "entry-" + index.ToString("D8", System.Globalization.CultureInfo.InvariantCulture);
                 string newDescriptor = Path.Combine(folder, baseName + ".ast");
@@ -281,7 +298,7 @@ namespace MusicBeePlugin
                         File.ReadAllBytes(newDescriptor), source))
                         throw new IOException("A versioned alias descriptor has conflicting archive identity.");
 
-                    if (!AliasHasMetadataMarker(newAlias, useTags, hasDuration))
+                    if (!AliasHasMetadataMarker(newAlias, useTags, hasDuration, hasMp3InfoFrame))
                     {
                         string pending = Path.Combine(folder, "_id3-" +
                             Guid.NewGuid().ToString("N").Substring(0, 12) + ".tmp");
@@ -291,7 +308,7 @@ namespace MusicBeePlugin
                                 IsValidatedPlainId3Alias(prebuiltAlias))
                                 File.Copy(prebuiltAlias, pending, false);
                             else
-                                CreateId3ManifestAlias(newDescriptor, pending, useTags, durationMs);
+                                CreateId3ManifestAlias(newDescriptor, pending, useTags, durationMs, mp3InfoFrame);
                             PersistMusicBeeAlias(pending, newAlias);
                         }
                         finally
@@ -300,7 +317,7 @@ namespace MusicBeePlugin
                                 File.Delete(pending);
                         }
                     }
-                    if (!AliasHasMetadataMarker(newAlias, useTags, hasDuration))
+                    if (!AliasHasMetadataMarker(newAlias, useTags, hasDuration, hasMp3InfoFrame))
                         throw new IOException("Unable to publish a versioned ID3 archive alias.");
                 }
                 return newAlias;

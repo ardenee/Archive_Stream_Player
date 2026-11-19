@@ -8,6 +8,7 @@ EXPORTS
     ArchiveStreamWriteNativeSevenCodecsW=_ArchiveStreamWriteNativeSevenCodecsW@8
     ArchiveStreamFormatNativeTitleW=_ArchiveStreamFormatNativeTitleW@12
     ArchiveStreamReadNativeFileTagsW=_ArchiveStreamReadNativeFileTagsW@12
+    ArchiveStreamReadNativeMp3InfoFrameW=_ArchiveStreamReadNativeMp3InfoFrameW@16
     ArchiveStreamSupportsMusicBeeTagAlias=_ArchiveStreamSupportsMusicBeeTagAlias@0
     ArchiveStreamWriteNativeBufferedTracksW=_ArchiveStreamWriteNativeBufferedTracksW@8
     ArchiveStreamWriteNativeDiskLastTracksW=_ArchiveStreamWriteNativeDiskLastTracksW@8

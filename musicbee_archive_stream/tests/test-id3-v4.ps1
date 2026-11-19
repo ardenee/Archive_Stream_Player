@@ -12,7 +12,7 @@ if (!(Test-Path -LiteralPath $csc)) { throw "C# compiler missing: $csc" }
 $testExe = Join-Path $env:TEMP ('ast-id3-v4-test-' + [guid]::NewGuid().ToString('N') + '.exe')
 try
 {
-    & $csc /nologo /target:exe "/out:$testExe" /r:System.Core.dll (Join-Path $PSScriptRoot 'verify_archive_player_id3_v4.cs') (Join-Path $root 'ArchivePlayerId3Alias.cs')
+    & $csc /nologo /target:exe "/out:$testExe" /r:System.Core.dll (Join-Path $PSScriptRoot 'verify_archive_player_id3_v4.cs') (Join-Path $root 'ArchivePlayerId3Alias.cs') (Join-Path $root 'ArchivePlayerMp3Preview.cs')
     if ($LASTEXITCODE -ne 0) { throw 'ID3 v4 contract harness build failed' }
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw 'ID3 v4 contract harness execution failed' }
