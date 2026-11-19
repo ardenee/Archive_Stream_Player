@@ -651,14 +651,14 @@ namespace
             if (ArchiveAdapterProbeEntryAudio(archive_, entry_, audio))
             {
                 if (audio.HasDuration())
-                    result = info->SetValueAsFloat(AIMP_FILEINFO_PROPID_DURATION, audio.DurationMilliseconds()); // AIMP SDK expects milliseconds.
+                    result = info->SetValueAsFloat(AIMP_FILEINFO_PROPID_DURATION, audio.durationSeconds); // AIMP FileInfo duration is seconds.
                 if (SUCCEEDED(result) && audio.sampleRate)
                     result = info->SetValueAsInt32(AIMP_FILEINFO_PROPID_SAMPLERATE, static_cast<int>(audio.sampleRate));
                 if (SUCCEEDED(result) && audio.bitrateKbps)
                     result = info->SetValueAsInt32(AIMP_FILEINFO_PROPID_BITRATE, static_cast<int>(audio.bitrateKbps));
                 if (SUCCEEDED(result) && audio.channels)
                     result = info->SetValueAsInt32(AIMP_FILEINFO_PROPID_CHANNELS, static_cast<int>(audio.channels));
-                DebugLogWrite(SUCCEEDED(result) ? "INFO" : "WARN", "AIMP", "AUDIO_INFO", "index=%u | duration_ms=%lld | rate=%u | kbps=%u | channels=%u | write_ok=%d", entry_.index, static_cast<long long>(audio.durationSeconds * 1000.0 + 0.5), audio.sampleRate, audio.bitrateKbps, audio.channels, SUCCEEDED(result) ? 1 : 0);
+                DebugLogWrite(SUCCEEDED(result) ? "INFO" : "WARN", "AIMP", "AUDIO_INFO", "index=%u | duration_seconds=%.3f | rate=%u | kbps=%u | channels=%u | write_ok=%d", entry_.index, audio.durationSeconds, audio.sampleRate, audio.bitrateKbps, audio.channels, SUCCEEDED(result) ? 1 : 0);
             }
             return result;
         }

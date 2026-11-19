@@ -4,6 +4,12 @@
 param([string]$Archive = '')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$aimpSource = Get-Content (Join-Path $repo 'aimp_archive_stream\aimp_archive_stream.cpp') -Raw
+if ($aimpSource -notmatch 'SetValueAsFloat\(AIMP_FILEINFO_PROPID_DURATION,\s*audio\.durationSeconds\)')
+{
+    throw 'AIMP FileInfo duration must receive seconds, not milliseconds'
+}
+Write-Output 'AIMP_DURATION_SECONDS_PROPERTY_CONTRACT_PASS'
 $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
 if (!(Test-Path $vswhere)) { throw 'vswhere not found' }
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

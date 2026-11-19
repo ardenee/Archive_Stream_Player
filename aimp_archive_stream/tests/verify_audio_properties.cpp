@@ -53,7 +53,23 @@ static bool TestHeaders()
         return false;
     if (!Check(std::abs(mp3.durationSeconds - 512.52245) < 0.01, "mpeg_frame_count_duration"))
         return false;
-    if (!Check(std::abs(mp3.DurationMilliseconds() - 512522.45) < 10.0, "AIMP_duration_property_milliseconds"))
+    if (!Check(std::abs(mp3.durationSeconds - 512.52245) < 0.01, "AIMP_duration_property_seconds"))
+        return false;
+    // Real Subspecies 4 encoder tag: 576 priming + 1241 padding
+    // samples. AIMP's decoder returns 512.481247 seconds, rather than
+    // the untrimmed Info frame count of 512.522449 seconds.
+    memcpy(frame + 48, "Lame3.100", 9);
+    frame[69] = 0x24;
+    frame[70] = 0x04;
+    frame[71] = 0xd9;
+    if (!Check(ArchiveAdapterAudioProbe::ParseMp3InfoFrame(frame, sizeof(frame), mp3),
+        "valid_lame_gapless_info"))
+        return false;
+    if (!Check(std::abs(mp3.durationSeconds - 512.481247) < 0.00005,
+        "lame_delay_padding_matches_aimp_decoder"))
+        return false;
+    if (!Check(std::abs(mp3.durationSeconds * 1000.0 - 512481.247) < 0.05,
+        "lame_gapless_precision"))
         return false;
     memcpy(frame + 36, "Xing", 4);
     PutBE32(frame + 40, 3);
@@ -108,7 +124,7 @@ static bool TestHeaders()
     if (!Check(!ArchiveAdapterAudioProbe::ParseWaveHeader(wav, sizeof(wav), waveInfo), "invalid_riff_rejected"))
         return false;
 
-    std::puts("AUDIO_PROPERTY_HEADER_TEST_PASS mp3_info=1 xing=1 mpeg_corrupt_rejected=1 flac=1 wav=1 duration_ms=1 no_decode=1");
+    std::puts("AUDIO_PROPERTY_HEADER_TEST_PASS mp3_info=1 xing=1 lame_gapless=1 mpeg_corrupt_rejected=1 flac=1 wav=1 aimp_duration_seconds=1 no_decode=1");
     return true;
 }
 

@@ -94,7 +94,38 @@ namespace ArchiveAdapterAudioProbe
         const uint32_t frames = BE32(bytes + marker + 8);
         if (!(flags & 1u) || frames < 40 || frames > 10000000)
             return false;
-        const double seconds = double(frames) * (version == 3 ? 1152.0 : 576.0) / double(rate);
+        // Xing/Info frame counts include encoder priming and final padding.
+        // AIMP's playback decoder applies the LAME gapless delay/padding, so
+        // the playlist Time field must do the same to avoid one-second
+        // rounding differences. Read only the genuine LAME extension inside
+        // the first MPEG frame; never infer a delay when it is absent.
+        const uint64_t samplesPerFrame = version == 3 ? 1152u : 576u;
+        uint64_t playableSamples = uint64_t(frames) * samplesPerFrame;
+        size_t encoderOffset = marker + 8u;
+        if (flags & 1u)
+            encoderOffset += 4u;
+        if (flags & 2u)
+            encoderOffset += 4u;
+        if (flags & 4u)
+            encoderOffset += 100u;
+        if (flags & 8u)
+            encoderOffset += 4u;
+        if (encoderOffset + 24u <= frameBytes)
+        {
+            const unsigned char* encoder = bytes + encoderOffset;
+            const bool lame = (encoder[0] == 'L' || encoder[0] == 'l') &&
+                (encoder[1] == 'A' || encoder[1] == 'a') &&
+                (encoder[2] == 'M' || encoder[2] == 'm') &&
+                (encoder[3] == 'E' || encoder[3] == 'e');
+            if (lame)
+            {
+                const unsigned delay = (unsigned(encoder[21]) << 4) | (encoder[22] >> 4);
+                const unsigned padding = ((unsigned(encoder[22]) & 0x0fu) << 8) | encoder[23];
+                if (uint64_t(delay) + padding < playableSamples)
+                    playableSamples -= delay + padding;
+            }
+        }
+        const double seconds = double(playableSamples) / double(rate);
         if (seconds < 1.0 || seconds > 604800.0)
             return false;
 
