@@ -21,6 +21,6 @@ Plugin settings follow the player's own UI: **Winamp/WACUP** uses its input plug
 
 The **Configure Archive Stream Player** shortcut manages shared passwords, cache, titles, **Use File Tags** (off by default; overrides title presets), and logging. MusicBee uses ID3 aliases; AIMP/VLC can use a bounded direct-stream tag probe; foobar2000/XMPlay use native host metadata decoding.
 
-WACUP 64-bit and Windows Media Player are not included as native installer options.
+WACUP 64-bit and modern **Media Player (2022)** are not included as native installer options. The older WMP/HTTP-ASX compatibility launcher is for Windows Media Player Legacy, not the modern packaged app. The targeted native-filesystem integration and acceptance gates are in [MEDIA-PLAYER-2022.md](MEDIA-PLAYER-2022.md).
 
 [Features and limitations](FEATURE-MATRIX.md) · [Project website](https://www.arden.ie/projects/archive-stream-player/)

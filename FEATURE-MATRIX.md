@@ -41,6 +41,6 @@ It does not automatically add missing **player-specific audio decoders** to foob
 
 ## Installer
 
-The **single selectable Inno Setup installer** installs matching native components into chosen, compatible player folders. Portable installations can be selected manually. MediaMonkey is installed directly; VLC 3 x64 installs an SDK access DLL into VLC's plugins/access folder for ordinary Open File and drag/drop, without an external launcher. WACUP 64-bit and experimental Windows Media Player are not native installer choices.
+The **single selectable Inno Setup installer** installs matching native components into chosen, compatible player folders. Portable installations can be selected manually. MediaMonkey is installed directly; VLC 3 x64 installs an SDK access DLL into VLC's plugins/access folder for ordinary Open File and drag/drop, without an external launcher. WACUP 64-bit and **Media Player (2022)** are not native installer choices. Media Player (2022) is the selected future target; its packaged app is not covered by the legacy Windows Media Player plug-in SDK. Native projected-file feasibility is documented in [MEDIA-PLAYER-2022.md](MEDIA-PLAYER-2022.md), and no actual-player playback claim has been made.
 
 [Project homepage](https://www.arden.ie/projects/archive-stream-player/) · [README](README.md) · [Setup instructions](PLAYER-ADAPTERS.md)
