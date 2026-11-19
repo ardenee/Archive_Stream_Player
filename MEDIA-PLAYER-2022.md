@@ -1,49 +1,64 @@
-# Media Player (2022) integration — feasibility and implementation plan
+# Media Player (2022) SDK feasibility and integration decision
 
-**Target:** The modern Windows 11 Microsoft Store **Media Player** application (`Microsoft.ZuneMusic`, executable `Microsoft.Media.Player.exe`). This is NOT Windows Media Player Legacy (`wmplayer.exe`). The old WMP plug-in SDK (`wmp.h`, `wmpplug.h`) is not an integration contract for this app.
+**Target:** Windows 11 modern **Media Player** (`Microsoft.ZuneMusic`, `Microsoft.Media.Player.exe`). NOT legacy Windows Media Player (`wmplayer.exe`). Research-only status: **no native playback support is implemented or verified**. Do not mark this adapter supported or add an installer component until live playback passes.
 
-**Status:** Investigated, native playback **not yet implemented or tested**. Do not advertise Media Player (2022) as a supported adapter in the installer or feature matrix until the gates below pass.
+## DEV inventory — 19 November 2026
 
-## DEV evidence — November 19, 2026
+- Installed Media Player: `Microsoft.ZuneMusic` 11.2609.11.0 x64, package family `Microsoft.ZuneMusic_8wekyb3d8bbwe`.
+- Its manifest advertises .m3u/.m3u8 and ordinary audio/video formats, but **not** .zip, .rar or .7z. App extensions exposed in the manifest: file associations, protocol activation, autoplay, and execution alias. **No third-party host plug-in page/activation contract is advertised.**
+- Windows SDK `10.0.26100.0`: `mfidl.h`, `mfapi.h`, `mfobjects.h`, `mfmediaengine.h`, `cfapi.h`, `projectedfslib.h` and the matching `mfplat.lib`, `mfreadwrite.lib`, `mfuuid.lib`, `CldApi.lib`, `ProjectedFSLib.lib` are installed.
+- `CldFlt` Windows Cloud Files filter driver **Running**, automatic start; built-in `cldapi.dll` available. No Windows feature enablement is necessary to start an initial Cloud Files feasibility experiment.
+- Windows `Client-ProjFS` optional feature **Disabled**. It was NOT enabled or modified; enabling ProjFS requires deliberate approval and can require reboot.
+- Existing `archive_player_bridge/launch-archive.ps1 -Player WMP` invokes `wmplayer.exe` (Legacy) with HTTP ASX. This is **not** support for the modern app.
+- Unrelated MusicBee working-tree changes must remain untouched.
 
-- Installed: `Microsoft.ZuneMusic` v`11.2609.11.0`, x64; package family `Microsoft.ZuneMusic_8wekyb3d8bbwe`.
-- Manifest executable: `Microsoft.Media.Player.exe`. The supported-file-types manifest includes `.m3u` and `.m3u8`, but does NOT include `.zip`, `.7z`, or `.rar`.
-- Windows feature `Client-ProjFS` (Windows Projected File System) is currently **Disabled**. Do **not** enable this system-wide optional feature without explicit approval, and do not presume that it can be used on all target machines.
-- The repository's current Windows Media Player path (`archive_player_bridge/launch-archive.ps1 -Player WMP`) launches **Legacy WMP** and a local HTTP/ASX bridge. It is NOT native Media Player (2022) support.
-- The modern app does not expose a publicly documented host-specific equivalent to the legacy WMP user-interface plug-in API. `Windows.Media.MediaExtensionManager` registrations are **local to the calling application**, not global plug-in installation.
-- Some packaged in-process media extensions use the restricted `inProcessMediaExtension` capability, unavailable to ordinary third-party developers. Global Media Foundation COM byte-stream/scheme registrations are documented for desktop source resolution, but whether this packaged Media Player loads them is **unverified**. Do not assume installing a DirectShow filter, MFT, or Media Foundation handler automatically integrates with this app.
+## SDK review — what the interfaces actually offer
 
-## Preferred feasibility path: native projected audio files
+| SDK | Interfaces / callbacks | Supports archive-backed on-demand data? | Compatibility caveat |
+| --- | --- | --- | --- |
+| **Media Foundation scheme handler** | `IMFSchemeHandler`, `IMFSourceResolver`; optionally `IMFByteStream`, `IMFByteStreamHandler`, `IMFMediaSource` | Yes. A `ast:` URL could map to shared archive streams without exposing physical audio files. | Can be registered per user under `HKCU\Software\Microsoft\Windows Media Foundation\SchemeHandlers`; **the packaged Media Player app is not documented to invoke third-party registered handlers**. Test actual host dispatch before implementing a full decoder/source. |
+| **Media Foundation byte-stream handler** | `IMFByteStreamHandler`, `IMFByteStream` and media source resolution | Yes, including known sizes and random seeks. | Registration by extension/MIME; no guarantee the modern app consults that registry or accepts new extensions. Don't override `.zip`, `.rar`, `.7z` or native audio file types. |
+| **Cloud Files API (CfAPI)** | `CfRegisterSyncRoot`, `CfConnectSyncRoot`, `CfCreatePlaceholders`, `CF_CALLBACK_TYPE_FETCH_DATA`, `CfExecute` + `CF_OPERATION_TYPE_TRANSFER_DATA` | **Yes**, exposes actual read-only audio file paths and serves requested ranges from our existing backend. | Needs a provider service/process and a registered sync root. The system may cache/hydrate data on disk and displays cloud integration UX. |
+| **Projected File System (ProjFS)** | `PrjStartVirtualizing`, `PRJ_GET_DIRECTORY_ENUMERATION_CB`, `PRJ_GET_PLACEHOLDER_INFO_CB`, `PRJ_GET_FILE_DATA_CB`, `PrjWriteFileData` | **Yes**, exposes projected read-only ordinary file paths. | Optional Windows feature currently disabled, possible restart, and files are cached on local storage after reads. |
+| **WinRT MediaExtensionManager** | `Windows.Media.MediaExtensionManager` | Can register a decoder/parser within the calling app. | **App-local registration**; cannot register an arbitrary module into Microsoft's separate Media Player process. |
+| **MediaEngineExtension** | `IMFMediaEngineExtension` | Can hook a media engine in an application we control. | Host must itself pass `MF_MEDIA_ENGINE_EXTENSION`; no API to force Microsoft's app to do so. |
+| **Legacy WMP SDK / DirectShow** | `IWMPPlugin` and older UI/DSP interfaces; DirectShow source filters | Possible for **Legacy WMP**. | Not a documented modern Media Player extensibility route. |
+| **Shell property handler** | `IInitializeWithStream`, `IPropertyStore`; optionally `IMFGetService` | Tags and durations can be published without decoding content in a controlled source. | Does **not** solve playback or make Media Player invoke a custom protocol. |
+| **Windows App SDK MediaPlayerElement** | `Windows.Media.Playback.MediaPlayer`, `MediaPlayerElement` | Yes, for a new app built by us. | Not a way to attach controls/plug-ins to the Microsoft Media Player app. |
 
-Prototype a **Windows Projected File System (ProjFS) provider** that exposes ZIP/7z/RAR audio entries as ordinary read-only audio files under a virtual NTFS directory. Media Player can then consume them through its existing media format decoders, with no in-process plug-in, PowerShell command, or HTTP listener.
+Some third-party packaged decoder extensions depend on the restricted `inProcessMediaExtension` capability. That is **not a generally available ordinary third-party plug-in mechanism**; do not build the solution assuming access.
 
-- Reuse the existing static `archive_backend` and shared settings, logging, passwords and metadata probes. The original archives remain unchanged.
-- Use `PrjStartVirtualizing`, enumeration and placeholder metadata callbacks, then `PRJ_GET_FILE_DATA_CB` to serve requested ranges. Track uncompressed lengths from the archive headers, **not computed content CRCs**. Never create or unpack an entire album in advance.
-- Archive entry reads follow the policy **direct streaming → memory (configured buffer) → managed disk cache (last resort)**. ProjFS itself may cache hydrated bytes on disk: benchmark and document this operating-system behavior; do NOT falsely claim zero disk writes.
-- For solid/encrypted archives, implement bounded background work and coherent fallback (avoid repeated whole-solid-archive scans on track metadata).
-- Expose a read-only album directory and an optional generated `.m3u8` file pointing to its projected audio files. User-facing entry point should be a proper Windows Explorer **Play in Media Player** context-menu/shell integration or an Archive Stream UI, NOT a visible PowerShell launcher.
-- Media Player (2022) has no supported documented host-specific settings page for us. Use Archive Stream's shared settings utility instead. Native player controls, tag parsing and duration computation belong to Media Player once it sees ordinary audio files.
+## Strongest filesystem option: Cloud Files API
 
-**Important limitation:** This approach is a **native filesystem integration**, not a Media Player app plug-in. Direct dragging of raw archives into Media Player itself will not automatically expand them unless Microsoft implements an appropriate extensibility API; use the Archive Stream shell command to mount/open the album.
+Choose a private, read-only, user-scoped `Archive Stream\Mounted Albums\<stable archive id>\` directory. Create per-entry audio placeholders with each file's uncompressed length and original format extension, plus a generated album .m3u8. The placeholder identity maps to archive path, entry index and header metadata. The real archive remains untouched; do not calculate content CRCs.
 
-## Acceptance gates before claiming integration
+Use `CF_HYDRATION_POLICY_PARTIAL` rather than `FULL` or `PROGRESSIVE`: PARTIAL does not continue to fetch the rest of a track in the background. Evaluate `CF_HYDRATION_POLICY_MODIFIER_STREAMING_ALLOWED`: this explicitly permits Windows **not** to store returned data on disk, but **does not promise zero caching**. Do not combine this modifier with `VALIDATION_REQUIRED`. Log bytes served, callbacks, latency, resulting placeholder hydration state, real disk writes, and cache pressure before advertising direct stream/no extraction.
 
-1. Separate DEV feasibility proof: enable ProjFS only after explicit approval, or use a disposable Windows Sandbox/VM with the optional feature enabled. Avoid changing system-wide Windows features as a side effect of a normal build.
-2. Validate enumeration of 9/9 `VA - Subspecies 4 (2024).zip` tracks and 10/10 `VA - Natural Order 2 (2025).rar` tracks as ordinary files with correct stable lengths.
-3. Verify that **the actual `Microsoft.Media.Player.exe` app** opens a projected `.m3u8` and plays/pauses/seeks multiple tracks, including backward seeks, without HTTP or an external extraction folder. Record the real process and playback/routing logs.
-4. Verify native playlist titles, artist, album, genre and duration. Preserve safe metadata fallbacks if the app eagerly reads projected contents for tags.
-5. Test non-solid ZIP/7z/RAR, solid and encrypted archives, interrupted/cancelled reads, large offsets, provider restarts, archive disappearance, and cache cleanup; make sure no ordinary file associations are hijacked.
-6. Re-run under standard user permissions with a fresh Media Player library, confirm shell entry usability, security boundaries, and that the ProjFS system prerequisite is handled cleanly.
-7. Only after these pass: create `media_player_2022` implementation, installer choice, real-player tests and feature-matrix supported status.
+A user-mode provider handles `CF_CALLBACK_TYPE_FETCH_DATA` and responds with `CF_OPERATION_TYPE_TRANSFER_DATA`, forwarding offsets and lengths to the existing shared archive backend. The required fallback order remains: **stream entry directly → configured memory buffer → managed cache only when needed**. Solid, encrypted, non-seekable and multipart cases need explicit tests. Ensure no unintended background archive scans and no recursive provider I/O.
 
-## Other feasibility path (secondary)
+Media Player must see the projected media as ordinary files, receive a normal M3U8, and pass pause/seek/next/previous track tests. The native Media Player UI and audio decoders remain untouched. An Archive Stream shell context menu (not an in-app plug-in) should eventually open the mounted album; no user-facing PowerShell window or HTTP bridge.
 
-A registered Media Foundation `IMFByteStreamHandler` or `IMFSchemeHandler` might expose `ast://` to desktop MF source resolution. It is only a candidate for a **controlled actual Media Player (2022) load test**. A desktop MF test succeeding would NOT prove the packaged player accepts it. Do not globally claim `.zip`, `.rar` or `.7z` extensions during probing.
+Important: a Cloud Files provider has operational lifecycle requirements (start/stop/restart, sync-root registration/unregistration, process shutdown, stale placeholders, ACLs, cleanup, mount stability and availability). Cloud-provider UX may be distracting; evaluate this before selecting it for production.
 
-## Primary references
+## Decision and proof sequence
 
-- Modern media app extension manager (per-app registration): https://learn.microsoft.com/en-us/uwp/api/windows.media.mediaextensionmanager
-- Media Foundation scheme/byte-stream handlers: https://learn.microsoft.com/en-us/windows/win32/medfound/scheme-handlers-and-byte-stream-handlers
-- Windows Projected File System API: https://learn.microsoft.com/en-us/windows/win32/projfs/projected-file-system
-- Enabling the Windows optional ProjFS component: https://learn.microsoft.com/en-us/windows/win32/projfs/enabling-windows-projected-file-system
-- Microsoft moderator discussion of restricted in-process media capability: https://learn.microsoft.com/en-us/answers/questions/5769519/how-to-develop-custom-decoder-media-foundation-tra
+1. **Small Media Foundation dispatch gate:** build a minimal `IMFSchemeHandler` that logs only registration/activation and returns a controlled failure. Verify in our own `IMFSourceResolver` harness, then hand an `ast:` URL via a temporary M3U8 to the actual `Microsoft.Media.Player.exe` app. If the app never invokes the handler, stop. Scope any COM registration to disposable test CLSID and only the test scheme; clean up registry entries. Do **not** modify Windows file associations or install codecs.
+2. **Cloud Files feasibility gate:** use the installed Microsoft CloudMirror SDK sample for provider lifecycle patterns, then a narrow C++ read-only PoC using our shared backend. Do not implement full syncing. Choose `PARTIAL | STREAMING_ALLOWED`, verify actual range fetch and disk behaviour. No need to enable ProjFS.
+3. Compare latency, seek performance, metadata visibility, disk writes and the app's handling of M3U8/normal tracks for ZIP and real RAR. Begin with 9-track Subspecies 4 ZIP and 10-track Natural Order 2 RAR. Then 7z, solid, encrypted and multipart, including interruption and restart.
+4. **ProjFS fallback:** only if CfAPI proves unsuitable and the optional Windows feature prerequisite is acceptable. Do not enable it automatically.
+5. Only after real application tests: implement `media_player_2022`, shell entry, stable mount/provider lifecycle, shared settings, uninstall cleanup, accurate README, installer selection and feature-matrix status.
+
+## Sources reviewed
+
+- https://learn.microsoft.com/en-us/windows/win32/medfound/scheme-handlers-and-byte-stream-handlers
+- https://learn.microsoft.com/en-us/windows/win32/medfound/source-resolver
+- https://learn.microsoft.com/en-us/uwp/api/windows.media.mediaextensionmanager
+- https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfregistersyncroot
+- https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfconnectsyncroot
+- https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfcreateplaceholders
+- https://learn.microsoft.com/en-us/windows/win32/cfapi/build-a-cloud-file-sync-engine
+- https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/CloudMirror
+- https://learn.microsoft.com/en-us/windows/win32/projfs/projected-file-system
+- https://learn.microsoft.com/en-us/windows/win32/projfs/enabling-windows-projected-file-system
+- https://learn.microsoft.com/en-us/windows/win32/medfound/custom-metadata-providers-for-media-files
+- https://learn.microsoft.com/en-us/answers/questions/5769519/how-to-develop-custom-decoder-media-foundation-tra
