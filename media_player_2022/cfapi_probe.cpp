@@ -18,6 +18,7 @@ std::wstring g_log;
 uint64_t g_sourceBytes = 0;
 bool g_fromArchive = false;
 uint32_t g_entryIndex = 0;
+CF_HYDRATION_POLICY_PRIMARY_USHORT g_hydrationPolicy = CF_HYDRATION_POLICY_PROGRESSIVE;
 ArchiveBackendStream g_archiveStream{};
 std::mutex g_streamMutex;
 std::mutex g_logMutex;
@@ -28,8 +29,8 @@ void Log(const wchar_t* message, uint64_t position = 0, uint64_t length = 0, HRE
     FILE* f = nullptr;
     if (_wfopen_s(&f, g_log.c_str(), L"a") != 0 || !f)
         return;
-    fwprintf(f, L"pid=%lu event=%ls offset=%llu length=%llu hr=0x%08X\n",
-        GetCurrentProcessId(), message, position, length, static_cast<unsigned>(hr));
+    fwprintf(f, L"tick_ms=%llu provider_pid=%lu event=%ls offset=%llu length=%llu hr=0x%08X\n",
+        static_cast<unsigned long long>(GetTickCount64()), GetCurrentProcessId(), message, position, length, static_cast<unsigned>(hr));
     fclose(f);
 }
 
@@ -57,6 +58,20 @@ void CALLBACK FetchData(const CF_CALLBACK_INFO* info, const CF_CALLBACK_PARAMETE
     const uint64_t offset = args->FetchData.RequiredFileOffset.QuadPart;
     const uint64_t length = args->FetchData.RequiredLength.QuadPart;
     Log(L"FETCH_DATA", offset, length);
+    if (info->ProcessInfo)
+    {
+        std::lock_guard<std::mutex> logGuard(g_logMutex);
+        FILE* eventLog = nullptr;
+        if (_wfopen_s(&eventLog, g_log.c_str(), L"a") == 0 && eventLog)
+        {
+            fwprintf(eventLog, L"tick_ms=%llu event=FETCH_REQUESTER process_pid=%lu process_path=%ls required_offset=%llu required_length=%llu optional_offset=%lld optional_length=%lld flags=%u\n",
+                static_cast<unsigned long long>(GetTickCount64()), info->ProcessInfo->ProcessId,
+                info->ProcessInfo->ImagePath ? info->ProcessInfo->ImagePath : L"(null)",
+                offset, length, args->FetchData.OptionalFileOffset.QuadPart, args->FetchData.OptionalLength.QuadPart,
+                static_cast<unsigned>(args->FetchData.Flags));
+            fclose(eventLog);
+        }
+    }
     if (length == 0 || offset >= g_sourceBytes || length > g_sourceBytes - offset)
     {
         Log(L"FETCH_RANGE_REJECTED", offset, length);
@@ -135,6 +150,37 @@ void CALLBACK FetchData(const CF_CALLBACK_INFO* info, const CF_CALLBACK_PARAMETE
     VirtualFree(buffer, 0, MEM_RELEASE);
     if (source != INVALID_HANDLE_VALUE)
         CloseHandle(source);
+    Log(L"FETCH_COMPLETED", offset, done);
+}
+
+void SnapshotPlaceholder(const std::wstring& root, const std::wstring& name, const wchar_t* event)
+{
+    const std::wstring file = root + L"\\" + name;
+    HANDLE handle = CreateFileW(file.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        Log(L"SNAPSHOT_OPEN_FAILED", 0, 0, HRESULT_FROM_WIN32(GetLastError()));
+        return;
+    }
+    FILE_STANDARD_INFO standard{};
+    if (GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)))
+        Log(event, static_cast<uint64_t>(standard.AllocationSize.QuadPart), static_cast<uint64_t>(standard.EndOfFile.QuadPart));
+    else
+        Log(L"SNAPSHOT_FILEINFO_FAILED", 0, 0, HRESULT_FROM_WIN32(GetLastError()));
+    alignas(CF_PLACEHOLDER_STANDARD_INFO) BYTE infoBuffer[512]{};
+    DWORD returned = 0;
+    const HRESULT hr = CfGetPlaceholderInfo(handle, CF_PLACEHOLDER_INFO_STANDARD, infoBuffer, sizeof(infoBuffer), &returned);
+    if (SUCCEEDED(hr))
+    {
+        const auto* info = reinterpret_cast<const CF_PLACEHOLDER_STANDARD_INFO*>(infoBuffer);
+        Log(L"CF_ONDISK_BYTES", static_cast<uint64_t>(info->OnDiskDataSize.QuadPart), static_cast<uint64_t>(info->ValidatedDataSize.QuadPart));
+    }
+    else
+    {
+        Log(L"CF_INFO_FAILED", 0, 0, hr);
+    }
+    CloseHandle(handle);
 }
 
 void Cleanup(const std::wstring& root, const std::wstring& filename)
@@ -163,8 +209,9 @@ void Cleanup(const std::wstring& root, const std::wstring& filename)
 
 int wmain(int argc, wchar_t** argv)
 {
-    // Run a physical control: cfapi_probe.exe run ROOT FILE READY STOP LOG
-    // Stream archive audio: cfapi_probe.exe run-archive ROOT ZIP READY STOP LOG
+    // Supported default: run or run-archive (PROGRESSIVE + STREAMING_ALLOWED).
+    // Explicit unsupported-policy regression: run-partial or run-archive-partial.
+    // Disk-hydration control: run-progressive-disk.
     // Safe cleanup: cfapi_probe.exe cleanup ROOT FILENAME LOG
     if (argc >= 5 && wcscmp(argv[1], L"cleanup") == 0)
     {
@@ -172,9 +219,15 @@ int wmain(int argc, wchar_t** argv)
         Cleanup(argv[2], argv[3]);
         return 0;
     }
-    if (argc < 7 || (wcscmp(argv[1], L"run") != 0 && wcscmp(argv[1], L"run-archive") != 0))
+    if (argc < 7)
         return 1;
-    g_fromArchive = wcscmp(argv[1], L"run-archive") == 0;
+    const std::wstring_view mode(argv[1]);
+    if (mode != L"run" && mode != L"run-progressive" && mode != L"run-progressive-disk" && mode != L"run-partial" &&
+        mode != L"run-archive" && mode != L"run-archive-progressive" && mode != L"run-archive-partial")
+        return 1;
+    g_fromArchive = mode.find(L"archive") != std::wstring_view::npos;
+    if (mode.find(L"partial") != std::wstring_view::npos)
+        g_hydrationPolicy = CF_HYDRATION_POLICY_PARTIAL;
 
     const std::wstring root = argv[2];
     g_source = argv[3];
@@ -269,8 +322,10 @@ int wmain(int argc, wchar_t** argv)
     registration.FileIdentityLength = sizeof(identity);
     CF_SYNC_POLICIES policies{};
     policies.StructSize = sizeof(policies);
-    policies.Hydration.Primary = CF_HYDRATION_POLICY_PARTIAL;
-    policies.Hydration.Modifier = CF_HYDRATION_POLICY_MODIFIER_STREAMING_ALLOWED;
+    policies.Hydration.Primary = g_hydrationPolicy;
+    Log(g_hydrationPolicy == CF_HYDRATION_POLICY_PROGRESSIVE ? L"POLICY_PROGRESSIVE" : L"POLICY_PARTIAL_UNSUPPORTED");
+    policies.Hydration.Modifier = mode == L"run-progressive-disk" ? CF_HYDRATION_POLICY_MODIFIER_NONE : CF_HYDRATION_POLICY_MODIFIER_STREAMING_ALLOWED;
+    Log(policies.Hydration.Modifier == CF_HYDRATION_POLICY_MODIFIER_NONE ? L"MODIFIER_DISK_REQUIRED" : L"MODIFIER_STREAMING_ALLOWED");
     policies.Population.Primary = CF_POPULATION_POLICY_ALWAYS_FULL;
     policies.HardLink = CF_HARDLINK_POLICY_NONE;
     policies.PlaceholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT;
@@ -305,6 +360,7 @@ int wmain(int argc, wchar_t** argv)
     Log(L"CREATE_PLACEHOLDER", 0, g_sourceBytes, hr);
     if (SUCCEEDED(hr))
     {
+        SnapshotPlaceholder(root, name, L"SNAPSHOT_INITIAL_ALLOCATION");
         HANDLE status = CreateFileW(ready.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (status != INVALID_HANDLE_VALUE)
             CloseHandle(status);
@@ -316,6 +372,8 @@ int wmain(int argc, wchar_t** argv)
             Sleep(200);
         }
     }
+    if (SUCCEEDED(hr))
+        SnapshotPlaceholder(root, name, L"SNAPSHOT_FINAL_ALLOCATION");
     CfDisconnectSyncRoot(key);
     if (g_fromArchive)
     {
