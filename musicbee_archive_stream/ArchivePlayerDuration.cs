@@ -74,7 +74,11 @@ namespace MusicBeePlugin
             uint stream = 0;
             try
             {
-                stream = BassOpenArchiveAlias(0, alias, 0, 0, BassUnicodeFile | BassDecodeFile);
+                // Decode from the paired .ast manifest, not the tiny ID3
+                // label file: MusicBee/BASS can classify an ID3-only alias
+                // as a malformed MP3 before trying our archive add-on.
+                stream = BassOpenArchiveAlias(0, Path.ChangeExtension(alias, ".ast"),
+                    0, 0, BassUnicodeFile | BassDecodeFile);
                 if (stream == 0)
                 {
                     Trace("ARCHIVE_DURATION_UNAVAILABLE reason=decoder_open");
