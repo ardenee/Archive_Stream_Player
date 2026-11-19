@@ -94,6 +94,10 @@ namespace MusicBeePlugin
             try
             {
                 AttachArchiveDropControls(archiveDropRoot, true);
+                // Ordinary MP3 drops are owned by MusicBee; if it adds one to
+                // our focused playlist anyway, remove that row only. The
+                // archive playlist must remain independent of Music/Tracks.
+                GuardArchivePlayerPlaylist();
             }
             catch (Exception error)
             {
@@ -267,13 +271,14 @@ namespace MusicBeePlugin
                     if (archiveDropClosing || tracks.Length == 0)
                         continue;
 
-                    // Archive files always open the dedicated, persistent
-                    // MusicBee playlist tab, regardless of which host pane
-                    // accepted the original archive drop.
+                    // Archive drops always update the dedicated playlist,
+                    // regardless of which host pane accepted the drop. Do
+                    // not attempt SDK NavigateTo with an .mbp file path:
+                    // that hijacks the currently selected MusicBee tab.
                     if (OpenArchivePlayerTab(tracks))
                     {
-                        Trace("ARCHIVE_DROP_TAB_RESULT success=1 tracks=" + tracks.Length +
-                            " extension=" + Path.GetExtension(archive));
+                        Trace("ARCHIVE_DROP_PLAYLIST_UPDATED tracks=" + tracks.Length +
+                            " extension=" + Path.GetExtension(archive) + " tab_navigation=host_owned");
                     }
                     else
                     {

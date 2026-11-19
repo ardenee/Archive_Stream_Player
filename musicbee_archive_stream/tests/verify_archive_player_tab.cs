@@ -17,6 +17,8 @@ namespace MusicBeePlugin
         public Func<string, string> Playlist_GetName;
         public Func<string, string, string[], string> Playlist_CreatePlaylist;
         public Func<string, string[], bool> Playlist_AppendFiles;
+        public Func<string, string[], bool> Playlist_SetFiles;
+        public Action MB_RefreshPanels;
         public QueryPlaylist Playlist_QueryFilesEx;
         public QueryFiles Library_QueryFilesEx;
         public Func<Command, object, bool> MB_InvokeCommand;
@@ -40,9 +42,13 @@ namespace MusicBeePlugin
         private void ScheduleArchivePlaylistMetadata(string playlist, IEnumerable<string> tracks) {}
 
         private static readonly string Url = @"C:\MusicBee\Playlists\Archive Stream Player\Archive Player.mbp";
+        private static readonly string AliasRoot = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ArchiveStreamPlayer", "MusicBee", "v", "sdk-harness");
+        private static readonly string Old = System.IO.Path.Combine(AliasRoot, "entry-00000001.mp3");
+        private static readonly string New = System.IO.Path.Combine(AliasRoot, "entry-00000002.mp3");
         private readonly List<string> files = new List<string>();
         private bool playlistExists;
-        private bool tabOpen;
         private int queryIndex;
         private int creations;
         private int navigations;
@@ -80,18 +86,26 @@ namespace MusicBeePlugin
                 files.AddRange(items);
                 return true;
             };
-            api.Library_QueryFilesEx = (string query, out string[] items) =>
+            api.Playlist_SetFiles = (url, items) =>
             {
-                items = new[] { "legacy.mp3", "legacy.mp3", "ignored.txt" };
+                if (url != Url)
+                    return false;
+                files.Clear();
+                files.AddRange(items);
                 return true;
             };
+            api.MB_RefreshPanels = () => {};
+            api.Library_QueryFilesEx = (string query, out string[] items) =>
+            {
+                items = new[] { Old, Old, "ignored.txt" };
+                return true;
+            };
+            // Any NavigateTo call with .mbp is a regression: it opens the
+            // Windows association picker and hijacks another MusicBee tab.
             api.MB_InvokeCommand = (command, obj) =>
             {
-                if (command != Command.NavigateTo || (string)obj != Url)
-                    return false;
-                tabOpen = true;
                 navigations++;
-                return true;
+                throw new Exception("Unsafe NavigateTo was called.");
             };
         }
         public static int Main()
@@ -101,21 +115,28 @@ namespace MusicBeePlugin
                 System.IO.File.Delete(marker);
             var plugin = new Plugin();
             if (!plugin.OpenArchivePlayerTab(new string[0]) || plugin.creations != 1 ||
-                plugin.files.Count != 1 || plugin.files[0] != "legacy.mp3")
+                plugin.files.Count != 1 || plugin.files[0] != Old || plugin.navigations != 0)
                 throw new Exception("First-run migration failed");
 
-            if (!plugin.OpenArchivePlayerTab(new[] { "new.mp3", "new.mp3" }) ||
+            if (!plugin.OpenArchivePlayerTab(new[] { New, New }) ||
                 plugin.creations != 1 || plugin.files.Count != 2)
                 throw new Exception("Append/deduplication failed");
 
-            plugin.tabOpen = false;
-            if (!plugin.OpenArchivePlayerTab(new[] { "new.mp3" }) ||
-                !plugin.tabOpen || plugin.creations != 1 || plugin.files.Count != 2)
-                throw new Exception("Closed-tab reuse failed");
+            if (!plugin.OpenArchivePlayerTab(new[] { New }) ||
+                plugin.creations != 1 || plugin.files.Count != 2 || plugin.navigations != 0)
+                throw new Exception("Existing playlist reuse failed");
 
             if (!plugin.OpenArchivePlayerTab(new string[0]) ||
-                plugin.creations != 1 || plugin.navigations != 4)
-                throw new Exception("Repeated navigation failed");
+                plugin.creations != 1 || plugin.navigations != 0)
+                throw new Exception("Unsafe playlist navigation attempted");
+
+            // MusicBee's own drag handler may append a regular MP3. The guard
+            // must remove it without clearing any native archive references.
+            plugin.files.Add(@"M:\Music\Ordinary-Song.mp3");
+            plugin.GuardArchivePlayerPlaylist();
+            if (plugin.files.Count != 2 || plugin.files[0] != Old ||
+                plugin.files[1] != New || plugin.navigations != 0)
+                throw new Exception("Ordinary MP3 polluted Archive Player");
 
             plugin.files.Clear(); // User explicitly clicked Clear List.
             if (!plugin.OpenArchivePlayerTab(new string[0]) || plugin.files.Count != 0)
@@ -125,7 +146,7 @@ namespace MusicBeePlugin
                 throw new Exception("Deleted playlist migrated historical tracks again");
             if (System.IO.File.Exists(marker))
                 System.IO.File.Delete(marker);
-            Console.WriteLine("ARCHIVE_PLAYER_TAB_TEST_PASS creates=2 tracks=0 cleared_stays_cleared=1 tab_reopened=1");
+            Console.WriteLine("ARCHIVE_PLAYER_TAB_TEST_PASS creates=2 tracks=0 cleared_stays_cleared=1 unsafe_navigations=0 ordinary_mp3_removed=1");
             return 0;
         }
     }

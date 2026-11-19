@@ -14,6 +14,7 @@ namespace MusicBeePlugin
         private const string ArchivePlayerPlaylistName = "Archive Player";
         private const string ArchivePlayerPlaylistFolder = "Archive Stream Player";
         private bool archivePlayerStartupScheduled;
+        private bool archivePlaylistGuardRunning;
 
         // Store migration state independently of MusicBee's playlist: clearing
         // or deleting the playlist must never silently restore old tracks.
@@ -76,6 +77,77 @@ namespace MusicBeePlugin
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
+        // Restrict our playlist to references allocated by Archive Stream.
+        // Do not require an existing .ast here: disconnected/offline archive
+        // references are user playlist data, not grounds for deleting a row.
+        private static bool IsArchivePlayerOwnedUrl(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                return false;
+            try
+            {
+                string full = Path.GetFullPath(path);
+                string root = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ArchiveStreamPlayer", "MusicBee", "v") + Path.DirectorySeparatorChar;
+                return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) &&
+                    full.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        // MusicBee can append an ordinary MP3 through its own DragDrop handler
+        // when any playlist tab has focus. It never passes through our archive
+        // drag filter. Remove only those foreign references from our playlist;
+        // never touch the original file, the Music library, or Now Playing.
+        // All SDK calls must execute on MusicBee's UI thread.
+        private void GuardArchivePlayerPlaylist()
+        {
+            if (archivePlaylistGuardRunning || archiveDropClosing ||
+                api.Playlist_QueryFilesEx == null || api.Playlist_SetFiles == null)
+                return;
+
+            archivePlaylistGuardRunning = true;
+            try
+            {
+                string playlist = FindArchivePlayerPlaylist();
+                if (String.IsNullOrWhiteSpace(playlist))
+                    return;
+                string[] current;
+                if (!api.Playlist_QueryFilesEx(playlist, out current) || current == null)
+                    return;
+                string[] owned = current.Where(IsArchivePlayerOwnedUrl).ToArray();
+                if (owned.Length == current.Length)
+                    return;
+
+                // Do not overwrite an intervening drop or Clear List event.
+                string[] stillCurrent;
+                if (!api.Playlist_QueryFilesEx(playlist, out stillCurrent) || stillCurrent == null ||
+                    !stillCurrent.SequenceEqual(current, StringComparer.OrdinalIgnoreCase))
+                {
+                    Trace("ARCHIVE_PLAYLIST_GUARD_SKIPPED reason=list_changed");
+                    return;
+                }
+                bool updated = api.Playlist_SetFiles(playlist, owned);
+                Trace("ARCHIVE_PLAYLIST_GUARD updated=" + (updated ? "1" : "0") +
+                    " removed_nonarchive=" + (current.Length - owned.Length) +
+                    " archive_entries=" + owned.Length);
+                if (updated && api.MB_RefreshPanels != null)
+                    api.MB_RefreshPanels();
+            }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_PLAYLIST_GUARD_FAILED type=" + error.GetType().Name);
+            }
+            finally
+            {
+                archivePlaylistGuardRunning = false;
+            }
+        }
+
         private string[] PreviouslyImportedArchiveTracks()
         {
             if (api.Library_QueryFilesEx == null)
@@ -100,7 +172,7 @@ namespace MusicBeePlugin
         // Run only on MusicBee's UI thread. Never mutate its database directly.
         private bool OpenArchivePlayerTab(IEnumerable<string> incoming)
         {
-            if (archiveDropClosing || api.MB_InvokeCommand == null ||
+            if (archiveDropClosing ||
                 api.Playlist_CreatePlaylist == null || api.Playlist_AppendFiles == null)
             {
                 Trace("ARCHIVE_TAB_UNAVAILABLE reason=missing_sdk_or_shutting_down");
@@ -163,24 +235,23 @@ namespace MusicBeePlugin
                     }
                 }
 
-                // MusicBee owns the tab lifecycle. Navigation reselects an open
-                // playlist tab or creates it when the user previously closed it.
-                bool opened = api.MB_InvokeCommand(Command.NavigateTo, playlist);
-                Trace("ARCHIVE_TAB_NAVIGATE success=" + (opened ? "1" : "0") +
-                    " created_playlist=" + (created ? "1" : "0") + " incoming=" + tracks.Length);
-                if (opened)
+                // IMPORTANT: Command.NavigateTo does NOT select a native
+                // playlist tab using an .mbp file path. MusicBee treats that
+                // path as a document: it can replace the current Music tab's
+                // destination, or ask Windows for an .mbp file association.
+                // Never pass the .mbp URL to NavigateTo. Updating the backing
+                // playlist is safe; the host tab is selected by the user.
+                Trace("ARCHIVE_PLAYLIST_READY created=" + (created ? "1" : "0") +
+                    " incoming=" + tracks.Length + " navigation=host_owned");
+                StartPlaybackDiagnostics();
+                GuardArchivePlayerPlaylist();
+                if (api.Playlist_QueryFilesEx != null)
                 {
-                    StartPlaybackDiagnostics();
-                    // Never pass only an incoming subset to Playlist_SetFiles:
-                    // that would silently delete every pre-existing row.
-                    if (api.Playlist_QueryFilesEx != null)
-                    {
-                        string[] present;
-                        if (api.Playlist_QueryFilesEx(playlist, out present))
-                            ScheduleArchivePlaylistMetadata(playlist, present ?? new string[0]);
-                    }
+                    string[] present;
+                    if (api.Playlist_QueryFilesEx(playlist, out present))
+                        ScheduleArchivePlaylistMetadata(playlist, present ?? new string[0]);
                 }
-                return opened;
+                return true;
             }
             catch (Exception error)
             {
@@ -234,6 +305,11 @@ namespace MusicBeePlugin
                             MarkArchivePlayerMigrated();
                         }
 
+                        // Keep a host-owned playlist archive-only, including
+                        // ordinary MP3s MusicBee may append through its own
+                        // drop handlers. Never alter other playlists or library.
+                        GuardArchivePlayerPlaylist();
+
                         // Metadata repair may run at low priority on startup,
                         // but never navigate/open tabs or repopulate a cleared
                         // playlist. This also applies new Use File Tags prefs.
@@ -260,8 +336,15 @@ namespace MusicBeePlugin
         private void OnOpenArchivePlayer(object sender, EventArgs args)
         {
             if (!OpenArchivePlayerTab(new string[0]))
-                MessageBox.Show("MusicBee could not open the Archive Player tab.",
+            {
+                MessageBox.Show("MusicBee could not find or create the Archive Player playlist.",
                     "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            MessageBox.Show("Archive Player is ready. Select its existing tab, or open the playlist " +
+                "from MusicBee's Playlists navigator if you previously closed the tab.",
+                "Archive Stream Player", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 }

@@ -8,7 +8,7 @@
 | foobar2000 32/64-bit | Installs the matching native component |
 | AIMP 32/64-bit | Installs the matching native plugin |
 | XMPlay 32-bit | Installs `xmp-archive-stream.dll`. In **Options → Decoders**, select the **Archive Stream Player** tree page, or use **Archive Stream ZIP/7z/RAR → Config** for the standalone dialog. XMPlay handles ordinary ZIP files itself |
-| MusicBee 32-bit | Native BASS add-on and Tools menu plugin. Archive Player uses small validated ID3 metadata aliases with paired .ast references in LocalAppData, not extracted audio. Use File Tags supports Title/Artist/Album/Track#/Genre/Year. Archive drops append and activate the tab; startup preserves existing tab selection and never repopulates a cleared list. Old aliases remain playable; stream/RAM/cache fallback and passwords are shared. |
+| MusicBee 32-bit | Native BASS addon and Tools menu plugin. Archive Player uses small validated ID3 metadata aliases and paired .ast references rather than extracted audio. Use File Tags supports Title/Artist/Album/Track#/Genre/Year. Dragging an archive appends only its tracks to the dedicated playlist, but does not forcibly switch tabs: select Archive Player from an existing tab or the Playlists navigator. Raw .mbp navigation has been disabled after it corrupted the original Music tab; a periodic playlist guard removes any ordinary MP3 that MusicBee itself adds to Archive Player. The Music library, Now Playing and original MP3 files are untouched. |
 | MediaMonkey 5 / 2024 | Installs native playback and Now Playing archive-drop handling; plugin settings replace four redundant Tools menu commands |
 | VLC 3 64-bit | Use the **Open an archive in VLC** Start Menu shortcut |
 

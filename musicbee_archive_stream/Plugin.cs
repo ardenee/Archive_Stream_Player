@@ -238,8 +238,8 @@ namespace MusicBeePlugin
                         return;
                     }
                     bool opened = OpenArchivePlayerTab(tracks);
-                    Trace("ADD_ARCHIVE_TAB_RESULT opened=" + (opened ? "1" : "0") +
-                        " tracks=" + tracks.Length);
+                    Trace("ADD_ARCHIVE_PLAYLIST_RESULT updated=" + (opened ? "1" : "0") +
+                        " tracks=" + tracks.Length + " tab_navigation=host_owned");
                     if (!opened)
                     {
                         bool queued = api.NowPlayingList_QueueFilesLast != null &&
@@ -793,6 +793,23 @@ namespace MusicBeePlugin
             if (type == NotificationType.PluginStartup || type == NotificationType.MusicBeeStarted)
             {
                 StartArchiveDropIntegration();
+                return;
+            }
+
+            if (type == NotificationType.PlaylistUpdated || type == NotificationType.PlaylistCreated)
+            {
+                Control root = archiveDropRoot;
+                if (!archiveDropClosing && root != null && !root.IsDisposed && root.IsHandleCreated)
+                {
+                    try
+                    {
+                        // PlaylistUpdated may be raised synchronously while
+                        // MusicBee is still committing the list. Defer the
+                        // guard until the current UI operation has returned.
+                        root.BeginInvoke((Action)GuardArchivePlayerPlaylist);
+                    }
+                    catch (InvalidOperationException) { }
+                }
                 return;
             }
 
