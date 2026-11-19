@@ -31,6 +31,7 @@
     <Compile Include="ArchivePlayerMetadata.cs"/>
     <Compile Include="ArchivePlayerTrackOrder.cs"/>
     <Compile Include="ArchivePlayerDuration.cs"/>
+    <Compile Include="ArchivePlayerDurationScan.cs"/>
     <Compile Include="ArchivePlayerId3Alias.cs"/>
     <Compile Include="ArchiveOleDropTarget.cs"/>
     <Compile Include="$(MusicBeeSdkRoot)\MusicBeeInterface.cs" Link="MusicBeeInterface.cs"/>

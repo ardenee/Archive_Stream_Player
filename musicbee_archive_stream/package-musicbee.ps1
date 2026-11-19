@@ -46,8 +46,9 @@ Install this package into the MusicBee application folder:
 
 Restart MusicBee. Drag ZIP, 7z or RAR albums onto a supported
 MusicBee pane or use Tools > Archive Stream: Add Archive Audio.
-The native Archive Player playlist tab opens automatically and persists.
-Use Tools > Archive Stream: Open Archive Player to reopen its tab.
+The Archive Player playlist is created and retained. Select its tab
+manually: automatic tab switching is disabled to protect the Music tab.
+Use Tools > Archive Stream: Open Archive Player to find the playlist.
 Use Tools > Archive Stream: Settings for cache and password options.
 
 Play MP3, WAV, FLAC, OGG Vorbis, AAC, M4A and WMA. Supported solid
@@ -58,6 +59,10 @@ Album / Track # / Genre / Year instead of synthetic filename titles.
 MusicBee stores small ID3 aliases rather than extracted audio; original
 archives and .ast descriptors remain unchanged. Old playlist references
 stay playable while existing Archive Player rows upgrade safely.
+Tags load immediately; the first track playback starts a background
+scan of the album for verified lengths and caches TLEN metadata.
+MusicBee's built-in Time column may stay blank because its SDK does
+not expose a writable Duration property.
 
 Do not replace the MusicBee bass.dll or install another BASS runtime.
 The package does not include third-party BASS runtime binaries.

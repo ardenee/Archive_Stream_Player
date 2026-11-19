@@ -124,6 +124,32 @@ namespace MusicBeePlugin
                 .Select(k => k.path)).ToArray();
         }
 
+        // Archive duration work is scoped to the album that just began
+        // playing. Never scan other Archive Player albums or regular files.
+        // Put the currently playing track first, followed by its siblings
+        // in playlist order, without changing any visible playlist ordering.
+        private static int[] ArchiveDurationScanIndices(string[] playlist, string playing)
+        {
+            string playingArchive, member, virtualPath;
+            if (!TryReadArchiveEntryPath(playing, out playingArchive, out member, out virtualPath))
+                return new int[0];
+
+            var result = new List<int>();
+            for (int i = 0; i < playlist.Length; ++i)
+            {
+                string archive;
+                if (TryReadArchiveEntryPath(playlist[i], out archive, out member, out virtualPath) &&
+                    String.Equals(archive, playingArchive, StringComparison.OrdinalIgnoreCase))
+                    result.Add(i);
+            }
+
+            int active = Array.FindIndex(playlist, path =>
+                String.Equals(path, playing, StringComparison.OrdinalIgnoreCase));
+            if (active >= 0 && result.Remove(active))
+                result.Insert(0, active);
+            return result.ToArray();
+        }
+
         private static bool ArchivePlayerNeedsFirstSort()
         {
 #if AST_ARCHIVE_TAB_TEST

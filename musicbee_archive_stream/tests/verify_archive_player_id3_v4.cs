@@ -38,9 +38,9 @@ namespace MusicBeePlugin
             return 1;
         }
 
-        private static long QueryArchiveDurationMs(string alias)
+        private static long QueryArchiveDurationMs(string alias, bool allowDecode = true)
         {
-            return 352918; // Stub only; decoder accuracy is tested separately.
+            return allowDecode ? 352918 : 0; // Stub: initial metadata must not probe decoder.
         }
 
         private static bool CreateNativeDescriptorHardLink(string alias, string descriptor, IntPtr reserved)

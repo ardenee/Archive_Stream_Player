@@ -129,9 +129,12 @@ namespace MusicBeePlugin
                         continue;
                     try
                     {
+                        // Metadata first: never traverse/decode archive frames
+                        // merely to show titles in MusicBee. Cached lengths
+                        // are still included without any decoder access.
                         string replacement = VersionedMusicBeeAlias(
                             Path.ChangeExtension(initial[i], ".ast"), tagsEnabled,
-                            initial[i], true);
+                            initial[i], false);
                         if (!String.Equals(replacement, initial[i], StringComparison.OrdinalIgnoreCase))
                         {
                             migrated[i] = replacement;

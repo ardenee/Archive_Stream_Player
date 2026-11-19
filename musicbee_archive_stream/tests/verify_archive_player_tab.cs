@@ -84,7 +84,16 @@ namespace MusicBeePlugin
                     throw new Exception("Embedded TRACKNUMBER or filename fallback order is incorrect");
                 if (!OrderArchiveTracks(sorted, true).SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
                     throw new Exception("Track ordering is not stable");
-                Console.WriteLine("ARCHIVE_PLAYER_SORT_TEST_PASS embedded_track_numbers=1 filename_fallback=1 independent_archive_groups=1");
+                int[] firstAlbumScan = ArchiveDurationScanIndices(paths, paths[1]);
+                if (!firstAlbumScan.SequenceEqual(new[] { 1, 0, 2 }))
+                    throw new Exception("Duration scan did not prioritise playing track and isolate its archive.");
+                int[] secondAlbumScan = ArchiveDurationScanIndices(paths, paths[4]);
+                if (!secondAlbumScan.SequenceEqual(new[] { 4, 3 }))
+                    throw new Exception("Duration scan crossed into another archive.");
+                int[] ordinary = ArchiveDurationScanIndices(paths, @"X:\Music\ordinary.mp3");
+                if (ordinary.Length != 0)
+                    throw new Exception("Ordinary MP3 unexpectedly triggered archive duration scan.");
+                Console.WriteLine("ARCHIVE_PLAYER_SORT_TEST_PASS embedded_track_numbers=1 filename_fallback=1 independent_archive_groups=1 duration_scan_scoped=1 playing_first=1 ordinary_mp3_ignored=1");
             }
             finally
             {

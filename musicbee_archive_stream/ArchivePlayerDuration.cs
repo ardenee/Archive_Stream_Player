@@ -25,7 +25,7 @@ namespace MusicBeePlugin
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool BassCloseArchiveAlias(uint handle);
 
-        private static long QueryArchiveDurationMs(string alias)
+        private static long QueryArchiveDurationMs(string alias, bool allowDecode = true)
         {
             if (String.IsNullOrWhiteSpace(alias) || !File.Exists(alias))
                 return 0;
@@ -70,6 +70,12 @@ namespace MusicBeePlugin
             {
                 Trace("ARCHIVE_DURATION_CACHE_READ_FAIL type=" + error.GetType().Name);
             }
+
+            // Initial playlist creation must read only cached durations.
+            // Full frame validation begins on the first actual playback of
+            // this archive, on a separate background-priority worker.
+            if (!allowDecode)
+                return 0;
 
             uint stream = 0;
             try

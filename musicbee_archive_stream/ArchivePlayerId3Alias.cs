@@ -263,7 +263,7 @@ namespace MusicBeePlugin
             // The initial V4 alias displays tracks immediately; a distinct
             // versioned V4_LENGTH alias refreshes MusicBee when ready.
             string durationSource = prebuiltAlias ?? Path.ChangeExtension(descriptor, ".mp3");
-            long durationMs = includeDuration ? QueryArchiveDurationMs(durationSource) : 0;
+            long durationMs = QueryArchiveDurationMs(durationSource, includeDuration);
             bool hasDuration = durationMs > 0;
             {
                 // Hash the short preference/version identifier ONLY. We never

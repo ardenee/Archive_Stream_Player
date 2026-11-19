@@ -833,6 +833,30 @@ namespace MusicBeePlugin
                 string state = api.Player_GetPlayState == null ? "unknown" : api.Player_GetPlayState().ToString();
                 Trace("NATIVE_LIBRARY_PLAYBACK_EVENT event=" + type + " state=" + state +
                     " source=LOCALAPPDATA_ALIAS decoder=BASS_ARCHIVE");
+                if (type == NotificationType.TrackChanged)
+                {
+                    try
+                    {
+                        int reportedMs = api.NowPlaying_GetDuration == null ? -1 : api.NowPlaying_GetDuration();
+                        string stored = api.Library_GetFileProperty == null ? "" :
+                            api.Library_GetFileProperty(source, FilePropertyType.Duration);
+                        Trace("ARCHIVE_DURATION_HOST_PROPERTY decoder_ms=" + reportedMs +
+                            " library_duration=" + stored + " api=READ_ONLY");
+                    }
+                    catch (Exception error)
+                    {
+                        Trace("ARCHIVE_DURATION_HOST_PROPERTY_FAIL type=" + error.GetType().Name);
+                    }
+                }
+                // Metadata appears immediately. Start the low-priority
+                // duration verification only when real playback begins,
+                // and only for this archive's tracks in Archive Player.
+                if (type == NotificationType.TrackChanged ||
+                    (type == NotificationType.PlayStateChanged &&
+                     api.Player_GetPlayState != null &&
+                     api.Player_GetPlayState() == PlayState.Playing))
+                    ScheduleArchiveDurationScanOnPlayback(source);
+
                 StartPlaybackDiagnostics();
             }
         }
