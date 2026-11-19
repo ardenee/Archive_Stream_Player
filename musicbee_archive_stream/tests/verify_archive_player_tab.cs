@@ -42,6 +42,7 @@ namespace MusicBeePlugin
         }
         private void StartPlaybackDiagnostics() {}
         private void ScheduleArchivePlaylistMetadata(string playlist, IEnumerable<string> tracks, bool sortRequested = false) {}
+        private void RefreshArchiveVerifiedView() {}
         private static int ReadNativeArchiveFileTags(string virtualPath, StringBuilder output, uint capacity)
         {
             int number = 0;

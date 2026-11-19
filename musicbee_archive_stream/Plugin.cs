@@ -213,6 +213,9 @@ namespace MusicBeePlugin
                     "Configure shared titles, cache cleanup, passwords and diagnostic logging", OnShowSettings);
                 api.MB_AddMenuItem("mnuTools/Archive Stream: Open Archive Player",
                     "Open or restore the Archive Player tab", OnOpenArchivePlayer);
+                api.MB_AddMenuItem("mnuTools/Archive Stream: Verified Durations",
+                    "Open a separate MusicBee-styled window with verified archive track times",
+                    ShowArchiveVerifiedView);
             }
             return info;
         }
@@ -874,6 +877,13 @@ namespace MusicBeePlugin
             catch (Exception error)
             {
                 Trace("ARCHIVE_DROP_HOOK_REMOVE_FAILED type=" + error.GetType().Name);
+            }
+            // The optional verified-time view is a MusicBee SDK-owned panel.
+            // Remove only that panel, never other user tabs or playlists.
+            try { CloseArchiveVerifiedView(); }
+            catch (Exception error)
+            {
+                Trace("ARCHIVE_VERIFIED_VIEW_CLOSE_FAIL type=" + error.GetType().Name);
             }
             if (playbackTraceTimer != null)
             {

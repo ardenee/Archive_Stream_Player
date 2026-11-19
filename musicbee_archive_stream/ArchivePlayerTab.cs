@@ -245,6 +245,7 @@ namespace MusicBeePlugin
                     " incoming=" + tracks.Length + " navigation=host_owned");
                 StartPlaybackDiagnostics();
                 GuardArchivePlayerPlaylist();
+                RefreshArchiveVerifiedView();
                 if (api.Playlist_QueryFilesEx != null)
                 {
                     string[] present;

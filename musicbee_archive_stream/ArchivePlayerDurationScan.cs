@@ -216,6 +216,8 @@ namespace MusicBeePlugin
                                 " playback_after=" + afterState);
                             if (committed && api.MB_RefreshPanels != null)
                                 api.MB_RefreshPanels();
+                            if (committed)
+                                RefreshArchiveVerifiedView();
                         }
                         catch (Exception error)
                         {

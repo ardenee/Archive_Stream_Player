@@ -201,6 +201,8 @@ namespace MusicBeePlugin
                             MarkArchivePlayerFirstSort();
                         if (updated && api.MB_RefreshPanels != null)
                             api.MB_RefreshPanels();
+                        if (updated)
+                            RefreshArchiveVerifiedView();
                     }));
                 }
                 catch (InvalidOperationException) { }

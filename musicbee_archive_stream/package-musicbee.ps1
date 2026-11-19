@@ -63,6 +63,9 @@ Tags load immediately; the first track playback starts a background
 scan of the album for verified lengths and caches TLEN metadata.
 MusicBee's built-in Time column may stay blank because its SDK does
 not expose a writable Duration property.
+Tools > Archive Stream: Verified Durations opens a separate MusicBee-
+skinned window with correct cached lengths and album total. It is
+optional and does not overlay or change the native MusicBee tabs.
 
 Do not replace the MusicBee bass.dll or install another BASS runtime.
 The package does not include third-party BASS runtime binaries.
