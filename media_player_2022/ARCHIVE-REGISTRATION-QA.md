@@ -2,7 +2,7 @@
 
 **DEV only — 20 November 2026.** The experiment attempts multiple **per-user** Windows extension-registration mechanisms. It deliberately **does not modify Media Player's signed AppX manifest**, replace WinRAR/7-Zip file defaults, or install a production archive decoder.
 
-## Active test configuration
+## Reversible test configuration (currently disabled)
 
 Use `media_player_2022/test-archive-format-registrations.ps1`. The script exposes `-Action Enable`, `-Action Status` and `-Action Disable`. All changes are scoped to the current Windows user and recorded in:
 
@@ -37,12 +37,14 @@ The diagnostic `mf_bytestream_probe.dll` **always returns an unsupported media e
 - On DEV prior to Enable, ZIP and RAR used WinRAR and 7z used 7-Zip in Explorer UserChoice. No target HKCU test registrations were present.
 - All three extensions were registered successfully. Windows' merged HKCR view now reports the experimental audio MIME/perceived type; it still reports the original underlying default ProgID.
 - The Microsoft.ZuneMusic AppX ProgID was verified from the installed app's **working MP3 association**, rather than guessed. It appears in the temporary ZIP/7z/RAR `OpenWithProgids` keys.
-- `-Action Disable` successfully removed the created keys and restored the original view. `-Action Enable` was run again to permit in-player testing.
+- `-Action Disable` successfully removed the created keys and restored the original view. `-Action Enable` was used for in-player testing, **then Disable was run again** to leave DEV clean.
 - A native `IMFSourceResolver` test on an actual Subspecies 4 ZIP and on control files with ZIP/7z/RAR extensions **did not invoke** the diagnostic handler, despite the registration. An explicit `MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE` flag also did not change that result. This **does not** establish how modern Media Player's own OLE drop handler interprets the extension list.
 - Previously, a diagnostic `.astmfprobe` extension **did** invoke the same COM byte-stream handler under the normal-user desktop Media Foundation resolver, proving that the COM code and registry dispatch work for that invented extension.
-- **No automatic File Open/drop acceptance result is claimed for Media Player (2022).** The supported-file list is owned by Microsoft's package manifest; direct manual drag/drop testing is still necessary.
+- **Actual Media Player drag-and-drop remained unsupported** for archives with all six groups registered. Explorer's Open with successfully submitted an archive but playback reported **0xC00D36C4** (unsupported byte-stream type).
+- Live UIAutomation inspection of the File Open filter while all external registrations were enabled yielded exactly **58 supported formats**, identical to the **58** listed in Microsoft.ZuneMusic 11.2609.11.0's AppxManifest.xml. **No ZIP, 7z or RAR** in either. After disabling the registrations, the repeatable read-only `verify-media-player-filepicker.ps1 -OpenIfNeeded` test again returned exactly 58 matching formats and zero archive formats.
+- **Result:** None of these external registrations changed the File Open format filter or made direct archive drop work in this version. The diagnostic Media Foundation handler is not a usable archive decoder. The full test configuration was removed. The original WinRAR/7-Zip archive defaults are unchanged.
 
-## Manual Media Player test
+## Repeating or isolating the test
 
 1. Close and reopen the **new Media Player (2022)**, not `wmplayer.exe`.
 2. Drag **one ZIP archive** directly into the actual Media Player window. Note whether it displays **Unsupported file type(s)** or accepts the drop; repeat with **7z** and **RAR**.
@@ -50,7 +52,7 @@ The diagnostic `mf_bytestream_probe.dll` **always returns an unsupported media e
 4. Record the outcome (or screenshot). The test DLL records any Media Foundation handler calls in `%LOCALAPPDATA%\ArchiveStreamPlayer\Logs\mf_bytestream_probe.log`. The app may never call that handler.
 5. For *Open with*, compare whether the modern **Media Player** and **Archive Stream companion** appear for each archive; do not set either as the default.
 
-The test is **temporary but persistent until Disabled**. During testing, other media applications that use Shell/MIME/Media Foundation classification may see ZIP/7z/RAR as audio, and the diagnostic handler will reject any requests reaching it. This is not suitable for release.
+**The test is currently disabled on DEV.** If deliberately re-enabled, it persists until Disabled. Other media applications that use Shell/MIME/Media Foundation classification may see ZIP/7z/RAR as audio, and the diagnostic handler will reject any requests reaching it. This is not suitable for release.
 
 ## Rollback
 
@@ -62,4 +64,4 @@ From PowerShell on DEV:
 
 Confirm with `-Action Status` that `TEST_ENABLED=False` and the default archive associations are unchanged.
 
-**Do not add these experimental overrides to the main installer**, modify Microsoft's package manifest, or overwrite WinRAR/7-Zip defaults. If any change to the unsupported-file drag/drop response is observed, isolate the responsible registration before developing a real Archive Stream handler.
+**Do not add these unsuccessful experimental overrides to the main installer**, modify Microsoft's package manifest, or overwrite WinRAR/7-Zip defaults. A practical next direction is testing an external drop surface integrated visually with Media Player, forwarding archive paths to our already verified localhost HTTP/M3U8 backend while preserving normal native file drops. No in-app registration API is established by these tests.
