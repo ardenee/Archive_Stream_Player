@@ -1,6 +1,6 @@
 # Media Player (2022) SDK feasibility and integration decision
 
-**Target:** Windows 11 modern **Media Player** (`Microsoft.ZuneMusic`, `Microsoft.Media.Player.exe`). NOT legacy Windows Media Player (`wmplayer.exe`). **Status: SDK feasibility prototypes have passed basic Cloud Files activation and archive byte-transfer tests, but no production adapter or fully verified playback/seeking is implemented.** Do not mark this adapter supported or add an installer component until the remaining gates pass.
+**Target:** Windows 11 modern **Media Player** (`Microsoft.ZuneMusic`, `Microsoft.Media.Player.exe`). NOT legacy Windows Media Player (`wmplayer.exe`). **Status: the real modern Media Player plays audio from archive entries using the existing localhost HTTP bridge, and opens a multi-track HTTP M3U8 playlist. The Cloud Files approach is deprioritised. A supported adapter, HTTP seeking under low-buffer conditions, and drag-and-drop are not yet implemented or certified.** Do not mark this adapter supported or add an installer component until the remaining gates pass.
 
 ## DEV feasibility results — 19 November 2026
 
@@ -25,6 +25,26 @@ The actual C++ test programs live in [media_player_2022](media_player_2022/READM
 The diagnostic callback logs the actual requesting process ID/path, required/optional ranges, per-block transfer timing and the file's `CF_PLACEHOLDER_STANDARD_INFO.OnDiskDataSize` plus `FILE_STANDARD_INFO.AllocationSize`. In both 20.7 MB MP3 runs, the request came from `Microsoft.Media.Player.exe`, `RequiredFileOffset=0`, `RequiredLength=20661882`, and all 316 `TRANSFER_DATA` blocks completed in approximately **297 ms**. The measured on-disk data was **20661882 bytes**; allocated file space was **20709376 bytes**. Neither hydration policy reduced the amount read or retained.
 
 The read-only native `cfapi_read_probe` test also shows that even a **4096-byte** application read led to a **68336-byte** fetch and full on-disk retention. Native read completion was fast with both streaming modifier choices; the old PowerShell `Start-Job` timing result must not be cited as normal application startup latency. All disposable sync roots are cleaned after each completed native probe.
+
+## HTTP compatibility proof — 20 November 2026
+
+**Result: core HTTP playback and album navigation PASS in actual Media Player (2022). This is not a native plug-in and is not yet a production adapter.** No drag-and-drop integration was added.
+
+The existing `archive_player_bridge/archive_player_bridge.cpp` process was used without an extraction directory. It binds **only** to `127.0.0.1`, exposes per-session secret URLs, writes a local M3U8 file with nine `http://127.0.0.1:<port>/<secret>/entry/<index>.mp3` URLs for `M:\Music\VA - Subspecies 4 (2024).zip`, and retains existing backend routing **stream → memory → managed cache**. Media Player itself performs audio decoding. The tests used `Microsoft.Media.Player.exe` from `Microsoft.ZuneMusic` 11.2609.11.0.
+
+| Test | Result | Evidence / limitation |
+| --- | --- | --- |
+| HTTP bridge HEAD and byte-range request | **Pass** | `HEAD` returned 200; `Range: bytes=0-4095` returned **206** with `Content-Range: bytes 0-4095/20661882`, and the new `HTTP_AUDIO_TRANSFER` log confirmed exactly 4096 payload bytes |
+| Direct HTTP track via **Media Player → Home → Open URL** | **Pass only with a temporary loopback exemption** | Media Player displayed and started **Neptune — Cosmic Bazaar; Subspecies 4**, with Pause enabled. Bridge recorded `ROUTE_STREAM index=1`, 20,661,882-byte response |
+| Full album M3U8 in modern Media Player | **Pass with same exemption** | The app opened a nine-entry HTTP M3U8; initial Neptune played, and its Next button advanced to **Wonky Control Room**. Individual playback of all nine entries is not yet certified. The bridge logged subsequent direct-stream requests |
+| Native seek UI | **Partial pass** | Seeking in the player advanced its seek slider (e.g. to ~72.8%) while playback remained active, but **no nonzero-start HTTP Range request was observed from the app**. The app already had buffered data; do not claim HTTP range-seek certification |
+| Actual bytes sent to Media Player | **High prefetch cost** | Repeated test with byte-counting logs showed complete HTTP transfers for entry 1 (**20,661,882 bytes**), 2 (**19,742,415 bytes**) and 3 (**19,649,377 bytes**) on album opening (~60 MB), plus entry 4 (**23,793,435 bytes**) after Next. These were **actual payload byte counts**, not only requested response lengths. All four used `ROUTE_STREAM`, without managed disk extraction |
+| Default Windows loopback isolation | **Blocks playback** | Media Player accepted the HTTP URL / playlist but did not contact `127.0.0.1` until temporarily using `CheckNetIsolation LoopbackExempt -a -n=Microsoft.ZuneMusic_8wekyb3d8bbwe`. Tests removed the exemption with `-d` and verified it was absent afterward. A production integration must not silently weaken the app's network isolation |
+| Playlist metadata/duration | **Incomplete** | Embedded MP3 title/album appeared after fetching, but the bridge M3U8 currently writes `#EXTINF:-1` where durations have not been probed; pre-play durations for all tracks and full artist/album metadata still need work |
+
+**Interpretation:** Unlike Cloud Files, the HTTP route feeds our shared archive stream directly to the player and does not hydrate Windows cloud placeholders. However, **Media Player downloads whole tracks and prefetches upcoming entries aggressively**. For solid/encrypted archives this may trigger unnecessary memory/cache preparation; test and bound that before adding a user-facing drop target. It is premature to claim low-I/O streaming, efficient seek, or general archive parity from these ZIP tests alone.
+
+**Production gates:** (1) a secure, clearly opt-in strategy for the app's loopback restriction with uninstall rollback; (2) limit or otherwise safely handle aggressive prefetch, particularly solid archives; (3) validate actual HTTP seeking when data is not already buffered; (4) test ZIP, 7z, RAR, multipart and encrypted routes; (5) correct playlist metadata, durations and session/bridge lifetime; (6) only then build an Explorer context menu or Archive Stream drop target. Do not attempt to intercept the modern application's private drag/drop controls or call this a native SDK plug-in.
 
 ## DEV inventory — 19 November 2026
 

@@ -62,6 +62,8 @@ std::wstring g_work, g_output;
 unsigned short g_port = 0;
 std::atomic<bool> g_quit{false};
 std::atomic<unsigned> g_clients{0}, g_stream{0}, g_memory{0}, g_cacheCount{0};
+thread_local bool g_countHttpBody = false;
+thread_local uint64_t g_httpBodyBytes = 0;
 std::mutex g_fileMutex;
 std::mutex g_decryptMutex;
 std::unordered_map<uint32_t, std::wstring> g_fileCache;
@@ -298,6 +300,8 @@ bool Send(SOCKET s, const void *buffer, size_t bytes)
         int n = send(s, p, (int)(std::min)(bytes, (size_t)65536), 0);
         if (n <= 0)
             return false;
+        if (g_countHttpBody)
+            g_httpBodyBytes += static_cast<uint64_t>(n);
         p += n;
         bytes -= (size_t)n;
     }
@@ -317,7 +321,10 @@ bool Header(SOCKET s, int status, const std::string &mime, uint64_t length, cons
                        "\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\n"
                        "X-Content-Type-Options: nosniff\r\nConnection: close\r\n" +
                        extra + "\r\n";
-    return Send(s, text.data(), text.size());
+    g_countHttpBody = false;
+    const bool sent = Send(s, text.data(), text.size());
+    g_countHttpBody = sent;
+    return sent;
 }
 bool ParseNumber(std::string_view s, uint64_t &v)
 {
@@ -625,6 +632,8 @@ void Client(SOCKET s)
             --g_clients;
         }
     } guard{s};
+    g_httpBodyBytes = 0;
+    g_countHttpBody = false;
     DWORD timeoutMs = 15000;
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeoutMs, sizeof(timeoutMs));
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeoutMs, sizeof(timeoutMs));
@@ -708,7 +717,8 @@ void Client(SOCKET s)
         Header(s, 404, "text/plain", 0);
         return;
     }
-    ServeAudio(s, request, *entry, head);
+    const bool completed = ServeAudio(s, request, *entry, head);
+    DebugLogWrite("INFO", "BRIDGE", "HTTP_AUDIO_TRANSFER", "index=%u | method=%s | payload_sent=%llu | completed=%d", entry->index, head ? "HEAD" : "GET", static_cast<unsigned long long>(g_httpBodyBytes), completed ? 1 : 0);
 }
 BOOL WINAPI OnCtrl(DWORD signal)
 {
