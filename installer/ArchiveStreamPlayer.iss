@@ -43,11 +43,9 @@ Name: "xmplay"; Description: "XMPlay 32-bit - native 7z/RAR plugin"; Types: cust
 Name: "musicbee"; Description: "MusicBee 32-bit - native plugin and Tools menu"; Types: custom
 Name: "mediamonkey"; Description: "MediaMonkey 5/2024 - native playback and archive Tools menu"; Types: custom
 Name: "vlc"; Description: "VLC 3 64-bit - native ZIP/7z/RAR Open File and drag-and-drop plugin"; Types: custom
-Name: "modernmediaplayer"; Description: "Media Player (2022) - HTTP archive drop target (preview, not a native plug-in)"; Types: custom
 
 [Tasks]
 Name: "wacup_zip_override"; Description: "Use Archive Stream for ZIP files in WACUP (disable WACUP built-in ZIP plugin; restore on uninstall)"; Components: wacup; Flags: checkedonce
-Name: "modernmediaplayer_desktop"; Description: "Create Media Player (2022) archive-drop desktop shortcut"; Components: modernmediaplayer; Flags: unchecked
 
 [Files]
 Source: "..\archive_player_bridge\configure-adapters.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -114,17 +112,19 @@ Source: "..\mediamonkey_archive_stream\Release\ArchiveStreamPlayer-MediaMonkey5-
 ; Open File and archive drag/drop work without a script, shortcut or HTTP.
 Source: "..\vlc_archive_stream\x64\Release\libarchive_stream_plugin.dll"; DestDir: "{code:GetPlayerDir|vlc}\plugins\access"; Components: vlc; Flags: ignoreversion
 
-; Media Player (2022): standalone OLE drop window + privately scoped localhost bridge.
-; The installed launcher automatically requests short-lived AppContainer loopback access only when needed.
-Source: "..\media_player_2022\bin\x64\Release\modern_media_drop.exe"; DestDir: "{app}\MediaPlayer2022"; Components: modernmediaplayer; Flags: ignoreversion
-Source: "..\archive_player_bridge\x64\Release\archive_player_bridge.exe"; DestDir: "{app}\MediaPlayer2022"; Components: modernmediaplayer; Flags: ignoreversion
+
+; Upgrade cleanup for retired Microsoft.ZuneMusic DEV preview only.
+[InstallDelete]
+Type: files; Name: "{app}\MediaPlayer2022\modern_media_drop.exe"
+Type: files; Name: "{app}\MediaPlayer2022\archive_player_bridge.exe"
+Type: dirifempty; Name: "{app}\MediaPlayer2022"
+Type: files; Name: "{group}\Media Player (2022) - Drop Archives.lnk"
+Type: files; Name: "{autodesktop}\Archive Stream - Media Player (2022).lnk"
 
 [Icons]
 Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\wscript.exe"; Parameters: "//B //Nologo ""{app}\launch-hidden.vbs"" ""{app}\configure-adapters.ps1"""
 Name: "{group}\Project homepage"; Filename: "{#HomeURL}"
 Name: "{group}\MediaMonkey add-on packages (portable installs)"; Filename: "{app}\MediaMonkey"; Components: mediamonkey
-Name: "{group}\Media Player (2022) - Drop Archives"; Filename: "{app}\MediaPlayer2022\modern_media_drop.exe"; Components: modernmediaplayer
-Name: "{autodesktop}\Archive Stream - Media Player (2022)"; Filename: "{app}\MediaPlayer2022\modern_media_drop.exe"; Components: modernmediaplayer; Tasks: modernmediaplayer_desktop
 
 [Run]
 Filename: "{code:GetPlayerDir|vlc}\vlc-cache-gen.exe"; Parameters: """{code:GetPlayerDir|vlc}\plugins"""; StatusMsg: "Registering Archive Stream in VLC"; Flags: runhidden waituntilterminated; Components: vlc; Check: HasVlcCacheGen
@@ -331,7 +331,6 @@ begin
     Result := False;
     for I := 0 to 9 do
       if WizardIsComponentSelected(KeyOf(I)) then Result := True;
-    if WizardIsComponentSelected('modernmediaplayer') then Result := True;
     if not Result then
       MsgBox('Select at least one player.', mbError, MB_OK);
     Exit;
@@ -355,7 +354,6 @@ begin
   AnySelected := False;
   for I := 0 to 9 do
     if WizardIsComponentSelected(KeyOf(I)) then AnySelected := True;
-  if WizardIsComponentSelected('modernmediaplayer') then AnySelected := True;
   if not AnySelected then
   begin
     Result := 'Select at least one supported player.';

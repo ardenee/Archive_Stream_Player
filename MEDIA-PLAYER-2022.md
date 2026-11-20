@@ -65,6 +65,10 @@ The existing `archive_player_bridge/archive_player_bridge.cpp` process was used 
 
 **Not certified / remaining:** Media Player eagerly fetches full tracks (around 60 MB for the first three MP3s), HTTP non-buffered forward/backward seeking, solid/encrypted/multipart archive parity and playlist-wide pre-play duration/tag metadata. The external drop UI is currently a **DEV preview**; not the published release and **not** a native SDK plug-in. Do not assert that drag-and-drop into the Microsoft Media Player window itself works.
 
+## Active integration decision — 20 November 2026
+
+**Withdrawn from the active supported-player list and DEV installer.** Microsoft.ZuneMusic has no demonstrated public native archive file-reader/playlist plug-in interface. Tested Windows Shell/Media Foundation registration did not extend File Open or drop support; Cloud Files fully hydrated tracks to disk; HTTP/M3U8 playback needed a temporary app loopback exemption and showed aggressive prefetch; the external overlay failed interactive acceptance. None meets the project's direct-in-player archive experience requirement. Preserve these DEV probes for research; do not ship or advertise an adapter. This does not uninstall the Microsoft application or delete user media.
+
 ## In-window overlay experiment withdrawn — 20 November 2026
 
 The standalone external `modern_media_drop.exe --overlay` prototype attempted to position an archive-only OLE drop surface over Media Player without replacing its native drag/drop handler. On DEV, the process initially started invisibly because the player was not running; after Media Player was opened, the overlay appeared, but the actual user test still **did not work**. The precise failure inside the interactive drop/playback path was not isolated. This is **failed acceptance**, not verified native archive handling. The overlay implementation, optional installer shortcut and overlay-specific QA scripts have been reverted. Do not pursue or advertise this route. The separately tested standalone drop-window/HTTP-M3U8 preview remains intact and is not equivalent to direct in-player drag-and-drop.
