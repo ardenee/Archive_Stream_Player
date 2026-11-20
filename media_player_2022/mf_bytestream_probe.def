@@ -1,4 +1,0 @@
-LIBRARY mf_bytestream_probe
-EXPORTS
-    DllGetClassObject PRIVATE
-    DllCanUnloadNow PRIVATE
