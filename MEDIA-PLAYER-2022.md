@@ -65,6 +65,12 @@ The existing `archive_player_bridge/archive_player_bridge.cpp` process was used 
 
 **Not certified / remaining:** Media Player eagerly fetches full tracks (around 60 MB for the first three MP3s), HTTP non-buffered forward/backward seeking, solid/encrypted/multipart archive parity and playlist-wide pre-play duration/tag metadata. The external drop UI is currently a **DEV preview**; not the published release and **not** a native SDK plug-in. Do not assert that drag-and-drop into the Microsoft Media Player window itself works.
 
+## External in-window drop-zone preview — 20 November 2026
+
+The DEV-only --overlay mode in media_player_2022/modern_media_drop.cpp puts a **separate, small Win32 OLE drop zone** in front of the upper-right area of the real modern Media Player window, which was verified to be an ApplicationFrameHost frame with a Microsoft.Media.Player.exe CoreWindow descendant. It hides when Media Player is not foreground, never replaces the app's drop target, and offers a tray Exit command to clean up. The optional unchecked DEV installer now has a second Start Menu entry for the overlay.
+
+Release x64 build PASS; idle overlay start/hide/clean shutdown without starting the bridge or modifying loopback permissions PASS. Physical drops and foreground positioning are **not yet user-tested**. This is not a native plug-in and cannot add ZIP, 7z or RAR to Microsoft's signed supported-file manifest or native File Open picker.
+
 ## Media Player file extensions and codec registration — 20 November 2026
 
 **Investigation triggered by Media Player's File Open supported-types list.** On DEV, installed `Microsoft.ZuneMusic` **11.2609.11.0** declares **58 supported extensions** in its signed `AppxManifest.xml`, specifically `uap:Extension Category="windows.fileTypeAssociation" -> uap:FileTypeAssociation -> uap:SupportedFileTypes`. `.mp3`, `.wav`, `.flac`, `.ogg`, `.m3u` and `.m3u8` are present; **`.zip`, `.7z` and `.rar` are absent**. Windows file associations for ZIP/RAR/7z on DEV remain owned by WinRAR and were not changed.

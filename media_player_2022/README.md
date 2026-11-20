@@ -72,6 +72,14 @@ Codec registration and app file-type association are separate mechanisms: a stan
 
 **No changes to real archive file associations, Media Player's package, loopback permissions or the working external drop target resulted from this audit.**
 
+## External in-window archive drop-zone preview — 20 November 2026
+
+Run modern_media_drop.exe --overlay to show a **small external archive-only OLE drop zone** over the top-right area of Media Player (2022). Host detection checks the Windows 11 ApplicationFrameWindow and its Windows.UI.Core.CoreWindow child owned by Microsoft.Media.Player.exe; nothing is injected and the native drop handler is never replaced. When Media Player is not foreground, minimized or too small, the overlay hides so native drops outside the overlay remain untouched.
+
+The zone accepts ZIP/7z/RAR using the already verified standalone IDropTarget and shared HTTP/M3U8 bridge, with the same managed stream and temporary loopback permission lifecycle. A tray menu offers Exit Archive Stream drop zone. The optional unchecked DEV installer component now adds a Start Menu shortcut named Media Player (2022) - In-window Drop Zone (preview).
+
+**Verification:** Release x64 build PASS with no warnings; test-modern-media-overlay.ps1 confirmed idle start, hiding when Media Player is not foreground, no idle bridge or loopback changes, and clean WM_CLOSE exit. The read-only probe-media-player-window.ps1 confirmed the real ApplicationFrameHost frame and child. **Outstanding:** actual foreground placement, a physical archive drop into the overlay, tray Exit interaction, plus HTTP prefetch and seek certification. This is NOT native Media Player archive handling and does not expand File Open.
+
 ## Cleanup and safety
 
 The tests use disposable directories under `D:\Temp\AST-MediaPlayer2022-MFQA`. They do not change audio file associations, Windows optional features, real archives or the other player plugins. Cloud Files registration and placeholders are removed by the provider at shutdown. The first version left a read-only test file; this was corrected, and the repeat ZIP test confirmed that its test root was gone.

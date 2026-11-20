@@ -124,6 +124,7 @@ Name: "{group}\Configure Archive Stream Player"; Filename: "{sys}\wscript.exe"; 
 Name: "{group}\Project homepage"; Filename: "{#HomeURL}"
 Name: "{group}\MediaMonkey add-on packages (portable installs)"; Filename: "{app}\MediaMonkey"; Components: mediamonkey
 Name: "{group}\Media Player (2022) - Drop Archives"; Filename: "{app}\MediaPlayer2022\modern_media_drop.exe"; Components: modernmediaplayer
+Name: "{group}\Media Player (2022) - In-window Drop Zone (preview)"; Filename: "{app}\MediaPlayer2022\modern_media_drop.exe"; Parameters: "--overlay"; Components: modernmediaplayer
 Name: "{autodesktop}\Archive Stream - Media Player (2022)"; Filename: "{app}\MediaPlayer2022\modern_media_drop.exe"; Components: modernmediaplayer; Tasks: modernmediaplayer_desktop
 
 [Run]
