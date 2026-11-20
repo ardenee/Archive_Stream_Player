@@ -25,13 +25,7 @@ constexpr wchar_t kFamily[] = L"Microsoft.ZuneMusic_8wekyb3d8bbwe";
 constexpr wchar_t kAppId[] = L"Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic";
 constexpr UINT kStatusMessage = WM_APP + 18;
 constexpr UINT kArchiveMessage = WM_APP + 19;
-constexpr UINT kTrayMessage = WM_APP + 20;
-constexpr UINT_PTR kOverlayTimer = 1;
-constexpr UINT kExitCommand = 1001;
 HWND g_window = nullptr;
-HWND g_overlayFrame = nullptr;
-bool g_overlayMode = false;
-bool g_trayAdded = false;
 std::wstring g_status = L"Drop a ZIP, 7z or RAR music archive here.";
 std::thread g_worker;
 std::atomic<bool> g_busy{false};
@@ -133,146 +127,6 @@ bool SupportedArchive(const std::wstring& file)
     std::wstring extension = file.substr(dot);
     std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
     return extension == L".zip" || extension == L".7z" || extension == L".rar";
-}
-
-
-// Windows 11 Media Player uses an ApplicationFrameHost top-level window;
-// the actual Microsoft.Media.Player.exe CoreWindow is a descendant.
-bool MediaPlayerCoreWindow(HWND child)
-{
-    wchar_t name[128]{};
-    if (!GetClassNameW(child, name, static_cast<int>(std::size(name))) || wcscmp(name, L"Windows.UI.Core.CoreWindow") != 0)
-    {
-        return false;
-    }
-    DWORD processId = 0;
-    GetWindowThreadProcessId(child, &processId);
-    if (!processId)
-    {
-        return false;
-    }
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
-    if (!process)
-    {
-        return false;
-    }
-    wchar_t executable[32768]{};
-    DWORD length = static_cast<DWORD>(std::size(executable));
-    const bool found = QueryFullProcessImageNameW(process, 0, executable, &length) != FALSE;
-    CloseHandle(process);
-    if (!found)
-    {
-        return false;
-    }
-    const wchar_t* filename = wcsrchr(executable, L'\\');
-    filename = filename ? filename + 1 : executable;
-    return _wcsicmp(filename, L"Microsoft.Media.Player.exe") == 0;
-}
-
-BOOL CALLBACK FindCoreWindow(HWND child, LPARAM context)
-{
-    if (MediaPlayerCoreWindow(child))
-    {
-        *reinterpret_cast<bool*>(context) = true;
-        return FALSE;
-    }
-    return TRUE;
-}
-
-BOOL CALLBACK FindMediaPlayerFrame(HWND frame, LPARAM context)
-{
-    if (!IsWindowVisible(frame) || IsIconic(frame))
-    {
-        return TRUE;
-    }
-    wchar_t className[128]{};
-    if (!GetClassNameW(frame, className, static_cast<int>(std::size(className))) || wcscmp(className, L"ApplicationFrameWindow") != 0)
-    {
-        return TRUE;
-    }
-    bool matched = false;
-    EnumChildWindows(frame, FindCoreWindow, reinterpret_cast<LPARAM>(&matched));
-    if (matched)
-    {
-        *reinterpret_cast<HWND*>(context) = frame;
-        return FALSE;
-    }
-    return TRUE;
-}
-
-void UpdateOverlay()
-{
-    if (!g_overlayMode || !g_window)
-    {
-        return;
-    }
-    HWND frame = nullptr;
-    EnumWindows(FindMediaPlayerFrame, reinterpret_cast<LPARAM>(&frame));
-    const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
-    if (!frame || foreground != frame)
-    {
-        if (IsWindowVisible(g_window))
-        {
-            ShowWindow(g_window, SW_HIDE);
-        }
-        g_overlayFrame = frame;
-        return;
-    }
-    RECT bounds{};
-    if (!GetWindowRect(frame, &bounds) || bounds.right - bounds.left < 400 || bounds.bottom - bounds.top < 220)
-    {
-        ShowWindow(g_window, SW_HIDE);
-        return;
-    }
-    if (g_overlayFrame != frame)
-    {
-        Log(L"OVERLAY_FRAME_ATTACHED", L"hwnd=" + std::to_wstring(reinterpret_cast<UINT_PTR>(frame)));
-        g_overlayFrame = frame;
-    }
-    constexpr int width = 188;
-    constexpr int height = 50;
-    constexpr int rightInset = 18;
-    constexpr int topInset = 76;
-    RECT current{};
-    GetWindowRect(g_window, &current);
-    const int x = bounds.right - width - rightInset;
-    const int y = bounds.top + topInset;
-    if (!IsWindowVisible(g_window) || current.left != x || current.top != y ||
-        current.right - current.left != width || current.bottom - current.top != height)
-    {
-        SetWindowPos(g_window, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-}
-
-void InstallOverlayTray()
-{
-    NOTIFYICONDATAW icon{};
-    icon.cbSize = sizeof(icon);
-    icon.hWnd = g_window;
-    icon.uID = 1;
-    icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    icon.uCallbackMessage = kTrayMessage;
-    icon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(icon.szTip, L"Archive Stream - Media Player drop zone");
-    g_trayAdded = Shell_NotifyIconW(NIM_ADD, &icon) != FALSE;
-    if (!g_trayAdded)
-    {
-        Log(L"OVERLAY_TRAY_ADD_FAILED", std::to_wstring(GetLastError()));
-    }
-}
-
-void RemoveOverlayTray()
-{
-    if (!g_trayAdded)
-    {
-        return;
-    }
-    NOTIFYICONDATAW icon{};
-    icon.cbSize = sizeof(icon);
-    icon.hWnd = g_window;
-    icon.uID = 1;
-    Shell_NotifyIconW(NIM_DELETE, &icon);
-    g_trayAdded = false;
 }
 
 bool ExecuteHidden(const std::wstring& executable, const std::wstring& args, DWORD& exitCode, std::string* output = nullptr)
@@ -834,36 +688,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         }
         return 0;
     }
-    case WM_TIMER:
-        if (g_overlayMode && wp == kOverlayTimer)
-        {
-            UpdateOverlay();
-            return 0;
-        }
-        break;
-    case kTrayMessage:
-        if (g_overlayMode && (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU))
-        {
-            POINT location{};
-            GetCursorPos(&location);
-            HMENU menu = CreatePopupMenu();
-            if (menu)
-            {
-                AppendMenuW(menu, MF_STRING, kExitCommand, L"Exit Archive Stream drop zone");
-                SetForegroundWindow(window);
-                TrackPopupMenu(menu, TPM_RIGHTBUTTON, location.x, location.y, 0, window, nullptr);
-                DestroyMenu(menu);
-            }
-            return 0;
-        }
-        break;
-    case WM_COMMAND:
-        if (g_overlayMode && LOWORD(wp) == kExitCommand)
-        {
-            PostMessageW(window, WM_CLOSE, 0, 0);
-            return 0;
-        }
-        break;
     case kStatusMessage:
     {
         auto* value = reinterpret_cast<std::wstring*>(lp);
@@ -881,23 +705,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         HDC dc = BeginPaint(window, &ps);
         RECT bounds{};
         GetClientRect(window, &bounds);
-        if (g_overlayMode)
-        {
-            HBRUSH overlayBackground = CreateSolidBrush(RGB(20, 32, 45));
-            FillRect(dc, &bounds, overlayBackground);
-            DeleteObject(overlayBackground);
-            SetBkMode(dc, TRANSPARENT);
-            SetTextColor(dc, RGB(240, 247, 253));
-            HFONT font = CreateFontW(-17, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-            HGDIOBJ previous = SelectObject(dc, font);
-            RECT textBounds{8, 3, bounds.right - 8, bounds.bottom - 3};
-            DrawTextW(dc, L"Archive Stream\nDrop ZIP / 7z / RAR", -1, &textBounds, DT_CENTER | DT_WORDBREAK | DT_VCENTER);
-            SelectObject(dc, previous);
-            DeleteObject(font);
-            EndPaint(window, &ps);
-            return 0;
-        }
         HBRUSH background = CreateSolidBrush(RGB(22, 27, 35));
         FillRect(dc, &bounds, background);
         DeleteObject(background);
@@ -939,17 +746,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:
-        if (g_overlayMode)
-        {
-            KillTimer(window, kOverlayTimer);
-            RemoveOverlayTray();
-        }
         PostQuitMessage(0);
         return 0;
     default:
         return DefWindowProcW(window, message, wp, lp);
     }
-    return DefWindowProcW(window, message, wp, lp);
 }
 }
 
@@ -963,10 +764,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         return 9;
     std::wstring startupArchive;
     std::wstring testDropArchive;
-    if (argc == 2 && wcscmp(argv[1], L"--overlay") == 0)
-    {
-        g_overlayMode = true;
-    }
     if (argc == 4 && wcscmp(argv[1], L"--loopback-helper") == 0)
     {
         DWORD parent = wcstoul(argv[2], nullptr, 10);
@@ -1012,11 +809,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         OleUninitialize();
         return 5;
     }
-    g_window = CreateWindowExW(
-        g_overlayMode ? WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE : WS_EX_APPWINDOW,
-        kClass, L"Archive Stream - Media Player (2022)",
-        g_overlayMode ? WS_POPUP : WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, g_overlayMode ? 188 : 600, g_overlayMode ? 50 : 302,
+    g_window = CreateWindowExW(WS_EX_APPWINDOW, kClass, L"Archive Stream - Media Player (2022)",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT, 600, 302,
         nullptr, nullptr, instance, nullptr);
     if (!g_window)
     {
@@ -1027,18 +821,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     const HRESULT registered = RegisterDragDrop(g_window, dropTarget);
     if (FAILED(registered))
         Log(L"REGISTER_DROP_TARGET_FAILED", std::to_wstring(static_cast<unsigned>(registered)));
-    if (g_overlayMode)
-    {
-        ShowWindow(g_window, SW_HIDE);
-        InstallOverlayTray();
-        SetTimer(g_window, kOverlayTimer, 450, nullptr);
-        UpdateOverlay();
-        Log(L"OVERLAY_STARTED", L"mode=external_no_injection | preserves_native_drop_outside_zone");
-    }
-    else
-    {
-        ShowWindow(g_window, show == SW_HIDE ? SW_SHOW : show);
-    }
+    ShowWindow(g_window, show == SW_HIDE ? SW_SHOW : show);
     UpdateWindow(g_window);
     if (!startupArchive.empty())
         PostMessageW(g_window, kArchiveMessage, 0, reinterpret_cast<LPARAM>(new std::wstring(startupArchive)));

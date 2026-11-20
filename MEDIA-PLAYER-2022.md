@@ -65,11 +65,9 @@ The existing `archive_player_bridge/archive_player_bridge.cpp` process was used 
 
 **Not certified / remaining:** Media Player eagerly fetches full tracks (around 60 MB for the first three MP3s), HTTP non-buffered forward/backward seeking, solid/encrypted/multipart archive parity and playlist-wide pre-play duration/tag metadata. The external drop UI is currently a **DEV preview**; not the published release and **not** a native SDK plug-in. Do not assert that drag-and-drop into the Microsoft Media Player window itself works.
 
-## External in-window drop-zone preview — 20 November 2026
+## In-window overlay experiment withdrawn — 20 November 2026
 
-The DEV-only --overlay mode in media_player_2022/modern_media_drop.cpp puts a **separate, small Win32 OLE drop zone** in front of the upper-right area of the real modern Media Player window, which was verified to be an ApplicationFrameHost frame with a Microsoft.Media.Player.exe CoreWindow descendant. It hides when Media Player is not foreground, never replaces the app's drop target, and offers a tray Exit command to clean up. The optional unchecked DEV installer now has a second Start Menu entry for the overlay.
-
-Release x64 build PASS; idle overlay start/hide/clean shutdown without starting the bridge or modifying loopback permissions PASS. Physical drops and foreground positioning are **not yet user-tested**. This is not a native plug-in and cannot add ZIP, 7z or RAR to Microsoft's signed supported-file manifest or native File Open picker.
+The standalone external `modern_media_drop.exe --overlay` prototype attempted to position an archive-only OLE drop surface over Media Player without replacing its native drag/drop handler. On DEV, the process initially started invisibly because the player was not running; after Media Player was opened, the overlay appeared, but the actual user test still **did not work**. The precise failure inside the interactive drop/playback path was not isolated. This is **failed acceptance**, not verified native archive handling. The overlay implementation, optional installer shortcut and overlay-specific QA scripts have been reverted. Do not pursue or advertise this route. The separately tested standalone drop-window/HTTP-M3U8 preview remains intact and is not equivalent to direct in-player drag-and-drop.
 
 ## Media Player file extensions and codec registration — 20 November 2026
 
