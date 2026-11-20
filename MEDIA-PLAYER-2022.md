@@ -93,6 +93,12 @@ An automated OLE drop simulation targeting Media Player's window did not complet
 
 Read-only reproducible inventory command: `media_player_2022/inventory-media-extensions.ps1`. **No production extension registration or drag-and-drop hook was added.**
 
+## Current per-user ZIP / 7z / RAR registration experiment — 20 November 2026
+
+The user requested **registering all applicable outside-the-app extension mechanisms** to test whether Media Player's native drag target changes from **Unsupported file type(s)**. Implemented `media_player_2022/test-archive-format-registrations.ps1` with **Enable / Status / Disable**, exercising Shell `Content Type` and `PerceivedType`, `SystemFileAssociations`, MIME database, alternate ProgIDs (`OpenWithProgids`, including Media Player's verified AppX ProgID), desktop companion Shell command, Media Foundation diagnostic handler by extension and MIME, and legacy Windows Media Player SDK keys. These are **current-user only**; Microsoft's signed AppX manifest cannot be edited through these mechanisms.
+
+**DEV state after controlled test:** all three extensions have the experimental audio classification/alternate Open With registration; WinRAR/7-Zip remain the real Explorer default applications. The diagnostic `IMFByteStreamHandler` is enabled but intentionally does not decode archives. The script successfully performed Disable (restoring baseline) followed by Enable (restoring the experiment), proving reversible cleanup. Windows Media Foundation independently did not invoke our diagnostic handler for an actual ZIP or small control files given `.zip`, `.7z`, and `.rar` extensions, despite the registrations. The **modern Media Player OLE drag/drop effect has not yet been manually retested** after enabling; do not label it as accepted or rejected based on the source resolver alone. See [QA instructions and exact rollback](media_player_2022/ARCHIVE-REGISTRATION-QA.md). This test registration is not part of any installer or release.
+
 ## DEV inventory — 19 November 2026
 
 - Installed Media Player: `Microsoft.ZuneMusic` 11.2609.11.0 x64, package family `Microsoft.ZuneMusic_8wekyb3d8bbwe`.

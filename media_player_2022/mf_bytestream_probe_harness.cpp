@@ -35,7 +35,7 @@ int wmain(int argc, wchar_t** argv)
     {
         MF_OBJECT_TYPE type = MF_OBJECT_INVALID;
         IUnknown* object = nullptr;
-        const DWORD flags = MF_RESOLUTION_MEDIASOURCE; // Require source resolution, not early return of IMFByteStream.
+        const DWORD flags = MF_RESOLUTION_MEDIASOURCE | (argc >= 3 && wcscmp(argv[2], L"--allow-mismatch") == 0 ? MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE : 0);
         hr = resolver->CreateObjectFromURL(url, flags, nullptr, &type, &object);
         wprintf(L"MF_BYTESTREAM_RESOLVER_RESULT hr=0x%08X type=%d url=%ls\n", static_cast<unsigned>(hr), static_cast<int>(type), url);
         if (object)
@@ -48,6 +48,6 @@ int wmain(int argc, wchar_t** argv)
     }
     MFShutdown();
     CoUninitialize();
-    // Failure is expected: this is a dispatch-only scheme handler.
+    // Failure is expected: this is a diagnostic byte-stream handler.
     return 0;
 }

@@ -56,6 +56,10 @@ Built `modern_media_drop.vcxproj` as a native x64 Win32 GUI application without 
 
 Source-controlled test scripts: `test-modern-media-drop.ps1` runs Shell OLE acceptance and MP3 rejection; `test-modern-drop-crash.ps1` force-kills the owner to verify Windows Job Object child-process cleanup and loopback rollback. Both were run successfully on DEV. **No native decoder was inserted into Microsoft's application.**
 
+## Active DEV archive-registration experiment — November 20, 2026
+
+The reversible **ZIP / 7z / RAR per-user registration** test is implemented in `test-archive-format-registrations.ps1`. It installs Shell MIME/perceived-type entries, SystemFileAssociations, non-default OpenWith ProgIDs for the real modern Media Player and our companion, Media Foundation diagnostic handlers by extension/MIME, and legacy WMP comparison keys. **It does not replace WinRAR/7-Zip defaults or edit Microsoft's app manifest.** `-Action Enable` / `Status` / `Disable` work with a recovery journal; rollback was tested and the QA configuration was **re-enabled on DEV** for manual in-player drag testing. The diagnostic handler intentionally returns unsupported, never archive audio. See [all surfaces, test steps, and rollback](ARCHIVE-REGISTRATION-QA.md).
+
 ## Modern Media Player extension registration audit
 
 `inventory-media-extensions.ps1` reads the installed `Microsoft.ZuneMusic` package manifest and the Windows Media Foundation byte-stream handler registry **without writing anything**. On DEV's Media Player 11.2609.11.0, the manifest declares **58 extensions**, including MP3/WAV/FLAC/M3U8 but not ZIP/7z/RAR. Windows has system MP3/WAV/FLAC byte-stream handlers but no registered handler for ZIP/7z/RAR.
