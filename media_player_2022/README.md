@@ -14,6 +14,7 @@ See [the full SDK investigation](../MEDIA-PLAYER-2022.md) for results, limitatio
 | `cfapi_probe.vcxproj` | Temporary Windows Cloud Files provider using supported **progressive** hydration by default, with explicit unsupported-partial comparison modes. Supports a physical MP3 control or **one MP3 from inside a ZIP** via the static shared archive backend |
 | `cfapi_read_probe.vcxproj` | Independent native Win32 test for a 4,096-byte read of a projected file, with optional offset and bounded controller timeout |
 | `modern_media_drop.vcxproj` | **Native Win32 OLE ZIP/7z/RAR drop target (DEV preview)**: automatic conditional loopback-helper elevation, session-owned rollback, background bridge, Media Player file activation, session cleanup and single-argument shortcut drops |
+| `mf_bytestream_probe.vcxproj` / `mf_bytestream_probe_harness.vcxproj` | Disposable diagnostic COM byte-stream handler and desktop Media Foundation source-resolution harness; **never returns playable media** |
 
 All build as **Release|x64** with MSBuild (Visual Studio 18 Community, Windows SDK 10.0.26100.0). The Cloud Files project uses `archive_backend.lib` and the existing statically linked archive dependencies; no extra runtime DLLs are introduced.
 
@@ -63,7 +64,9 @@ A controlled experiment created disposable `.astmp3`/`.astwav` aliases containin
 
 Codec registration and app file-type association are separate mechanisms: a standalone `IMFByteStreamHandler` can register with the Media Foundation resolver, but another app must actually use that resolver. The `Windows.Media.MediaExtensionManager` registrations are *local to the application making them*, and `uap:SupportedFileTypes` belongs to Microsoft's packaged app. Legacy WMP registry-based extension plug-ins do not apply to the modern app. See [research and sources](../MEDIA-PLAYER-2022.md#media-player-file-extensions-and-codec-registration--20-november-2026).
 
-**No changes to file associations, Media Player's package, loopback permissions or the working external drop target resulted from this audit.**
+**Additional registered-handler test:** `test-mf-bytestream-registration.ps1 -TestModernPlayer` registers a temporary HKCU COM `IMFByteStreamHandler` for invented `.astmfprobe` media files (which hold valid MP3 bytes). The native limited-user `IMFSourceResolver` test **loaded the COM handler and invoked `BeginCreateObject`, receiving an `IMFByteStream`**. Media Player (2022) accepted file activation but **never invoked the diagnostic handler** in that tested path. The test unregistered all temporary keys in `finally`. This distinguishes a correctly installed Windows codec source from a third-party Media Player plugin; it does **not** prove direct drop is accepted or globally impossible. Details are in [the SDK investigation](../MEDIA-PLAYER-2022.md#media-player-file-extensions-and-codec-registration--20-november-2026).
+
+**No changes to real archive file associations, Media Player's package, loopback permissions or the working external drop target resulted from this audit.**
 
 ## Cleanup and safety
 
