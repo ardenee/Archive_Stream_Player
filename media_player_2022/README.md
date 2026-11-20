@@ -55,6 +55,16 @@ Built `modern_media_drop.vcxproj` as a native x64 Win32 GUI application without 
 
 Source-controlled test scripts: `test-modern-media-drop.ps1` runs Shell OLE acceptance and MP3 rejection; `test-modern-drop-crash.ps1` force-kills the owner to verify Windows Job Object child-process cleanup and loopback rollback. Both were run successfully on DEV. **No native decoder was inserted into Microsoft's application.**
 
+## Modern Media Player extension registration audit
+
+`inventory-media-extensions.ps1` reads the installed `Microsoft.ZuneMusic` package manifest and the Windows Media Foundation byte-stream handler registry **without writing anything**. On DEV's Media Player 11.2609.11.0, the manifest declares **58 extensions**, including MP3/WAV/FLAC/M3U8 but not ZIP/7z/RAR. Windows has system MP3/WAV/FLAC byte-stream handlers but no registered handler for ZIP/7z/RAR.
+
+A controlled experiment created disposable `.astmp3`/`.astwav` aliases containing genuine media bytes, registered only `HKCU\\Software\\Classes` `Content Type` and `PerceivedType`, and removed each key afterward. Media Player's `ActivateForFile` API accepted both unregistered and registered aliases. This **does not prove that either alias passed File Open or OLE drag-and-drop filtering**. A synthetic direct-drop test against Microsoft's app did not complete reliably even for a known WAV and was stopped; it is not acceptance evidence.
+
+Codec registration and app file-type association are separate mechanisms: a standalone `IMFByteStreamHandler` can register with the Media Foundation resolver, but another app must actually use that resolver. The `Windows.Media.MediaExtensionManager` registrations are *local to the application making them*, and `uap:SupportedFileTypes` belongs to Microsoft's packaged app. Legacy WMP registry-based extension plug-ins do not apply to the modern app. See [research and sources](../MEDIA-PLAYER-2022.md#media-player-file-extensions-and-codec-registration--20-november-2026).
+
+**No changes to file associations, Media Player's package, loopback permissions or the working external drop target resulted from this audit.**
+
 ## Cleanup and safety
 
 The tests use disposable directories under `D:\Temp\AST-MediaPlayer2022-MFQA`. They do not change audio file associations, Windows optional features, real archives or the other player plugins. Cloud Files registration and placeholders are removed by the provider at shutdown. The first version left a read-only test file; this was corrected, and the repeat ZIP test confirmed that its test root was gone.
